@@ -1,34 +1,50 @@
-# golangci-lint configuration for gowkhtmltopdf.
-# All available linters are enabled except those listed under disable.
+# golangci-lint configuration for lazyKoder.
+# Keep this list deliberately small and high-signal. In particular, do not
+# enable whitespace, blank-line, line-length, naming, or parameter-layout
+# linters as repository gates.
 # Docs: https://golangci-lint.run/usage/configuration/
 #
 # Toolchain note: this module is go 1.26 / toolchain go1.26.4.
-# golangci-lint must be built with Go >= the module version (see Makefile).
 
 run:
   timeout: 10m
   tests: true
 
 linters:
-  enable-all: true
-  disable:
-    # Deprecated since v1.64; replaced by usetesting (already enabled via enable-all).
-    - tenv
-    # Go 1.26: golangci-lint v1.64 embeds gofumpt v0.7, which does not correctly
-    # handle module language version 1.26 (false "File is not properly formatted"
-    # reports; standalone gofumpt/gofmt on the same tree is clean). Prefer gofmt
-    # (still enabled) until golangci-lint ships a gofumpt that supports go1.26.
-    - gofumpt
-    # Import allow-list is TestDirectModuleAllowlist (internal/pdf). Default
-    # depguard only allows $gostd and then accidentally matched the old module
-    # path gowkhtmltopdf* via the stdlib prefix "go". Not worth //nolint noise.
-    - depguard
+  disable-all: true
+  enable:
+    # Compiler and static correctness.
+    - govet
+    - staticcheck
+    - typecheck
+    - ineffassign
+    - unused
+
+    # Error and resource handling.
+    - errcheck
+    - errorlint
+    - nilerr
+    - nilnesserr
+    - bodyclose
+    - rowserrcheck
+    - sqlclosecheck
+    - durationcheck
+    - noctx
+
+    # Security and project policy.
+    - gosec
+    - gomodguard
+
+    # Deliberate maintainability guardrails.
+    - mnd
+    - nolintlint
 
 issues:
-  # Report every finding (default caps hide most of an enable-all run).
+  # Report every finding. Default caps hide useful diagnostics.
   max-issues-per-linter: 0
   max-same-issues: 0
-  # npm install drops a vendored Go file under flatted; never lint that tree.
+
+  # Keep generated or vendored frontend trees out of Go analysis if they exist.
   exclude-dirs:
     - node_modules
     - frontend/dist
