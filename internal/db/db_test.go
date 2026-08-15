@@ -41,8 +41,8 @@ WHERE type = 'table' AND name IN ('sessions', 'messages', 'parts', 'tool_calls',
 	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&n); err != nil {
 		t.Fatalf("count migrations: %v", err)
 	}
-	if n != 1 {
-		t.Fatalf("got %d schema_migrations rows, want 1", n)
+	if n != 2 {
+		t.Fatalf("got %d schema_migrations rows, want 2", n)
 	}
 }
 
@@ -122,6 +122,9 @@ func TestPersistAndReopen(t *testing.T) {
 	if messages[0].Role != "user" || messages[1].Role != "assistant" {
 		t.Fatalf("wrong roles: %+v", messages)
 	}
+	if !messages[0].Visible || !messages[1].Visible {
+		t.Fatalf("messages should be visible by default: %+v", messages)
+	}
 	total := 0
 	for _, m := range messages {
 		parts, err := s.ListParts(ctx, m.ID)
@@ -143,6 +146,39 @@ func TestPersistAndReopen(t *testing.T) {
 	}
 	if len(sessions) != 1 || sessions[0].ID != sess.ID {
 		t.Fatalf("session not listed: %+v", sessions)
+	}
+}
+
+func TestMessageVisibility(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	sess, err := s.CreateSession(ctx, Session{Directory: "/work"})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	msg, err := s.InsertMessage(ctx, Message{SessionID: sess.ID, Role: "user"})
+	if err != nil {
+		t.Fatalf("InsertMessage: %v", err)
+	}
+	if err := s.SetMessageVisibility(ctx, msg.ID, false); err != nil {
+		t.Fatalf("hide message: %v", err)
+	}
+	messages, err := s.ListMessages(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("ListMessages: %v", err)
+	}
+	if len(messages) != 1 || messages[0].Visible {
+		t.Fatalf("message visibility after hide = %+v", messages)
+	}
+	if err := s.SetMessageVisibility(ctx, msg.ID, true); err != nil {
+		t.Fatalf("restore message: %v", err)
+	}
+	messages, err = s.ListMessages(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("ListMessages after restore: %v", err)
+	}
+	if len(messages) != 1 || !messages[0].Visible {
+		t.Fatalf("message visibility after restore = %+v", messages)
 	}
 }
 

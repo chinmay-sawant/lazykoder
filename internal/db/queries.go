@@ -7,9 +7,10 @@ import (
 )
 
 const (
-	sessionColumns = `id, title, directory, provider, model, variant, time_created, time_updated, status`
-	messageColumns = `id, session_id, role, agent, provider_id, model_id, variant, time_created, seq`
-	partColumns    = `id, message_id, type, time_created, seq, text, time_start, time_end, finish_reason, ` +
+	sessionColumns       = `id, title, directory, provider, model, variant, time_created, time_updated, status`
+	messageColumns       = `id, session_id, role, agent, provider_id, model_id, variant, time_created, seq, visible`
+	messageInsertColumns = `id, session_id, role, agent, provider_id, model_id, variant, time_created, seq`
+	partColumns          = `id, message_id, type, time_created, seq, text, time_start, time_end, finish_reason, ` +
 		`tokens_total, tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write, ` +
 		`cost, tool_name, tool_call_id, tool_status`
 	toolCallColumns = `part_id, tool, call_id, status, title, time_start, time_end, exit_code, input_json, output, metadata_json`
@@ -54,6 +55,7 @@ func (s *Store) InsertMessage(ctx context.Context, m Message) (Message, error) {
 	if m.TimeCreated == 0 {
 		m.TimeCreated = time.Now().UnixMilli()
 	}
+	m.Visible = true
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Message{}, fmt.Errorf("db: begin message insert: %w", err)
@@ -62,7 +64,7 @@ func (s *Store) InsertMessage(ctx context.Context, m Message) (Message, error) {
 	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(seq), 0) + 1 FROM messages WHERE session_id = ?`, m.SessionID).Scan(&m.Seq); err != nil {
 		return Message{}, fmt.Errorf("db: next message seq: %w", err)
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO messages (`+messageColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	_, err = tx.ExecContext(ctx, `INSERT INTO messages (`+messageInsertColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		m.ID, m.SessionID, m.Role, m.Agent, m.ProviderID, m.ModelID, m.Variant, m.TimeCreated, m.Seq)
 	if err != nil {
 		return Message{}, fmt.Errorf("db: insert message: %w", err)
@@ -152,7 +154,7 @@ func (s *Store) ListMessages(ctx context.Context, sessionID string) ([]Message, 
 	for rows.Next() {
 		var m Message
 		if err := rows.Scan(&m.ID, &m.SessionID, &m.Role, &m.Agent, &m.ProviderID, &m.ModelID,
-			&m.Variant, &m.TimeCreated, &m.Seq); err != nil {
+			&m.Variant, &m.TimeCreated, &m.Seq, &m.Visible); err != nil {
 			return nil, fmt.Errorf("db: scan message: %w", err)
 		}
 		out = append(out, m)
@@ -161,6 +163,14 @@ func (s *Store) ListMessages(ctx context.Context, sessionID string) ([]Message, 
 		return nil, fmt.Errorf("db: list messages: %w", err)
 	}
 	return out, nil
+}
+
+// SetMessageVisibility soft-hides or restores a message without deleting it.
+func (s *Store) SetMessageVisibility(ctx context.Context, messageID string, visible bool) error {
+	if _, err := s.db.ExecContext(ctx, `UPDATE messages SET visible = ? WHERE id = ?`, visible, messageID); err != nil {
+		return fmt.Errorf("db: set message visibility: %w", err)
+	}
+	return nil
 }
 
 // ListParts returns the parts of a message ordered by seq.

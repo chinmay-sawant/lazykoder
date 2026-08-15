@@ -101,10 +101,13 @@ var schemaMigrations = [][]string{
 		`CREATE INDEX idx_tool_calls_status    ON tool_calls(status)`,
 		`CREATE INDEX idx_sessions_updated     ON sessions(time_updated DESC)`,
 	},
+	{
+		`ALTER TABLE messages ADD COLUMN visible INTEGER NOT NULL DEFAULT 1`,
+	},
 }
 
-// Migrate runs numbered migrations. schema_migrations records version 1 after
-// first open. Idempotent: a second call is a no-op.
+// Migrate runs numbered migrations. schema_migrations records the applied
+// versions after first open. Idempotent: a second call is a no-op.
 func (s *Store) Migrate(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
   version    INTEGER PRIMARY KEY,

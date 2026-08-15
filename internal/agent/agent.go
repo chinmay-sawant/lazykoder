@@ -81,6 +81,7 @@ type Event struct {
 	Kind      EventKind
 	SessionID string
 	MessageID string
+	Role      string
 	Part      db.Part
 	Tool      db.ToolCall
 	Err       error
@@ -194,7 +195,7 @@ func (a *Agent) writeUserTurn(ctx context.Context, userText string, events chan<
 	if err != nil {
 		return fmt.Errorf("agent: insert user message: %w", err)
 	}
-	a.emit(events, Event{Kind: EventMessage, SessionID: a.sessionID(), MessageID: m.ID})
+	a.emit(events, Event{Kind: EventMessage, SessionID: a.sessionID(), MessageID: m.ID, Role: "user"})
 	text := userText
 	part, err := a.store.InsertPart(ctx, db.Part{MessageID: m.ID, Type: "text", Text: &text})
 	if err != nil {
@@ -307,7 +308,7 @@ func (a *Agent) writeResponse(ctx context.Context, events chan<- Event, resp *op
 	if err != nil {
 		return fmt.Errorf("agent: insert assistant message: %w", err)
 	}
-	a.emit(events, Event{Kind: EventMessage, SessionID: a.sessionID(), MessageID: m.ID})
+	a.emit(events, Event{Kind: EventMessage, SessionID: a.sessionID(), MessageID: m.ID, Role: "assistant"})
 
 	part, err := a.store.InsertPart(ctx, db.Part{MessageID: m.ID, Type: "step-start"})
 	if err != nil {

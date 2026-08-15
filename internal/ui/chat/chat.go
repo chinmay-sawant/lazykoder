@@ -81,6 +81,7 @@ var (
 	errStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
 	busyStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
 	hintStyle = lipgloss.NewStyle().Faint(true)
+	userStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
 )
 
 // Options configures the chat model.
@@ -105,13 +106,18 @@ type Model struct {
 	width  int
 	height int
 
-	lines       []string
-	transcript  viewport.Model
-	prompt      textinput.Model
-	busy        bool
-	err         string
-	pendingUser string
-	lastTool    int
+	lines               []string
+	transcript          viewport.Model
+	prompt              textinput.Model
+	escapePending       bool
+	inputHistory        []inputHistoryItem
+	historyCursor       int
+	historyDraft        string
+	pendingHistoryIndex int
+	busy                bool
+	err                 string
+	pendingUser         string
+	lastTool            int
 
 	model        string // current model; "" = provider default
 	models       []string
@@ -148,6 +154,11 @@ type Model struct {
 type slashCmd struct {
 	name        string
 	description string
+}
+
+type inputHistoryItem struct {
+	messageID string
+	text      string
 }
 
 var slashCommands = []slashCmd{
@@ -190,21 +201,23 @@ type eventBatchMsg struct {
 // New returns a chat model for the given options.
 func New(opts Options) Model {
 	m := Model{
-		store:      opts.Store,
-		client:     opts.Client,
-		workdir:    opts.Workdir,
-		session:    opts.Session,
-		maxSteps:   opts.MaxSteps,
-		err:        opts.InitialErr,
-		width:      defaultWidth,
-		height:     defaultHeight,
-		confirmCh:  make(chan confirmRequest, 1),
-		askCh:      make(chan askRequest, 1),
-		doneCh:     make(chan struct{}),
-		lastTool:   -1,
-		cachePath:  opts.CachePath,
-		transcript: viewport.New(viewport.WithWidth(defaultWidth-1), viewport.WithHeight(defaultHeight-chromeLines)),
-		prompt:     textinput.New(),
+		store:               opts.Store,
+		client:              opts.Client,
+		workdir:             opts.Workdir,
+		session:             opts.Session,
+		maxSteps:            opts.MaxSteps,
+		err:                 opts.InitialErr,
+		width:               defaultWidth,
+		height:              defaultHeight,
+		confirmCh:           make(chan confirmRequest, 1),
+		askCh:               make(chan askRequest, 1),
+		doneCh:              make(chan struct{}),
+		lastTool:            -1,
+		historyCursor:       -1,
+		pendingHistoryIndex: -1,
+		cachePath:           opts.CachePath,
+		transcript:          viewport.New(viewport.WithWidth(defaultWidth-1), viewport.WithHeight(defaultHeight-chromeLines)),
+		prompt:              textinput.New(),
 	}
 	m.prompt.Placeholder = "ask lazykoder... (type / for commands)"
 	m.prompt.Prompt = "▏"
@@ -279,6 +292,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case eventBatchMsg:
 		for _, ev := range msg.events {
 			switch ev.Kind {
+			case agent.EventMessage:
+				if ev.Role == "user" && m.pendingHistoryIndex >= 0 && m.pendingHistoryIndex < len(m.inputHistory) {
+					m.inputHistory[m.pendingHistoryIndex].messageID = ev.MessageID
+					m.pendingHistoryIndex = -1
+				}
 			case agent.EventPart:
 				m.applyPart(ev.Part)
 			case agent.EventTool:
@@ -322,6 +340,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m = m.resizePicker()
 		}
 		return m, nil
+	case tea.PasteMsg:
+		if m.confirmMode || m.pickerMode {
+			return m, nil
+		}
+		m.escapePending = false
+		m.historyCursor = -1
+		m.historyDraft = ""
+		var cmd tea.Cmd
+		m.prompt, cmd = m.prompt.Update(msg)
+		m.slashMode = false
+		m.slashCursor = 0
+		return m, cmd
 	case tea.KeyPressMsg:
 		if m.confirmMode {
 			return m.updateConfirmKey(msg)
@@ -360,6 +390,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // column, and jumps the viewport to the clicked position.
 func (m Model) mousePress(msg tea.MouseClickMsg) Model {
 	mu := msg.Mouse()
+	if !m.pickerMode && !m.slashMode {
+		if _, top, right, bottom, ok := m.modelStatusRect(); ok && mu.X < right && mu.Y >= top && mu.Y < bottom {
+			return m.openPicker()
+		}
+	}
 	if m.pickerMode {
 		if x, y, ok := m.pickerCloseRect(); ok && mu.X == x && mu.Y == y {
 			return m.closePicker()
@@ -657,6 +692,10 @@ func (m Model) runSlash(name string) (Model, tea.Cmd) {
 		m.lastTool = -1
 		m.session = nil
 		m.pendingUser = ""
+		m.inputHistory = nil
+		m.historyCursor = -1
+		m.historyDraft = ""
+		m.pendingHistoryIndex = -1
 		m.syncTranscript()
 	case "/model":
 		return m.openPicker(), nil
@@ -664,7 +703,7 @@ func (m Model) runSlash(name string) (Model, tea.Cmd) {
 		return m, m.refreshModels
 	case "/help":
 		m.lines = append(m.lines,
-			"help: enter send  •  m model  •  / slash commands  •  ↑/↓ scroll  •  q quit")
+			"help: enter send  •  click model  •  / slash commands  •  ↑/↓ history  •  q quit")
 		m.syncTranscript()
 	}
 	return m, nil
@@ -964,6 +1003,9 @@ type errMsg struct {
 }
 
 func (m Model) updateKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
+	if key.Code != tea.KeyEscape {
+		m.escapePending = false
+	}
 	if key.Mod.Contains(tea.ModCtrl) {
 		if key.Code == 'c' {
 			return m.closeDone(), tea.Quit
@@ -973,6 +1015,8 @@ func (m Model) updateKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m, cmd
 	}
 	if strings.HasPrefix(m.prompt.Value(), "/") && (key.Text != "" || key.Code == tea.KeyBackspace) {
+		m.historyCursor = -1
+		m.historyDraft = ""
 		var cmd tea.Cmd
 		m.prompt, cmd = m.prompt.Update(key)
 		return m.syncSlash(m.prompt.Value()), cmd
@@ -980,11 +1024,16 @@ func (m Model) updateKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 	switch key.Code {
 	case 'q', 'Q':
 		return m.closeDone(), tea.Quit
-	case 'm', 'M':
-		if m.busy {
+	case tea.KeyEscape:
+		if m.escapePending {
+			m.prompt.SetValue("")
+			m.escapePending = false
+			m.historyCursor = -1
+			m.historyDraft = ""
 			return m, nil
 		}
-		return m.openPicker(), nil
+		m.escapePending = true
+		return m, nil
 	case tea.KeyEnter:
 		if m.busy {
 			return m, nil
@@ -995,16 +1044,32 @@ func (m Model) updateKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 		return m.submit(text)
 	case tea.KeyBackspace:
+		m.historyCursor = -1
+		m.historyDraft = ""
 		var cmd tea.Cmd
 		m.prompt, cmd = m.prompt.Update(key)
 		if strings.HasPrefix(m.prompt.Value(), "/") && !m.slashMode {
 			m = m.syncSlash(m.prompt.Value())
 		}
 		return m, cmd
+	case 'c', 'C':
+		if item, ok := m.selectedHistoryItem(); ok {
+			return m, tea.SetClipboard(item.text)
+		}
+	case 'd', 'D':
+		if m.historyCursor >= 0 {
+			return m.deleteSelectedHistory()
+		}
 	case tea.KeyUp:
+		if len(m.inputHistory) > 0 {
+			return m.navigateHistory(-1), nil
+		}
 		m.transcript.ScrollUp(1)
 		return m, nil
 	case tea.KeyDown:
+		if len(m.inputHistory) > 0 {
+			return m.navigateHistory(1), nil
+		}
 		m.transcript.ScrollDown(1)
 		return m, nil
 	case tea.KeyPgUp:
@@ -1020,6 +1085,8 @@ func (m Model) updateKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.transcript.GotoBottom()
 		return m, nil
 	}
+	m.historyCursor = -1
+	m.historyDraft = ""
 	var cmd tea.Cmd
 	m.prompt, cmd = m.prompt.Update(key)
 	return m.syncSlash(m.prompt.Value()), cmd
@@ -1045,7 +1112,11 @@ func (m Model) submit(text string) (Model, tea.Cmd) {
 	m.busy = true
 	m.err = ""
 	m.pendingUser = text
-	m.lines = append(m.lines, "user: "+text)
+	m.historyCursor = -1
+	m.historyDraft = ""
+	m.pendingHistoryIndex = len(m.inputHistory)
+	m.inputHistory = append(m.inputHistory, inputHistoryItem{text: text})
+	m.lines = append(m.lines, renderUserLine(text))
 	m.syncTranscript()
 	ch := make(chan agent.Event, eventChanBuffer)
 	errCh := make(chan error, 1)
@@ -1068,6 +1139,78 @@ func (m Model) submit(text string) (Model, tea.Cmd) {
 		return eventBatchMsg{events: evs, err: <-errCh}
 	}
 	return m, tea.Batch(sendCmd, watchCmd)
+}
+
+func renderUserLine(text string) string {
+	return userStyle.Render("user: " + text)
+}
+
+func (m Model) selectedHistoryItem() (inputHistoryItem, bool) {
+	if m.historyCursor < 0 || m.historyCursor >= len(m.inputHistory) {
+		return inputHistoryItem{}, false
+	}
+	return m.inputHistory[m.historyCursor], true
+}
+
+func (m Model) navigateHistory(delta int) Model {
+	if len(m.inputHistory) == 0 {
+		return m
+	}
+	if m.historyCursor < 0 {
+		if delta > 0 {
+			return m
+		}
+		m.historyDraft = m.prompt.Value()
+		m.historyCursor = len(m.inputHistory) - 1
+	} else {
+		next := m.historyCursor + delta
+		if next < 0 {
+			next = 0
+		}
+		if next >= len(m.inputHistory) {
+			m.historyCursor = -1
+			m.prompt.SetValue(m.historyDraft)
+			m.historyDraft = ""
+			return m
+		}
+		m.historyCursor = next
+	}
+	m.prompt.SetValue(m.inputHistory[m.historyCursor].text)
+	m.escapePending = false
+	return m
+}
+
+func (m Model) deleteSelectedHistory() (Model, tea.Cmd) {
+	item, ok := m.selectedHistoryItem()
+	if !ok {
+		return m, nil
+	}
+	for i := len(m.lines) - 1; i >= 0; i-- {
+		if !strings.Contains(m.lines[i], "user: "+item.text) {
+			continue
+		}
+		m.lines = append(m.lines[:i], m.lines[i+1:]...)
+		if m.lastTool >= i {
+			m.lastTool--
+		}
+		break
+	}
+	m.inputHistory = append(m.inputHistory[:m.historyCursor], m.inputHistory[m.historyCursor+1:]...)
+	m.historyCursor = -1
+	draft := m.historyDraft
+	m.historyDraft = ""
+	m.prompt.SetValue(draft)
+	m.syncTranscript()
+	if item.messageID == "" || m.store == nil {
+		return m, nil
+	}
+	store, messageID := m.store, item.messageID
+	return m, func() tea.Msg {
+		if err := store.SetMessageVisibility(context.Background(), messageID, false); err != nil {
+			return errMsg{err: err}
+		}
+		return nil
+	}
 }
 
 func (m Model) confirmWatch() tea.Cmd {
@@ -1161,6 +1304,9 @@ func (m *Model) replay(sessionID string) {
 		return
 	}
 	for _, msg := range msgs {
+		if !msg.Visible {
+			continue
+		}
 		parts, err := m.store.ListParts(ctx, msg.ID)
 		if err != nil {
 			m.err = "chat: " + err.Error()
@@ -1170,7 +1316,12 @@ func (m *Model) replay(sessionID string) {
 			switch p.Type {
 			case "text":
 				if p.Text != nil {
-					m.lines = append(m.lines, msg.Role+": "+*p.Text)
+					if msg.Role == "user" {
+						m.inputHistory = append(m.inputHistory, inputHistoryItem{messageID: msg.ID, text: *p.Text})
+						m.lines = append(m.lines, renderUserLine(*p.Text))
+					} else {
+						m.lines = append(m.lines, msg.Role+": "+*p.Text)
+					}
 				}
 			case "reasoning":
 				m.lines = append(m.lines, "reasoning: (collapsed)")
@@ -1250,11 +1401,15 @@ func (m Model) statusLine() string {
 		var b strings.Builder
 		b.WriteString(hintStyle.Render(strings.Join([]string{
 			"model " + label,
-			"m switch",
+			"click model to switch",
 			"/ commands",
 			"enter to send",
 			"q to quit",
 		}, "  •  ")))
+		if _, ok := m.selectedHistoryItem(); ok {
+			b.WriteString("\n")
+			b.WriteString(hintStyle.Render("history: ↑/↓ previous/next  •  c copy  •  d delete"))
+		}
 		if m.transcript.TotalLineCount() > m.transcript.Height() {
 			b.WriteString("\n")
 			b.WriteString(hintStyle.Render("scroll: ↑/↓, page up/down or mouse wheel"))
@@ -1272,6 +1427,21 @@ func (m Model) statusLine() string {
 		}
 		return m.wrapStatus(b.String())
 	}
+}
+
+func (m Model) modelStatusRect() (left, top, right, bottom int, ok bool) {
+	if m.busy || m.err != "" || m.pickerMode || m.slashMode {
+		return 0, 0, 0, 0, false
+	}
+	label := m.model
+	if label == "" && m.client != nil {
+		label = m.client.Model()
+	}
+	if label == "" {
+		label = "default"
+	}
+	statusTop := titleBlockRows + m.transcriptRenderHeight()
+	return 0, statusTop, min(m.width, lipgloss.Width("model "+label)), statusTop + 1, true
 }
 
 func (m Model) wrapStatus(status string) string {

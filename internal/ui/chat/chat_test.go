@@ -233,6 +233,20 @@ func typeText(m Model, s string) Model {
 	return m
 }
 
+func clickModelStatus(t *testing.T, m Model) Model {
+	t.Helper()
+	left, top, right, bottom, ok := m.modelStatusRect()
+	if !ok || right <= left || bottom <= top {
+		t.Fatal("model status click target not found")
+	}
+	mm, _ := m.Update(tea.MouseClickMsg(tea.Mouse{
+		X:      right - 1,
+		Y:      top,
+		Button: tea.MouseLeft,
+	}))
+	return mm.(Model)
+}
+
 func enter() tea.KeyPressMsg {
 	return tea.KeyPressMsg{Code: tea.KeyEnter}
 }
@@ -547,6 +561,56 @@ func TestModelsFetchedOnStartup(t *testing.T) {
 	}
 }
 
+func TestPromptPasteAndDoubleEscape(t *testing.T) {
+	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
+	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
+
+	m = upd(m, tea.PasteMsg{Content: "pasted prompt"})
+	if got := m.prompt.Value(); got != "pasted prompt" {
+		t.Fatalf("prompt after paste = %q, want %q", got, "pasted prompt")
+	}
+	m.prompt.SetValue("")
+	m = upd(m, tea.PasteMsg{Content: "/model"})
+	if m.slashMode {
+		t.Fatal("pasting slash text opened the slash menu")
+	}
+	m.prompt.SetValue("pasted prompt")
+
+	m, cmd := updCmd(m, tea.KeyPressMsg{Code: tea.KeyEscape})
+	if cmd != nil {
+		t.Fatal("first escape returned a command")
+	}
+	if got := m.prompt.Value(); got != "pasted prompt" {
+		t.Fatalf("prompt after first escape = %q, want unchanged text", got)
+	}
+
+	m, cmd = updCmd(m, tea.KeyPressMsg{Code: tea.KeyEscape})
+	if cmd != nil {
+		t.Fatal("second escape returned a command")
+	}
+	if got := m.prompt.Value(); got != "" {
+		t.Fatalf("prompt after second escape = %q, want empty", got)
+	}
+}
+
+func TestModelPickerOpensOnlyFromModelClick(t *testing.T) {
+	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
+	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
+
+	m = upd(m, tea.KeyPressMsg{Code: 'm', Text: "m"})
+	if m.pickerMode {
+		t.Fatal("pressing m opened the model picker")
+	}
+	if got := m.prompt.Value(); got != "m" {
+		t.Fatalf("prompt after m = %q, want %q", got, "m")
+	}
+
+	m = clickModelStatus(t, m)
+	if !m.pickerMode {
+		t.Fatal("clicking the model status did not open the picker")
+	}
+}
+
 func TestModelPickerSwitchAndPersist(t *testing.T) {
 	tmp := t.TempDir()
 	st := newTestStore(t)
@@ -560,7 +624,7 @@ func TestModelPickerSwitchAndPersist(t *testing.T) {
 	p.run(m.Init())
 	m = p.runStep(m, p.next())
 
-	m = upd(m, tea.KeyPressMsg{Code: 'm'})
+	m = clickModelStatus(t, m)
 	v := stripANSI(viewText(m))
 	if !strings.Contains(v, "deepseek-v4-flash") || !strings.Contains(v, "claude-4") {
 		t.Fatalf("picker missing models: %q", v)
@@ -599,7 +663,7 @@ func TestModelPickerSwitchAndPersist(t *testing.T) {
 func TestModelPickerCancel(t *testing.T) {
 	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
 	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
-	m = upd(m, tea.KeyPressMsg{Code: 'm'})
+	m = clickModelStatus(t, m)
 	v := stripANSI(viewText(m))
 	if !strings.Contains(v, "no models loaded") || !strings.Contains(v, "esc cancel") {
 		t.Fatalf("picker not shown: %q", v)
@@ -609,16 +673,16 @@ func TestModelPickerCancel(t *testing.T) {
 	if strings.Contains(v, "esc cancel") {
 		t.Errorf("picker still shown after esc: %q", v)
 	}
-	if !strings.Contains(v, "m switch") {
+	if !strings.Contains(v, "click model to switch") {
 		t.Errorf("normal view not restored after esc: %q", v)
 	}
-	m = upd(m, tea.KeyPressMsg{Code: 'm'})
+	m = clickModelStatus(t, m)
 	m = upd(m, tea.KeyPressMsg{Code: 'q'})
 	v = stripANSI(viewText(m))
 	if strings.Contains(v, "esc cancel") {
 		t.Errorf("picker still shown after q: %q", v)
 	}
-	if !strings.Contains(v, "m switch") {
+	if !strings.Contains(v, "click model to switch") {
 		t.Errorf("normal view not restored after q: %q", v)
 	}
 }
@@ -700,6 +764,88 @@ func TestTranscriptScrollKeys(t *testing.T) {
 	}
 }
 
+func TestInputHistoryCopyDeleteAndVisibility(t *testing.T) {
+	tmp := t.TempDir()
+	st := newTestStore(t)
+	sess, err := st.CreateSession(context.Background(), db.Session{Title: "history", Directory: tmp})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil), respBody("hello", "stop", nil))
+	m := New(Options{Store: st, Client: newClient(fake.srv), Workdir: tmp, Session: &sess})
+	p := newPump(t)
+	p.run(m.Init())
+	m = p.runStep(m, p.next())
+
+	m = typeText(m, "first prompt")
+	m, cmd := updCmd(m, enter())
+	p.run(cmd)
+	m = p.drainIdle(m)
+	m = typeText(m, "second prompt")
+	m, cmd = updCmd(m, enter())
+	p.run(cmd)
+	m = p.drainIdle(m)
+
+	if len(m.inputHistory) != 2 || m.inputHistory[0].messageID == "" || m.inputHistory[1].messageID == "" {
+		t.Fatalf("input history missing persisted message IDs: %+v", m.inputHistory)
+	}
+	if m.lines[0] == "user: first prompt" {
+		t.Fatal("user message was not highlighted")
+	}
+
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyUp})
+	if got := m.prompt.Value(); got != "second prompt" {
+		t.Fatalf("first Up prompt = %q, want second prompt", got)
+	}
+	if !strings.Contains(stripANSI(viewText(m)), "history: ↑/↓ previous/next") {
+		t.Fatal("history actions are not shown for the selected message")
+	}
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyUp})
+	if got := m.prompt.Value(); got != "first prompt" {
+		t.Fatalf("second Up prompt = %q, want first prompt", got)
+	}
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyDown})
+	if got := m.prompt.Value(); got != "second prompt" {
+		t.Fatalf("Down prompt = %q, want second prompt", got)
+	}
+
+	m, cmd = updCmd(m, tea.KeyPressMsg{Code: 'c'})
+	if cmd == nil || fmt.Sprint(cmd()) != "second prompt" {
+		t.Fatalf("copy command did not contain selected text: %v", cmd)
+	}
+	messageID := m.inputHistory[m.historyCursor].messageID
+	m, cmd = updCmd(m, tea.KeyPressMsg{Code: 'd'})
+	if cmd == nil {
+		t.Fatal("delete did not return a persistence command")
+	}
+	if msg := cmd(); msg != nil {
+		t.Fatalf("delete command returned %v", msg)
+	}
+	if strings.Contains(stripANSI(viewText(m)), "user: second prompt") {
+		t.Fatal("deleted user message remains visible in the transcript")
+	}
+	messages, err := st.ListMessages(context.Background(), sess.ID)
+	if err != nil {
+		t.Fatalf("list messages after delete: %v", err)
+	}
+	foundHidden := false
+	for _, msg := range messages {
+		if msg.ID == messageID {
+			if msg.Visible {
+				t.Fatal("deleted user message is still visible in the database")
+			}
+			foundHidden = true
+		}
+	}
+	if !foundHidden {
+		t.Fatalf("deleted message %q not found in database", messageID)
+	}
+	replayed := New(Options{Store: st, Client: newClient(fake.srv), Workdir: tmp, Session: &sess})
+	if strings.Contains(stripANSI(viewText(replayed)), "user: second prompt") {
+		t.Fatal("soft-deleted user message returned in the UI replay")
+	}
+}
+
 func TestModelPickerFilter(t *testing.T) {
 	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
 	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
@@ -707,7 +853,7 @@ func TestModelPickerFilter(t *testing.T) {
 	p.run(m.Init())
 	m = p.runStep(m, p.next())
 
-	m = upd(m, tea.KeyPressMsg{Code: 'm'})
+	m = clickModelStatus(t, m)
 	m = upd(m, tea.KeyPressMsg{Code: '/'})
 	for _, r := range "claude" {
 		m = upd(m, tea.KeyPressMsg{Code: r, Text: string(r)})
@@ -930,7 +1076,7 @@ func TestPickerCardCenteredSettingsLayout(t *testing.T) {
 	p.run(m.Init())
 	m = p.runStep(m, p.next())
 
-	m = upd(m, tea.KeyPressMsg{Code: 'm'})
+	m = clickModelStatus(t, m)
 	v := stripANSI(viewText(m))
 	card := stripANSI(m.pickerView())
 	if !strings.Contains(v, "SETTINGS  /  MODEL") || !strings.Contains(v, "AVAILABLE MODELS") {
@@ -962,7 +1108,7 @@ func TestPickerCloseButton(t *testing.T) {
 	p.run(m.Init())
 	m = p.runStep(m, p.next())
 
-	m = upd(m, tea.KeyPressMsg{Code: 'm'})
+	m = clickModelStatus(t, m)
 	v := stripANSI(viewText(m))
 	headerFound := false
 	for _, line := range strings.Split(v, "\n") {
@@ -986,7 +1132,7 @@ func TestPickerCloseButton(t *testing.T) {
 		t.Fatal("clicking the picker close button did not close the card")
 	}
 
-	m = upd(m, tea.KeyPressMsg{Code: 'm'})
+	m = clickModelStatus(t, m)
 	m = upd(m, tea.KeyPressMsg{Code: 'x'})
 	if m.pickerMode {
 		t.Fatal("x did not close the picker card")
@@ -1004,7 +1150,7 @@ func TestPickerArrowKeysRefreshSelectionAndScroll(t *testing.T) {
 		m.models = append(m.models, fmt.Sprintf("model-%02d", i))
 	}
 
-	m = upd(m, tea.KeyPressMsg{Code: 'm'})
+	m = clickModelStatus(t, m)
 	m = upd(m, tea.KeyPressMsg{Code: tea.KeyDown})
 	if m.pickerCursor != 1 {
 		t.Fatalf("down cursor = %d, want 1", m.pickerCursor)
@@ -1047,7 +1193,7 @@ func TestPickerCardFitsAndScrollbarDrags(t *testing.T) {
 	for i := 0; i < 30; i++ {
 		m.models = append(m.models, fmt.Sprintf("model-%02d", i))
 	}
-	m = upd(m, tea.KeyPressMsg{Code: 'm'})
+	m = clickModelStatus(t, m)
 
 	v := stripANSI(viewText(m))
 	lines := strings.Split(v, "\n")
@@ -1158,7 +1304,7 @@ func TestModelsRefreshKeyReloadsFromAPI(t *testing.T) {
 	if !m.modelsCached {
 		t.Fatal("precondition: models should come from cache")
 	}
-	m = upd(m, tea.KeyPressMsg{Code: 'm'})
+	m = clickModelStatus(t, m)
 	if !m.pickerMode {
 		t.Fatal("precondition: picker did not open")
 	}

@@ -29,6 +29,7 @@ type Message struct {
 	Variant     *string
 	TimeCreated int64
 	Seq         int
+	Visible     bool
 }
 
 // Part is one content block within a message.
