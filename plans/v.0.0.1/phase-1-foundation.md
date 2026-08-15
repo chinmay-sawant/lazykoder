@@ -78,7 +78,7 @@ Stand up the harness on a clean tree. The employee prototype is already gone (`g
 - [x] `q` / `ctrl+c` quits; `tea.WithAltScreen()` in `main` - v2 API: `tea.View.AltScreen = true` set in chat View (v2.0.8 has no WithAltScreen); q + ctrl+c tested
 - [x] `Update` stays pure: HTTP and db writes happen in `tea.Cmd` - agent.Send runs in a tea.Cmd goroutine; events via channel watcher
 - [x] `main.go` starts workspace.Init then the chat model (employee `Seed` path removed from the running entry, packages left on disk) - main.go written 2026-08-15; `go build ./...` exit 0
-- [ ] Manual gate: `OPENCODE_API_KEY=... go run .`, type `hi`, a non-empty assistant line appears - NEEDS LIVE KEY + TTY (user must run); automated equivalent: TestSendPhase1Gate + chat tests
+- [ ] Manual gate: `OPENCODE_API_KEY=... make run`, type `hi`, a non-empty assistant line appears - NEEDS LIVE KEY + TTY (user must run); automated equivalent: TestSendPhase1Gate + chat tests
 - [ ] Manual gate: full screen readable, no clipped prompt, no unreadable colors - NEEDS TTY (user must run); headless smoke: clean-cwd run created `.lazykoder/lazykoder.db` + migrated schema, no-TTY/missing-key exit clean (no panic)
 
 ## 1.6 Policy stub (P0, no execution)

@@ -93,6 +93,17 @@ These stay `[~]` in 0.0.1. Do not implement unless a later plan file takes them.
 - [~] Reading OpenCode's global `~/.local/share/opencode/opencode.db`
 - [~] Streaming token paint in the TUI
 
+## 3.10 Run entry: `lk` binary (P1, added 2026-08-15)
+
+User request: run the app as `lk` instead of `go run .`.
+
+- [x] Add a Makefile (or equivalent) that builds the binary as `lk`: `make build` -> `go build -o bin/lk .` - Makefile added 2026-08-15; `make build` exit 0, produces `bin/lk` (18MB ELF; `bin/` auto-created)
+- [x] `make run` starts the app (`./bin/lk`); re-builds first if the binary is missing or stale - `run: build` prerequisite, always rebuilds
+- [x] `make test` runs the full gate (`go test ./...`) so devs stop reaching for `go run .` - `make test` exit 0 (all 14 packages ok); `make vet` exit 0; `make clean` removes `bin/lk`
+- [x] AGENTS.md and the plan manual-gate rows stop recommending `go run .`; they use `lk` / `make run` - AGENTS.md (2 spots) + phase-1 manual gate row updated
+- [x] `.gitignore` keeps ignoring the built binary - `/bin/` rule covers `bin/lk` (verified with `git check-ignore`; the earlier `/lk` entry was dropped since the binary lives in `bin/`)
+- [x] Gate: `make build` produces `bin/lk`, `make run` starts the app from a clean cwd (headless check), `make test` exits 0 - 2026-08-15: `make build` exit 0; headless `bin/lk` on a clean cwd created `.lazykoder/lazykoder.db` + WAL, clean exit; `make test` exit 0
+
 ## Dependencies
 
 - Needs: Phase 1 store + chat, Phase 2 bash policy (file tools do not go through `rm` policy unless they shell out, which they must not)

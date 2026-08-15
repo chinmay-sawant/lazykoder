@@ -56,7 +56,7 @@ Module: `github.com/chinmay-sawant/lazykoder` (renamed from `lazykoder` on 2026-
      dropped `display:flex/grid`, W/H swaps, float precision breaks.)
 2. **Verifying against stale artifacts.** Rebuild before any verification
    run — compliance validators once ran against an old binary, and committed
-   PDFs were trusted as proof of current behavior. In this repo: `go run .`
+   PDFs were trusted as proof of current behavior. In this repo: `make run`
    / `go test ./...` before claiming anything works.
 3. **Claiming completion without the gate output.** A task is done only when
    the final exit code says so. One session claimed "resolved and verified"
@@ -147,9 +147,9 @@ Module: `github.com/chinmay-sawant/lazykoder` (renamed from `lazykoder` on 2026-
   Confirm views copy the old employee-delete layout: highlight the subject
   name (command path, or sub-agent name), then `y confirm  •  n cancel`.
 - Keep `Update` pure and deterministic; side effects belong in `tea.Cmd`.
-- Run with `go run .` to verify; the app uses alt screen and creates
-  `.lazykoder/` at startup (idempotent - do not make init destructive to
-  user data).
+- Run with `make run` (builds the `lk` binary) to verify; the app uses alt
+  screen and creates `.lazykoder/` at startup (idempotent - do not make init
+  destructive to user data).
 - When adding a view/component, run `go test ./...` and verify the full
   screen renders (no clipped lines, no unreadable colors) before asking the
   user to look.
