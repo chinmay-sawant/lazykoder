@@ -25,7 +25,7 @@ text; the user text stays in the transcript.
 
 ## Confirm view
 
-Full-screen switch (the employee-delete layout):
+Full-screen switch (the y/n delete layout):
 
 ```
 Delete <subject> (<qualifier>)?

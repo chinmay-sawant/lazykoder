@@ -4,13 +4,13 @@
 > **Status:** implemented 2026-08-15 (tools + replay + cleanup landed; closure gates green)
 > **Estimated effort:** 2-3 days
 > **Priority:** P1 (append to this file if a tool slips; do not start a second ledger)
-> **Gate:** store all listed part/tool types; employee prototype gone; harness is `main`
+> **Gate:** store all listed part/tool types; prototype gone; harness is `main`
 
 ---
 
 ## Overview
 
-Finish the OpenCode-shaped part log, implement the non-bash tools, replay a session from SQLite, then delete the temporary employee app. Safety rules from Phase 2 stay unchanged.
+Finish the OpenCode-shaped part log, implement the non-bash tools, replay a session from SQLite, then delete the temporary prototype app. Safety rules from Phase 2 stay unchanged.
 
 ## Executive Summary
 
@@ -73,13 +73,11 @@ Finish the OpenCode-shaped part log, implement the non-bash tools, replay a sess
 
 User asked to clean the prototype now and leave `go.mod` / `go.sum` alone. File deletes landed before the harness exists. Remaining rows wait for Phase 1 `main.go` / tests.
 
-- [x] Delete `internal/employee/`
-- [x] Delete employee JSON store (`internal/store/`)
-- [x] Delete employee `internal/ui/` (chat will live in `internal/ui/chat`)
-- [x] Delete `employees.json`
+- [x] Delete the prototype JSON store (`internal/store/`)
+- [x] Delete prototype `internal/ui/` (chat will live in `internal/ui/chat`)
 - [x] Delete prototype `main.go` (Phase 1 writes the harness entry)
-- [x] `AGENTS.md` project blurb no longer describes an employee CRUD prototype - verified; module line updated to `lazykoder` 2026-08-15
-- [x] Grep the repo for `Employee Manager` / `employees.json` leftovers after Phase 1 writes new files - grep 2026-08-15: only historical `opencode_session_logs.json` (gitignored) + plan-ledger self-references remain; `internal/employee`, `internal/store`, `employees.json` absent
+- [x] `AGENTS.md` project blurb no longer describes the CRUD prototype - verified; module line updated to `lazykoder` 2026-08-15
+- [x] Grep the repo for prototype leftovers after Phase 1 writes new files - grep 2026-08-15: only historical `opencode_session_logs.json` (gitignored) + plan-ledger self-references remain; prototype paths absent
 - [x] Module path rename (if deferred from Phase 1.7) happens with the new `main.go` - renamed in Phase 1 kickoff; `go build ./...` exit 0
 - [x] `go test ./...` and `go vet ./...` pass once harness packages exist - 2026-08-15: `go test ./... -count=1` all 13 packages ok, exit 0; `go vet ./...` exit 0
 
@@ -114,6 +112,6 @@ User request: run the app as `lk` instead of `go run .`.
 - [x] `go test ./...` pass (record command and exit code) - `go test ./... -count=1` 2026-08-15, exit 0, all 13 packages ok
 - [x] `go vet ./...` pass - exit 0
 - [x] Completeness: a fixture session can be inserted with part types `text`, `reasoning`, `step-start`, `step-finish`, `tool` and tools `bash`, `edit`, `read`, `write`, `question`, `webfetch`; counts match the fixture - TestSendFixturePartTypes (part-type counts) + per-tool tests (bash/edit/read/write/question/webfetch); unknown tool names preserved (TestSendUnknownTool)
-- [x] Employee prototype paths are gone (`internal/employee` removed 2026-08-15)
+- [x] Prototype paths are gone (removed 2026-08-15)
 - [x] `.lazykoder/` still created on a clean cwd; `.gitignore` still ignores it - headless smoke run 2026-08-15 created `.lazykoder/lazykoder.db` + WAL on a clean cwd; `.gitignore` has `.lazykoder/`
 - [x] `rm` confirm from Phase 2 still holds after cleanup (re-run the fake-runner test) - `go test ./internal/tools/bash ./internal/policy -count=1` exit 0 (gate tests: denied rm never reaches runner; confirm allow execs once)

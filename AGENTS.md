@@ -13,7 +13,7 @@ Bubble Tea (charmbracelet) TUI agent harness written in Go. v0.0.1 supports
 OpenCode Go only. Project workspace is `.lazykoder/` in the current working
 directory. Small repo, small team: **one agent at a time, no subagent waves
 until the codebase grows**.
-Module: `github.com/chinmay-sawant/lazykoder` (renamed from `lazykoder` on 2026-08-15, and from `employee-tui` before that). Default branch: `master`.
+Module: `github.com/chinmay-sawant/lazykoder` (renamed from `lazykoder` on 2026-08-15, and from the prototype module name before that). Default branch: `master`.
 
 ## Golden rules (from the gowkhtmltopdf audit)
 
@@ -144,7 +144,7 @@ Module: `github.com/chinmay-sawant/lazykoder` (renamed from `lazykoder` on 2026-
 ## Bubble Tea specifics (this repo)
 
 - UI lives in `internal/ui/chat` (bubbletea `tea.Model` with `Init/Update/View`).
-  Confirm views copy the old employee-delete layout: highlight the subject
+  Confirm views copy the y/n delete layout: highlight the subject
   name (command path, or sub-agent name), then `y confirm  •  n cancel`.
 - Keep `Update` pure and deterministic; side effects belong in `tea.Cmd`.
 - Run with `make run` (requires `nodemon`; watches `*.go` and restarts

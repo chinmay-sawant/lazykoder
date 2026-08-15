@@ -57,7 +57,7 @@ Rules from the parent plan stay: `Update` pure, side effects in `tea.Cmd`, no ne
 
 - [ ] Define named segments: `model`, `tps`, `tokens` (totals from last step-finish), `cost`, `scroll`, `models`, `prompt` (key hints) - one render function per segment
 - [ ] Segment visibility stored per session (new column `status_segments` in `sessions` as a JSON array, migration v2 alongside the todos table) or a tiny `config` table; default = all segments on - migration must be additive, existing dbs keep working
-- [ ] `s` key (or `/status` command if `/commands` exist) cycles segment visibility: first press shows the segment list as a one-line picker on the status line, arrow keys + enter toggle, escape exits - employee-confirm layout is NOT used here (not a destructive decision); this is a picker, not a modal
+- [ ] `s` key (or `/status` command if `/commands` exist) cycles segment visibility: first press shows the segment list as a one-line picker on the status line, arrow keys + enter toggle, escape exits - the y/n confirm layout is NOT used here (not a destructive decision); this is a picker, not a modal
 - [ ] Choice persists on `UpdateSession` so replay/restart restores the same layout - store write happens in a `tea.Cmd`, `Update` stays pure
 - [ ] Test: chat test toggles `model` off, asserts `View()` no longer contains the model label but still shows the tps segment; persisted value round-trips through `db.UpdateSession` - exit 0
 

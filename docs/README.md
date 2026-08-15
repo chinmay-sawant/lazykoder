@@ -27,7 +27,7 @@ internal/agent                  turn loop: user text -> provider -> parts
 internal/policy                 bash classifier + Decision (allow/deny/ask)
 internal/tools                  bash, read, write, edit, question, webfetch
 internal/ui/chat                transcript, prompt, status, model picker
-internal/ui/confirm             employee-style y/n view (rm + questions)
+internal/ui/confirm             y/n confirm view (rm + questions)
 internal/envfile                stdlib-only .env loader
 ```
 

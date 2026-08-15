@@ -49,7 +49,7 @@ the process.
 
 ## Confirm view
 
-The only confirm design in the app is the employee-delete layout:
+The only confirm design in the app is the y/n delete layout:
 
 ```
 Delete <subject> (<qualifier>)?

@@ -4,13 +4,13 @@
 > **Status:** implemented 2026-08-15 (automated gates green; 2.6 manual UI proof left for a live terminal)
 > **Estimated effort:** 2-3 days
 > **Priority:** P0 (must land before any live bash)
-> **Gate:** every `rm` shows the employee-style y/n confirm; decline never executes
+> **Gate:** every `rm` shows the y/n confirm; decline never executes
 
 ---
 
 ## Overview
 
-Wire the first real tool (`bash`) through the policy package from Phase 1. The TUI switches to the same y/n confirm view the employee app used (highlight the subject, `y confirm  •  n cancel`). `rm`, including `rm` of a file in the current directory and `rm -rf` anywhere, cannot reach `exec.Command` unless the user confirms that one call. The same view is reused when a sub-agent is stopped or dismissed.
+Wire the first real tool (`bash`) through the policy package from Phase 1. The TUI switches to the y/n confirm view (highlight the subject, `y confirm  •  n cancel`). `rm`, including `rm` of a file in the current directory and `rm -rf` anywhere, cannot reach `exec.Command` unless the user confirms that one call. The same view is reused when a sub-agent is stopped or dismissed.
 
 ## Executive Summary
 
@@ -21,9 +21,9 @@ Wire the first real tool (`bash`) through the policy package from Phase 1. The T
 
 Do not implement edit/read/write/question/webfetch in this phase.
 
-## 2.1 Confirm view (P0) - same design as employee delete
+## 2.1 Confirm view (P0) - the y/n delete design
 
-Reuse the removed prototype's `renderDelete` / `updateDelete` layout. Do not add a boxed modal or "allow once" wording.
+Reuse the parent plan's confirm layout. Do not add a boxed modal or "allow once" wording.
 
 ```
 Delete <subject> (<qualifier>)?
@@ -31,11 +31,11 @@ Delete <subject> (<qualifier>)?
 y confirm  •  n cancel
 ```
 
-- [x] Add `internal/ui/confirm` as a dedicated view (full switch, like `viewDelete`) - 2026-08-15; `go test ./internal/ui/confirm` exit 0 (8 tests)
+- [x] Add `internal/ui/confirm` as a dedicated view (full switch) - 2026-08-15; `go test ./internal/ui/confirm` exit 0 (8 tests)
 - [x] Line 1: error style for `Delete ` and ` (<qualifier>)?`; focused/bold style for `<subject>` - error=Color("1"), subject=Color("212") bold
 - [x] Hint line exactly: `y confirm  •  n cancel` - faint style, exact text (ANSI-stripped assertions in tests)
 - [x] For bash `rm`: subject is the command (or target path); qualifier is `rm` or `rm -rf` - chat wires subject=command, qualifier from Decision (rm / rm -rf)
-- [x] For a sub-agent stop/dismiss: subject is the sub-agent name (same role as the employee name); qualifier is `sub-agent` - same view reused (no sub-agent UI in 0.0.1; layout ready)
+- [x] For a sub-agent stop/dismiss: subject is the sub-agent name; qualifier is `sub-agent` - same view reused (no sub-agent UI in 0.0.1; layout ready)
 - [x] Recursive deletes still use this layout; qualifier becomes `rm -rf`. No second design.
 - [x] Keys do not leak to the prompt, transcript, or any sub-agent list - full view switch; chat routes keys in confirm mode (tested in chat)
 - [x] `y` / `Y` emits `confirm.Result{Allow: true}` once
@@ -89,7 +89,7 @@ y confirm  •  n cancel
 
 ## 2.6 UI proof (P0)
 
-- [ ] Manual: type a prompt that would cause bash `rm` (or inject via a debug key if the model will not cooperate) and see the employee-style confirm
+- [ ] Manual: type a prompt that would cause bash `rm` (or inject via a debug key if the model will not cooperate) and see the y/n confirm
 - [ ] Manual: press `n` -> transcript shows a denied tool card, files untouched
 - [ ] Manual: a non-rm bash such as `go version` runs without a confirm view
 - [ ] Full-screen check: subject is highlighted, hint is `y confirm  •  n cancel`, colors stay readable

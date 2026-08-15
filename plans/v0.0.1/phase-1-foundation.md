@@ -10,14 +10,14 @@
 
 ## Overview
 
-Stand up the harness on a clean tree. The employee prototype is already gone (`go.mod` / `go.sum` kept). End of phase: a chat TUI that reads the OpenCode key from the environment, sends one text turn, renders the assistant text, and writes a session into project-local SQLite.
+Stand up the harness on a clean tree. The prototype app is already gone (`go.mod` / `go.sum` kept). End of phase: a chat TUI that reads the OpenCode key from the environment, sends one text turn, renders the assistant text, and writes a session into project-local SQLite.
 
 ## Executive Summary
 
 - Create `./.lazykoder/` and `lazykoder.db` on every start (exist-ok).
 - Migrate the sessions / messages / parts / tool_calls schema from the parent plan.
 - HTTP client for OpenCode Go chat-completions only. No tools in the request.
-- Create `main.go` as the chat entry and add `internal/ui/chat`. Confirm views, when added in Phase 2, must use the employee-delete layout in the parent plan.
+- Create `main.go` as the chat entry and add `internal/ui/chat`. Confirm views, when added in Phase 2, must use the y/n delete layout in the parent plan.
 - Policy package is compiled and unit-tested in this phase but not wired to an executor. No bash runs in Phase 1.
 
 ## 1.1 Workspace and ignore files (P0)
@@ -69,7 +69,7 @@ Stand up the harness on a clean tree. The employee prototype is already gone (`g
 
 ## 1.5 Chat TUI (P0)
 
-- [x] New package `internal/ui/chat` (do not overwrite employee `internal/ui` yet) - new package, employee `internal/ui` already removed (cleanup done early)
+- [x] New package `internal/ui/chat` - new package, the old prototype `internal/ui` already removed (cleanup done early)
 - [x] Views: transcript, prompt (`textinput`), status line - chat.go view.go; `go test ./internal/ui/chat` exit 0 (9 tests, -race clean)
 - [x] Enter sends the current prompt; empty send is ignored - tested
 - [x] Sending sets status to a busy state; reply appends to the transcript - event-batched; user line appended on Enter
@@ -77,7 +77,7 @@ Stand up the harness on a clean tree. The employee prototype is already gone (`g
 - [x] Provider / network errors render as a red status; the user text remains in the transcript - 500-turn test asserts "user: hi" retained
 - [x] `q` / `ctrl+c` quits; `tea.WithAltScreen()` in `main` - v2 API: `tea.View.AltScreen = true` set in chat View (v2.0.8 has no WithAltScreen); q + ctrl+c tested
 - [x] `Update` stays pure: HTTP and db writes happen in `tea.Cmd` - agent.Send runs in a tea.Cmd goroutine; events via channel watcher
-- [x] `main.go` starts workspace.Init then the chat model (employee `Seed` path removed from the running entry, packages left on disk) - main.go written 2026-08-15; `go build ./...` exit 0
+- [x] `main.go` starts workspace.Init then the chat model (prototype `Seed` path removed from the running entry, packages left on disk) - main.go written 2026-08-15; `go build ./...` exit 0
 - [ ] Manual gate: `OPENCODE_API_KEY=... make run`, type `hi`, a non-empty assistant line appears - NEEDS LIVE KEY + TTY (user must run); automated equivalent: TestSendPhase1Gate + chat tests
 - [ ] Manual gate: full screen readable, no clipped prompt, no unreadable colors - NEEDS TTY (user must run); headless smoke: clean-cwd run created `.lazykoder/lazykoder.db` + migrated schema, no-TTY/missing-key exit clean (no panic)
 
@@ -94,7 +94,7 @@ Stand up the harness on a clean tree. The employee prototype is already gone (`g
 
 ## 1.7 Module identity (P1)
 
-- [x] Decide whether `module employee-tui` stays until Phase 3 or is renamed now (rename only with user sign-off) - decided 2026-08-15: rename now to `lazykoder` (user sign-off given with Phase 1 kickoff)
+- [x] Decide whether the prototype module name stays until Phase 3 or is renamed now (rename only with user sign-off) - decided 2026-08-15: rename now to `lazykoder` (user sign-off given with Phase 1 kickoff)
 - [x] If renamed, grep the old module path in one pass (`go.mod`, imports, tests) and `go build` after - renamed in `go.mod` 2026-08-15 (no code files existed yet; `go build ./...` clean, no old-path references in tree)
 
 ## Dependencies
@@ -108,4 +108,4 @@ Stand up the harness on a clean tree. The employee prototype is already gone (`g
 - [x] `go vet ./...` pass - exit 0
 - [x] First-run on a clean cwd creates `.lazykoder/lazykoder.db` and does not delete user files - headless smoke in /tmp/opencode/lk-smoke: dir + db + WAL created, schema_migrations version 1, tables 5 + indexes present; user files untouched (workspace tests)
 - [x] `hi` round-trip proven against the live OpenCode Go API or a recorded httptest; db contains the user + assistant text - recorded httptest: TestSendPhase1Gate (2 messages, 2 text parts, roles user then assistant); live-API run left for the user (no key in this environment)
-- [x] No employee prototype paths remain (`internal/employee`, `employees.json`) - grep clean; only historical `opencode_session_logs.json` (gitignored artifact) mentions them
+- [x] No prototype paths remain - grep clean; only historical `opencode_session_logs.json` (gitignored artifact) mentions the old app
