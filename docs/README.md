@@ -1,7 +1,7 @@
 # lazyKoder documentation
 
 Index of the docs for the lazyKoder TUI agent harness. The docs complement the
-live plan ledgers in `plans/v.0.0.1/`; the ledgers are the source of truth for
+live plan ledgers in `plans/v0.0.1/`; the ledgers are the source of truth for
 status and closure gates, these pages explain the design and usage.
 
 ## Parts

@@ -6,8 +6,8 @@ build:
 	mkdir -p bin
 	go build -o $(BINARY) .
 
-run: build
-	./$(BINARY)
+run:
+	nodemon -e go --exec "clear && go run main.go"
 
 test:
 	go test ./...

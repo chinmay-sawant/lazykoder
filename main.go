@@ -53,6 +53,7 @@ func main() {
 		Session:    sess,
 		MaxSteps:   8,
 		InitialErr: initial,
+		CachePath:  filepath.Join(env.Dir, "models.json"),
 	}))
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "lazykoder:", err)

@@ -16,6 +16,7 @@ import (
 	"charm.land/bubbletea/v2"
 
 	"github.com/chinmay-sawant/lazykoder/internal/db"
+	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 )
 
@@ -541,7 +542,7 @@ func TestModelsFetchedOnStartup(t *testing.T) {
 	if !strings.Contains(v, "models: 2 available") {
 		t.Errorf("status missing models count: %q", v)
 	}
-	if !strings.Contains(v, "model default") {
+	if !strings.Contains(v, "model deepseek-v4-flash") {
 		t.Errorf("status missing current model label: %q", v)
 	}
 }
@@ -561,8 +562,11 @@ func TestModelPickerSwitchAndPersist(t *testing.T) {
 
 	m = upd(m, tea.KeyPressMsg{Code: 'm'})
 	v := stripANSI(viewText(m))
-	if !strings.Contains(v, "Models") || !strings.Contains(v, "2 items") {
-		t.Fatalf("picker missing model list: %q", v)
+	if !strings.Contains(v, "deepseek-v4-flash") || !strings.Contains(v, "claude-4") {
+		t.Fatalf("picker missing models: %q", v)
+	}
+	if !strings.Contains(v, "filter /") {
+		t.Fatalf("picker missing filter prompt: %q", v)
 	}
 	m = upd(m, tea.KeyPressMsg{Code: 'j'})
 	m, cmd := updCmd(m, tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -616,5 +620,442 @@ func TestModelPickerCancel(t *testing.T) {
 	}
 	if !strings.Contains(v, "m switch") {
 		t.Errorf("normal view not restored after q: %q", v)
+	}
+}
+
+func TestTitleStatic(t *testing.T) {
+	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
+	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
+	v := stripANSI(viewText(m))
+	if !strings.Contains(v, "lazykoder") {
+		t.Fatalf("title missing: %q", v)
+	}
+	mm, _ := m.Update(tea.KeyPressMsg{Code: 'j'})
+	m = mm.(Model)
+	if !strings.Contains(stripANSI(viewText(m)), "lazykoder") {
+		t.Errorf("title missing after key input: %q", stripANSI(viewText(m)))
+	}
+}
+
+func TestTranscriptScrollbarAndFlow(t *testing.T) {
+	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
+	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
+	m = typeText(m, "hello")
+	m, cmd := updCmd(m, enter())
+	p := newPump(t)
+	p.run(cmd)
+	m = p.drainIdle(m)
+
+	v := stripANSI(viewText(m))
+	if !strings.Contains(v, "user: hello") || !strings.Contains(v, "assistant: hi") {
+		t.Fatalf("transcript missing lines: %q", v)
+	}
+	// No overflow with two lines: no scrollbar cells.
+	if strings.Contains(v, "░") || strings.Contains(v, "█") {
+		t.Errorf("scrollbar shown without overflow: %q", v)
+	}
+
+	// Fill the transcript beyond its default height so it overflows.
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = mm.(Model)
+	m.lines = nil
+	for i := 0; i < 40; i++ {
+		m.lines = append(m.lines, fmt.Sprintf("line %02d", i))
+	}
+	m.syncTranscript()
+	v = stripANSI(viewText(m))
+	if !strings.Contains(v, "line 39") {
+		t.Errorf("newest line not visible at bottom: %q", v)
+	}
+	if strings.Contains(v, "line 00") {
+		t.Errorf("oldest line should have scrolled up: %q", v)
+	}
+	if !strings.Contains(v, "░") {
+		t.Errorf("scrollbar track missing with overflow: %q", v)
+	}
+}
+
+func TestTranscriptScrollKeys(t *testing.T) {
+	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
+	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
+	for i := 0; i < 60; i++ {
+		m.lines = append(m.lines, fmt.Sprintf("line %02d", i))
+	}
+	m.syncTranscript()
+
+	mm, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	m = mm.(Model)
+	if m.transcript.AtBottom() {
+		t.Errorf("viewport still at bottom after one Up scroll")
+	}
+	mm, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyHome})
+	m = mm.(Model)
+	if !m.transcript.AtTop() {
+		t.Errorf("Home did not jump to top")
+	}
+	mm, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnd})
+	m = mm.(Model)
+	if !m.transcript.AtBottom() {
+		t.Errorf("End did not jump to bottom")
+	}
+}
+
+func TestModelPickerFilter(t *testing.T) {
+	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
+	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
+	p := newPump(t)
+	p.run(m.Init())
+	m = p.runStep(m, p.next())
+
+	m = upd(m, tea.KeyPressMsg{Code: 'm'})
+	m = upd(m, tea.KeyPressMsg{Code: '/'})
+	for _, r := range []rune("claude") {
+		m = upd(m, tea.KeyPressMsg{Code: r, Text: string(r)})
+	}
+	v := stripANSI(viewText(m))
+	card := v[strings.Index(v, "╭"):]
+	if strings.Contains(card, "deepseek-v4-flash") {
+		t.Errorf("filtered model still visible in card: %q", card)
+	}
+	if !strings.Contains(card, "claude-4") {
+		t.Errorf("matching model missing: %q", card)
+	}
+	if !strings.Contains(v, "filter: claude") {
+		t.Errorf("filter prompt missing query: %q", v)
+	}
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	v = stripANSI(viewText(m))
+	if !strings.Contains(v, "claude-4") {
+		t.Errorf("filter exit lost the list: %q", v)
+	}
+	if !strings.Contains(v, "filter: claude") {
+		t.Errorf("active filter query not shown after exit: %q", v)
+	}
+}
+
+func typeRune(m Model, r rune) Model {
+	return upd(m, tea.KeyPressMsg{Code: r, Text: string(r)})
+}
+
+func TestSlashMenuOpensAndDivides(t *testing.T) {
+	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
+	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
+	if !strings.Contains(stripANSI(viewText(m)), "ask lazykoder... (type / for commands)") {
+		t.Fatalf("prompt placeholder missing: %q", stripANSI(viewText(m)))
+	}
+	m = typeRune(m, '/')
+	if !m.slashMode {
+		t.Fatal("slash mode not opened on /")
+	}
+	v := stripANSI(viewText(m))
+	if !strings.Contains(v, "/new") || !strings.Contains(v, "/model") || !strings.Contains(v, "/help") {
+		t.Errorf("slash menu missing commands: %q", v)
+	}
+	if !strings.Contains(v, "start a new session") {
+		t.Errorf("slash menu missing detail pane: %q", v)
+	}
+	if !strings.Contains(v, "│") {
+		t.Errorf("slash menu missing vertical divider: %q", v)
+	}
+}
+
+func TestSlashMenuFilterAndRunNew(t *testing.T) {
+	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
+	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
+	m = typeRune(m, '/')
+	m = typeRune(m, 'm')
+	if len(m.slashItems) != 1 || m.slashItems[0].name != "/model" {
+		t.Fatalf("filtered items = %+v, want only /model", m.slashItems)
+	}
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyEscape})
+	if m.slashMode {
+		t.Fatal("slash mode still open after esc")
+	}
+	if got := m.prompt.Value(); got != "/" {
+		t.Fatalf("prompt after esc = %q, want /", got)
+	}
+
+	m = typeRune(m, 'm')
+	if !m.slashMode || len(m.slashItems) != 1 || m.slashItems[0].name != "/model" {
+		t.Fatalf("menu not reopened with /model filter: %+v", m.slashItems)
+	}
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.slashMode {
+		t.Fatal("slash mode still open after enter")
+	}
+	if !m.pickerMode {
+		t.Fatal("enter on /model did not open the picker")
+	}
+
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyEscape})
+	m.lines = append(m.lines, "old line")
+	m = typeRune(m, '/')
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.slashMode {
+		t.Fatal("slash mode still open after /new")
+	}
+	if len(m.lines) != 0 {
+		t.Errorf("transcript not cleared by /new: %d lines", len(m.lines))
+	}
+	if m.session != nil {
+		t.Errorf("/new should drop the session for a fresh one")
+	}
+}
+
+func TestSlashMenuEscapeLeavesSlash(t *testing.T) {
+	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
+	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
+	m = typeRune(m, '/')
+	m = typeRune(m, 'h')
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyEscape})
+	if m.slashMode {
+		t.Fatal("slash mode still open")
+	}
+	if got := m.prompt.Value(); got != "/" {
+		t.Errorf("prompt after esc = %q, want /", got)
+	}
+}
+
+func TestMouseWheelScrollsTranscript(t *testing.T) {
+	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
+	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
+	for i := 0; i < 60; i++ {
+		m.lines = append(m.lines, fmt.Sprintf("line %02d", i))
+	}
+	m.syncTranscript()
+	if !m.transcript.AtBottom() {
+		t.Fatal("expected viewport at bottom after sync")
+	}
+	mm, _ := m.Update(tea.MouseWheelMsg(tea.Mouse{Button: tea.MouseWheelUp}))
+	m = mm.(Model)
+	if m.transcript.AtBottom() {
+		t.Error("wheel up did not scroll the transcript")
+	}
+	mm, _ = m.Update(tea.MouseWheelMsg(tea.Mouse{Button: tea.MouseWheelDown}))
+	m = mm.(Model)
+	if !m.transcript.AtBottom() {
+		t.Error("wheel down did not return to bottom")
+	}
+}
+
+func TestScrollbarClickJumpAndDrag(t *testing.T) {
+	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
+	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
+	for i := 0; i < 80; i++ {
+		m.lines = append(m.lines, fmt.Sprintf("line %02d", i))
+	}
+	m.syncTranscript()
+	if !m.transcript.AtBottom() {
+		t.Fatal("expected at bottom")
+	}
+
+	col := m.width - 1
+	mm, _ := m.Update(tea.MouseClickMsg(tea.Mouse{X: col, Y: 4, Button: tea.MouseLeft}))
+	m = mm.(Model)
+	if !m.dragOn {
+		t.Fatal("click on scrollbar did not start a drag")
+	}
+	if m.transcript.AtBottom() {
+		t.Error("click-jump did not scroll up")
+	}
+
+	mm, _ = m.Update(tea.MouseMotionMsg(tea.Mouse{X: col, Y: 2, Button: tea.MouseLeft}))
+	m = mm.(Model)
+	topPct := m.transcript.ScrollPercent()
+	if !m.transcript.AtTop() {
+		t.Errorf("drag to top row did not reach top (pct %.2f)", topPct)
+	}
+
+	mm, _ = m.Update(tea.MouseReleaseMsg(tea.Mouse{X: col, Y: 2}))
+	m = mm.(Model)
+	if m.dragOn {
+		t.Error("release did not end the drag")
+	}
+	mm, _ = m.Update(tea.MouseMotionMsg(tea.Mouse{X: col, Y: 2, Button: tea.MouseLeft}))
+	m = mm.(Model)
+	if !m.transcript.AtTop() {
+		t.Error("drag continued after release")
+	}
+}
+
+func TestScrollbarClickIgnoredWithoutOverflow(t *testing.T) {
+	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
+	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
+	col := m.width - 1
+	mm, _ := m.Update(tea.MouseClickMsg(tea.Mouse{X: col, Y: 3, Button: tea.MouseLeft}))
+	m = mm.(Model)
+	if m.dragOn {
+		t.Error("drag started without overflow")
+	}
+}
+
+func TestPickerCardAbovePrompt(t *testing.T) {
+	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
+	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
+	p := newPump(t)
+	p.run(m.Init())
+	m = p.runStep(m, p.next())
+
+	m = upd(m, tea.KeyPressMsg{Code: 'm'})
+	v := stripANSI(viewText(m))
+	cardIdx := strings.Index(v, "╭")
+	promptIdx := strings.Index(v, "ask lazykoder... (type / for commands)")
+	bottomIdx := strings.Index(v, "╰")
+	if cardIdx < 0 || promptIdx < 0 || bottomIdx < 0 {
+		t.Fatalf("card or prompt missing: %q", v)
+	}
+	if cardIdx > promptIdx {
+		t.Error("card appears below the prompt; it should open upward above it")
+	}
+	if bottomIdx > promptIdx {
+		t.Errorf("card bottom edge (%d) should be above the prompt (%d)", bottomIdx, promptIdx)
+	}
+}
+
+func TestPickerCardFitsAndScrollbarDrags(t *testing.T) {
+	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
+	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
+	p := newPump(t)
+	p.run(m.Init())
+	m = p.runStep(m, p.next())
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = mm.(Model)
+
+	for i := 0; i < 30; i++ {
+		m.models = append(m.models, fmt.Sprintf("model-%02d", i))
+	}
+	m = upd(m, tea.KeyPressMsg{Code: 'm'})
+
+	v := stripANSI(viewText(m))
+	lines := strings.Split(v, "\n")
+	bottomBorder := 0
+	for i, line := range lines {
+		if strings.Contains(line, "╰") {
+			bottomBorder = i
+		}
+	}
+	if bottomBorder >= 30 {
+		t.Errorf("card bottom (%d) below the 30-row screen", bottomBorder)
+	}
+	promptIdx := strings.Index(v, "ask lazykoder... (type / for commands)")
+	if promptIdx < 0 || bottomBorder > strings.Index(v, "ask lazykoder") {
+		t.Errorf("card not above the prompt (border %d, prompt %d)", bottomBorder, promptIdx)
+	}
+
+	top, _, col, ok := m.scrollbarRect(1)
+	if !ok {
+		t.Fatal("picker scrollbar rect not found")
+	}
+	mm, _ = m.Update(tea.MouseClickMsg(tea.Mouse{X: col, Y: top, Button: tea.MouseLeft}))
+	m = mm.(Model)
+	if !m.dragOn {
+		t.Fatal("click on picker scrollbar did not start a drag")
+	}
+	if !m.pickerVp.AtTop() {
+		t.Error("click at the top of the track should stay at top")
+	}
+	mm, _ = m.Update(tea.MouseMotionMsg(tea.Mouse{X: col, Y: top + 4, Button: tea.MouseLeft}))
+	m = mm.(Model)
+	if m.pickerVp.AtTop() {
+		t.Error("drag did not scroll the picker")
+	}
+	mm, _ = m.Update(tea.MouseReleaseMsg(tea.Mouse{X: col, Y: top + 4}))
+	m = mm.(Model)
+	if m.dragOn {
+		t.Error("release did not end picker drag")
+	}
+}
+
+func TestModelsLoadedFromCacheSkipsAPI(t *testing.T) {
+	dir := t.TempDir()
+	cachePath := filepath.Join(dir, "models.json")
+	if err := modelscache.Save(cachePath, []string{"deepseek-v4-flash", "claude-4"}, time.Now()); err != nil {
+		t.Fatalf("seed cache: %v", err)
+	}
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: dir, CachePath: cachePath})
+	p := newPump(t)
+	p.run(m.Init())
+	m = p.runStep(m, p.next())
+
+	v := stripANSI(viewText(m))
+	if !strings.Contains(v, "models: 2 available (cached)") {
+		t.Errorf("status missing cached label: %q", v)
+	}
+	if !m.modelsCached {
+		t.Error("modelsCached = false, want true for fresh cache")
+	}
+}
+
+func TestModelsCacheRefreshedWhenStale(t *testing.T) {
+	dir := t.TempDir()
+	cachePath := filepath.Join(dir, "models.json")
+	stale := time.Now().Add(-modelscache.DefaultTTL - time.Minute)
+	if err := modelscache.Save(cachePath, []string{"stale-model"}, stale); err != nil {
+		t.Fatalf("seed stale cache: %v", err)
+	}
+	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
+	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: dir, CachePath: cachePath})
+	p := newPump(t)
+	p.run(m.Init())
+	m = p.runStep(m, p.next())
+
+	v := stripANSI(viewText(m))
+	if !strings.Contains(v, "models: 2 available") {
+		t.Errorf("status missing refreshed count: %q", v)
+	}
+	if strings.Contains(v, "(cached)") {
+		t.Errorf("status shows cached label after live refresh: %q", v)
+	}
+	if m.modelsCached {
+		t.Error("modelsCached = true, want false after live refresh")
+	}
+	models, fresh, err := modelscache.Load(cachePath, time.Now(), modelscache.DefaultTTL)
+	if err != nil {
+		t.Fatalf("reload cache: %v", err)
+	}
+	if len(models) != 2 || models[0] == "stale-model" {
+		t.Errorf("cache not rewritten: %v", models)
+	}
+	if !fresh {
+		t.Error("cache still stale after refresh")
+	}
+}
+
+func TestModelsRefreshKeyReloadsFromAPI(t *testing.T) {
+	dir := t.TempDir()
+	cachePath := filepath.Join(dir, "models.json")
+	if err := modelscache.Save(cachePath, []string{"deepseek-v4-flash"}, time.Now()); err != nil {
+		t.Fatalf("seed cache: %v", err)
+	}
+	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
+	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: dir, CachePath: cachePath})
+	p := newPump(t)
+	p.run(m.Init())
+	m = p.runStep(m, p.next())
+
+	if !m.modelsCached {
+		t.Fatal("precondition: models should come from cache")
+	}
+	m = upd(m, tea.KeyPressMsg{Code: 'm'})
+	if !m.pickerMode {
+		t.Fatal("precondition: picker did not open")
+	}
+	mm, cmd := m.Update(tea.KeyPressMsg{Code: 'r'})
+	m = mm.(Model)
+	if m.pickerMode {
+		t.Error("picker still open after refresh key")
+	}
+	p.run(cmd)
+	m = p.runStep(m, p.next())
+
+	v := stripANSI(viewText(m))
+	if !strings.Contains(v, "models: 2 available") {
+		t.Errorf("status missing refreshed count: %q", v)
+	}
+	if strings.Contains(v, "(cached)") {
+		t.Errorf("status shows cached label after manual refresh: %q", v)
+	}
+	if m.modelsCached {
+		t.Error("modelsCached = true, want false after manual refresh")
 	}
 }

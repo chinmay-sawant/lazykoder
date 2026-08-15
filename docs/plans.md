@@ -2,7 +2,7 @@
 
 ## The planning workflow
 
-Plans live under `plans/v.0.0.1/` and are live ledgers, not snapshots:
+Plans live under `plans/v0.0.1/` and are live ledgers, not snapshots:
 
 | File | Role |
 | --- | --- |

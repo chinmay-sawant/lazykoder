@@ -25,6 +25,7 @@ Phase files (live ledgers, update `[x]` only after the gate passes):
 | [phase-1-foundation.md](phase-1-foundation.md) | P0 | Workspace, SQLite, auth, send `hi`, persist text |
 | [phase-2-safety-bash.md](phase-2-safety-bash.md) | P0 | `rm` y/n confirm, bash tool, deny-by-default |
 | [phase-3-tools-cleanup.md](phase-3-tools-cleanup.md) | P1 | Remaining tools, replay, employee-prototype cleanup |
+| [phase-4-tokens-status-todos.md](phase-4-tokens-status-todos.md) | P1 | Streaming tokens/sec, status line customizations, tracked todos |
 
 ---
 

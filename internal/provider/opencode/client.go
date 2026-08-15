@@ -71,6 +71,11 @@ func NewClient(apiKey string, opts ...Option) *Client {
 	return c
 }
 
+// Model returns the model id in effect (the override if set, else the default).
+func (c *Client) Model() string {
+	return c.model
+}
+
 // ToolCall is a tool invocation requested by the model.
 type ToolCall struct {
 	ID        string // call id, echoed back by tool messages

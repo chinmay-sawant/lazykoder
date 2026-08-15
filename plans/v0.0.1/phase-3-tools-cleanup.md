@@ -1,6 +1,6 @@
 # v0.0.1 / Phase 3 - Remaining tools, replay, and prototype cleanup
 
-> **Parent:** `plans/v.0.0.1/README.md` - part types and cleanup node
+> **Parent:** `plans/v0.0.1/README.md` - part types and cleanup node
 > **Status:** implemented 2026-08-15 (tools + replay + cleanup landed; closure gates green)
 > **Estimated effort:** 2-3 days
 > **Priority:** P1 (append to this file if a tool slips; do not start a second ledger)

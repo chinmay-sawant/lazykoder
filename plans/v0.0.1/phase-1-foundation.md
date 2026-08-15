@@ -1,6 +1,6 @@
 # v0.0.1 / Phase 1 - Foundation, workspace, and first OpenCode turn
 
-> **Parent:** `plans/v.0.0.1/README.md` - architecture and schema
+> **Parent:** `plans/v0.0.1/README.md` - architecture and schema
 > **Status:** implemented 2026-08-15 (automated gates green; 2 manual TUI rows left for a live terminal)
 > **Estimated effort:** 1.5-2.5 days
 > **Priority:** P0 (this is the 0.0.1 goal)

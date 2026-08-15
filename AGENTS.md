@@ -147,9 +147,19 @@ Module: `github.com/chinmay-sawant/lazykoder` (renamed from `lazykoder` on 2026-
   Confirm views copy the old employee-delete layout: highlight the subject
   name (command path, or sub-agent name), then `y confirm  •  n cancel`.
 - Keep `Update` pure and deterministic; side effects belong in `tea.Cmd`.
-- Run with `make run` (builds the `lk` binary) to verify; the app uses alt
-  screen and creates `.lazykoder/` at startup (idempotent - do not make init
-  destructive to user data).
+- Run with `make run` (requires `nodemon`; watches `*.go` and restarts
+  `go run main.go` on every change) to verify; the app uses alt screen and
+  creates `.lazykoder/` at startup (idempotent - do not make init destructive
+  to user data). The model list is cached in `.lazykoder/models.json` (15 min
+  TTL, `r` in the model picker or `/refresh` to force a reload) so nodemon
+  restarts do not hit the models endpoint every time.
+- **Never run the binary headless.** `go run .` / `bin/lk` piped, redirected
+  (`</dev/null`), or under `timeout` fails with
+  `bubbletea: error opening TTY: open /dev/tty: no such device or address`,
+  and a `| head` / `echo "exit: $?"` pipeline masks it as exit 0 (8 silent
+  false-success smoke runs on 2026-08-15). It cannot verify the TUI. Verify
+  rendering with `go test ./internal/ui/chat` (View output), and let the user
+  run `make run` in a real terminal for anything visual.
 - When adding a view/component, run `go test ./...` and verify the full
   screen renders (no clipped lines, no unreadable colors) before asking the
   user to look.

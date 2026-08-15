@@ -1,6 +1,6 @@
 # v0.0.1 / Phase 2 - Destructive-command gate and bash tool
 
-> **Parent:** `plans/v.0.0.1/README.md` - safety invariant
+> **Parent:** `plans/v0.0.1/README.md` - safety invariant
 > **Status:** implemented 2026-08-15 (automated gates green; 2.6 manual UI proof left for a live terminal)
 > **Estimated effort:** 2-3 days
 > **Priority:** P0 (must land before any live bash)

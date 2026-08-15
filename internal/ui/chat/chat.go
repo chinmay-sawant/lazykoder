@@ -5,16 +5,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
-	"charm.land/bubbles/v2/list"
 	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/viewport"
 	"charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
 	"github.com/chinmay-sawant/lazykoder/internal/agent"
 	"github.com/chinmay-sawant/lazykoder/internal/db"
+	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
 	"github.com/chinmay-sawant/lazykoder/internal/policy"
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/question"
@@ -22,8 +24,13 @@ import (
 )
 
 const (
-	idleHint = "enter to send  •  q to quit"
-	busyHint = "sending..."
+	idleHint      = "enter to send  •  q to quit"
+	busyHint      = "sending..."
+	defaultWidth  = 80
+	defaultHeight = 24
+	// chromeLines are the fixed rows around the transcript: title, blank,
+	// status and prompt lines.
+	chromeLines = 5
 )
 
 var (
@@ -40,9 +47,10 @@ type Options struct {
 	Session    *db.Session
 	MaxSteps   int
 	InitialErr string
+	CachePath  string // optional models cache file; empty disables caching
 }
 
-// Model is the chat screen: transcript, prompt, status and confirm view.
+// Model is the chat screen: title, transcript, prompt, status and confirm flow.
 type Model struct {
 	store    *db.Store
 	client   *opencode.Client
@@ -50,16 +58,22 @@ type Model struct {
 	session  *db.Session
 	maxSteps int
 
+	width  int
+	height int
+
 	lines       []string
+	transcript  viewport.Model
 	prompt      textinput.Model
 	busy        bool
 	err         string
 	pendingUser string
 	lastTool    int
 
-	model     string // current model; "" = provider default
-	models    []string
-	modelsErr string
+	model        string // current model; "" = provider default
+	models       []string
+	modelsErr    string
+	modelsCached bool // models came from the cache, not a live fetch
+	cachePath    string
 
 	confirmCh   chan confirmRequest
 	askCh       chan askRequest
@@ -70,20 +84,39 @@ type Model struct {
 	confirm     confirm.Model
 	confirmMode bool
 
-	picker      list.Model
-	pickerMode  bool
-	pickerBuilt bool
+	pickerVp        viewport.Model
+	pickerItems     []string
+	pickerCursor    int
+	pickerFilter    string
+	pickerFiltering bool
+	pickerBuilt     bool
+	pickerMode      bool
+
+	slashMode   bool
+	slashCursor int
+	slashItems  []slashCmd
+
+	dragTarget int // -1 none, 0 transcript, 1 picker
+	dragOn     bool
 }
 
-type modelItem string
+// slashCmd is one entry of the slash command menu.
+type slashCmd struct {
+	name        string
+	description string
+}
 
-func (i modelItem) Title() string       { return string(i) }
-func (i modelItem) Description() string { return "" }
-func (i modelItem) FilterValue() string { return string(i) }
+var slashCommands = []slashCmd{
+	{name: "/new", description: "start a new session and clear the transcript"},
+	{name: "/model", description: "switch the chat model"},
+	{name: "/refresh", description: "reload the model list from the server"},
+	{name: "/help", description: "show the keyboard shortcuts"},
+}
 
 type modelsMsg struct {
-	list []string
-	err  error
+	list      []string
+	err       error
+	fromCache bool
 }
 
 type confirmRequest struct {
@@ -113,19 +146,32 @@ type eventBatchMsg struct {
 // New returns a chat model for the given options.
 func New(opts Options) Model {
 	m := Model{
-		store:     opts.Store,
-		client:    opts.Client,
-		workdir:   opts.Workdir,
-		session:   opts.Session,
-		maxSteps:  opts.MaxSteps,
-		err:       opts.InitialErr,
-		confirmCh: make(chan confirmRequest, 1),
-		askCh:     make(chan askRequest, 1),
-		doneCh:    make(chan struct{}),
-		lastTool:  -1,
-		prompt:    textinput.New(),
+		store:      opts.Store,
+		client:     opts.Client,
+		workdir:    opts.Workdir,
+		session:    opts.Session,
+		maxSteps:   opts.MaxSteps,
+		err:        opts.InitialErr,
+		width:      defaultWidth,
+		height:     defaultHeight,
+		confirmCh:  make(chan confirmRequest, 1),
+		askCh:      make(chan askRequest, 1),
+		doneCh:     make(chan struct{}),
+		lastTool:   -1,
+		cachePath:  opts.CachePath,
+		transcript: viewport.New(viewport.WithWidth(defaultWidth-1), viewport.WithHeight(defaultHeight-chromeLines)),
+		prompt:     textinput.New(),
 	}
-	m.prompt.Placeholder = "ask lazykoder..."
+	m.prompt.Placeholder = "ask lazykoder... (type / for commands)"
+	m.prompt.Prompt = "▏"
+	m.prompt.SetWidth(m.width)
+	m.prompt.SetStyles(textinput.Styles{
+		Focused: textinput.StyleState{
+			Text:        lipgloss.NewStyle().Foreground(lipgloss.Color("#e6e6e6")),
+			Placeholder: lipgloss.NewStyle().Foreground(lipgloss.Color("#8a8a8a")),
+			Prompt:      lipgloss.NewStyle().Foreground(lipgloss.Color("15")),
+		},
+	})
 	m.prompt.Focus()
 	if m.session != nil && m.store != nil {
 		m.model = m.session.Model
@@ -140,9 +186,28 @@ func (m Model) Init() tea.Cmd {
 }
 
 func (m Model) fetchModels() tea.Msg {
+	if m.cachePath != "" {
+		if models, fresh, err := modelscache.Load(m.cachePath, time.Now(), modelscache.DefaultTTL); err == nil && fresh && len(models) > 0 {
+			return modelsMsg{list: models, fromCache: true}
+		}
+	}
+	return m.refreshModels()
+}
+
+// refreshModels fetches the model list from the API, rewrites the cache, and
+// falls back to a stale cache when the fetch fails.
+func (m Model) refreshModels() tea.Msg {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	list, err := m.client.Models(ctx)
+	if err == nil && m.cachePath != "" {
+		_ = modelscache.Save(m.cachePath, list, time.Now())
+	}
+	if err != nil && m.cachePath != "" {
+		if models, _, lerr := modelscache.Load(m.cachePath, time.Now(), modelscache.DefaultTTL); lerr == nil && len(models) > 0 {
+			return modelsMsg{list: models, fromCache: true}
+		}
+	}
 	return modelsMsg{list: list, err: err}
 }
 
@@ -191,6 +256,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case modelsMsg:
 		m.models = msg.list
+		m.modelsCached = msg.fromCache
 		if msg.err != nil {
 			m.modelsErr = msg.err.Error()
 		} else {
@@ -202,6 +268,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = msg.err.Error()
 		}
 		return m, nil
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		m.transcript.SetWidth(max(20, msg.Width-1))
+		m.transcript.SetHeight(max(3, msg.Height-chromeLines))
+		m.prompt.SetWidth(max(20, msg.Width))
+		if m.pickerBuilt {
+			m = m.resizePicker()
+		}
+		return m, nil
 	case tea.KeyPressMsg:
 		if m.confirmMode {
 			return m.updateConfirmKey(msg)
@@ -209,92 +285,528 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.pickerMode {
 			return m.updatePickerKey(msg)
 		}
+		if m.slashMode {
+			return m.updateSlashKey(msg)
+		}
 		return m.updateKey(msg)
+	case tea.MouseWheelMsg:
+		if m.pickerMode {
+			vp, _ := m.pickerVp.Update(msg)
+			m.pickerVp = vp
+			return m, nil
+		}
+		vp, _ := m.transcript.Update(msg)
+		m.transcript = vp
+		return m, nil
+	case tea.MouseClickMsg:
+		return m.mousePress(msg), nil
+	case tea.MouseMotionMsg:
+		if !m.dragOn {
+			return m, nil
+		}
+		return m.mouseDrag(msg), nil
+	case tea.MouseReleaseMsg:
+		m.dragOn = false
+		return m, nil
 	}
 	return m, nil
 }
 
-// View renders the picker, confirm view, or the transcript, prompt and status line.
+// mousePress starts a scrollbar drag when the click lands on a scrollbar
+// column, and jumps the viewport to the clicked position.
+func (m Model) mousePress(msg tea.MouseClickMsg) Model {
+	mu := msg.Mouse()
+	for _, target := range []int{0, 1} {
+		if m.dragTarget == 1 && target == 0 {
+			continue
+		}
+		if !m.pickerMode && target == 1 {
+			continue
+		}
+		top, bottom, col, ok := m.scrollbarRect(target)
+		if !ok || mu.X != col || mu.Y < top || mu.Y >= bottom {
+			continue
+		}
+		m = m.applyJump(target, mu.Y)
+		m.dragTarget = target
+		m.dragOn = true
+		return m
+	}
+	return m
+}
+
+// mouseDrag keeps the viewport following the pointer while a scrollbar
+// drag is in progress.
+func (m Model) mouseDrag(msg tea.MouseMotionMsg) Model {
+	mu := msg.Mouse()
+	top, bottom, col, ok := m.scrollbarRect(m.dragTarget)
+	if !ok || mu.X != col {
+		return m
+	}
+	if mu.Y < top {
+		mu.Y = top
+	}
+	if mu.Y >= bottom {
+		mu.Y = bottom - 1
+	}
+	return m.applyJump(m.dragTarget, mu.Y)
+}
+
+// applyJump scrolls the target viewport so the scrollbar position matches
+// the given pointer row within the scrollbar column.
+func (m Model) applyJump(target, y int) Model {
+	var vp *viewport.Model
+	if target == 0 {
+		vp = &m.transcript
+	} else {
+		vp = &m.pickerVp
+	}
+	top, _, _, _ := m.scrollbarRect(target)
+	height := vp.Height()
+	maxY := vp.TotalLineCount() - height
+	if maxY <= 0 {
+		return m
+	}
+	frac := float64(y-top) / float64(max(1, height-1))
+	if frac < 0 {
+		frac = 0
+	}
+	if frac > 1 {
+		frac = 1
+	}
+	vp.SetYOffset(int(math.Round(frac * float64(maxY))))
+	return m
+}
+
+// View renders the picker card, slash menu, confirm view, or the chat layout.
 func (m Model) View() tea.View {
 	if m.confirmMode {
 		v := tea.NewView(m.confirm.View())
 		v.AltScreen = true
 		return v
 	}
-	if m.pickerMode {
-		v := tea.NewView(m.pickerView())
-		v.AltScreen = true
-		return v
-	}
 	var b strings.Builder
-	if len(m.lines) > 0 {
-		b.WriteString(strings.Join(m.lines, "\n"))
-		b.WriteString("\n\n")
-	}
-	b.WriteString(m.prompt.View())
+	b.WriteString(m.titleLine())
 	b.WriteString("\n\n")
+	b.WriteString(m.transcriptView())
+	b.WriteString("\n")
 	b.WriteString(m.statusLine())
+	b.WriteString("\n")
+	if m.pickerMode {
+		b.WriteString(m.pickerView())
+		b.WriteString("\n")
+	} else if m.slashMode {
+		b.WriteString(m.slashView())
+		b.WriteString("\n")
+	}
+	b.WriteString(m.promptLine())
 	v := tea.NewView(b.String())
 	v.AltScreen = true
+	v.MouseMode = tea.MouseModeCellMotion
 	return v
 }
 
-func (m Model) pickerView() string {
+// promptLine renders the prompt inside a subtle translucent-looking panel:
+// a dark background with bright text so the input stays clearly readable.
+// A bottom margin lifts it one row above the bottom edge.
+func (m Model) promptLine() string {
+	return lipgloss.NewStyle().
+		Background(lipgloss.Color("#262626")).
+		Padding(0, 1).
+		MarginBottom(1).
+		Width(m.width).
+		Render(m.prompt.View())
+}
+
+// transcriptRenderHeight returns the transcript height for rendering,
+// shrunk in picker mode so the card and prompt stay on screen.
+func (m Model) transcriptRenderHeight() int {
+	h := m.transcript.Height()
+	if m.pickerMode {
+		cardH := m.pickerVPHeight() + 4
+		h = m.height - 8 - cardH
+		h = max(3, h)
+	}
+	return h
+}
+
+// transcriptView renders the transcript viewport with a right-edge scrollbar.
+func (m Model) transcriptView() string {
+	vp := m.transcript
+	h := m.transcriptRenderHeight()
+	vp.SetHeight(h)
+	width := vp.Width()
+	return withScrollbar(vp.View(), width, h, vp.ScrollPercent(), vp.TotalLineCount() > h)
+}
+
+// titleLine renders the static white app title at the top of the chat view.
+func (m Model) titleLine() string {
+	return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#ffffff")).Render("lazykoder")
+}
+
+// scrollbarRect returns the screen rectangle (top row, bottom row, column)
+// of a rendered scrollbar column for the given target (0 = transcript,
+// 1 = picker). ok is false when no scrollbar is shown.
+func (m Model) scrollbarRect(target int) (top, bottom, col int, ok bool) {
+	if target == 0 {
+		if m.pickerMode {
+			return 0, 0, 0, false
+		}
+		h := m.transcriptRenderHeight()
+		if m.transcript.TotalLineCount() <= h {
+			return 0, 0, 0, false
+		}
+		return 2, 2 + h, m.width - 1, true
+	}
+	vpH := m.pickerVPHeight()
+	if len(m.pickerItems) <= vpH {
+		return 0, 0, 0, false
+	}
+	cardTop := m.transcriptRenderHeight() + 3
+	return cardTop + 1, cardTop + 1 + vpH, m.pickerVp.Width() + 1, true
+}
+
+func (m Model) pickerVPHeight() int {
+	vpH := min(10, len(m.pickerItems))
+	return max(3, vpH)
+}
+
+// withScrollbar appends a scrollbar column at the right edge of a rendered
+// viewport when its content overflows. The thumb tracks the scroll percent.
+func withScrollbar(v string, width, height int, percent float64, overflow bool) string {
+	if !overflow {
+		return v
+	}
+	lines := strings.Split(v, "\n")
+	for len(lines) < height {
+		lines = append(lines, "")
+	}
+	thumb := int(percent * float64(height-1))
+	track := lipgloss.NewStyle().Faint(true).Render("░")
+	thumbCell := lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Render("█")
 	var b strings.Builder
-	if m.modelsErr != "" {
-		b.WriteString(errStyle.Render("models unavailable: " + m.modelsErr))
-		b.WriteString("\n\n")
+	for i, line := range lines {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		if w := width - lipgloss.Width(line); w > 0 {
+			b.WriteString(line + strings.Repeat(" ", w))
+		} else {
+			b.WriteString(line)
+		}
+		if i == thumb {
+			b.WriteString(thumbCell)
+		} else {
+			b.WriteString(track)
+		}
 	}
-	if len(m.models) == 0 {
-		b.WriteString(hintStyle.Render("no models loaded"))
-	} else {
-		b.WriteString(m.picker.View())
-	}
-	b.WriteString("\n\n")
-	b.WriteString(hintStyle.Render("↑/↓ navigate  •  enter select  •  esc cancel"))
 	return b.String()
+}
+
+// slashView renders the slash command menu as a two-pane card: available
+// commands on the left, the highlighted command's details on the right,
+// separated by a vertical line.
+func (m Model) slashView() string {
+	cardW := min(64, m.width-4)
+	cardW = max(36, cardW)
+
+	sel := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15"))
+	dim := lipgloss.NewStyle().Faint(true)
+
+	var leftB strings.Builder
+	for i, cmd := range m.slashItems {
+		if i > 0 {
+			leftB.WriteString("\n")
+		}
+		if i == m.slashCursor {
+			leftB.WriteString(sel.Render("▸ " + cmd.name))
+		} else {
+			leftB.WriteString(dim.Render("  " + cmd.name))
+		}
+	}
+	left := leftB.String()
+
+	detail := "no matching command"
+	if len(m.slashItems) > 0 && m.slashCursor < len(m.slashItems) {
+		detail = m.slashItems[m.slashCursor].description
+	}
+	right := strings.TrimRight(lipgloss.NewStyle().Faint(true).Width(cardW/2).Render(detail), "\n")
+
+	divider := lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("│")
+	leftLines := strings.Split(left, "\n")
+	rightLines := strings.Split(right, "\n")
+	h := max(len(leftLines), len(rightLines))
+	for len(leftLines) < h {
+		leftLines = append(leftLines, "")
+	}
+	for len(rightLines) < h {
+		rightLines = append(rightLines, "")
+	}
+	var b strings.Builder
+	for i := 0; i < h; i++ {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString(leftLines[i])
+		b.WriteString("  ")
+		b.WriteString(divider)
+		b.WriteString("  ")
+		b.WriteString(rightLines[i])
+	}
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("8")).
+		Width(cardW).
+		Render(b.String())
+}
+
+// updateSlash handles keys while the slash menu is open.
+func (m Model) updateSlashKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
+	switch key.Code {
+	case tea.KeyEscape:
+		m.slashMode = false
+		m.slashCursor = 0
+		m.prompt.SetValue("/")
+		return m, nil
+	case tea.KeyEnter:
+		if m.slashCursor >= 0 && m.slashCursor < len(m.slashItems) {
+			name := m.slashItems[m.slashCursor].name
+			m.slashMode = false
+			m.slashCursor = 0
+			m.prompt.SetValue("")
+			return m.runSlash(name)
+		}
+		return m, nil
+	case tea.KeyBackspace:
+		var cmd tea.Cmd
+		m.prompt, cmd = m.prompt.Update(key)
+		return m.syncSlash(m.prompt.Value()), cmd
+	case 'j', tea.KeyDown:
+		if m.slashCursor < len(m.slashItems)-1 {
+			m.slashCursor++
+		}
+		return m, nil
+	case 'k', tea.KeyUp:
+		if m.slashCursor > 0 {
+			m.slashCursor--
+		}
+		return m, nil
+	}
+	if key.Text != "" {
+		var cmd tea.Cmd
+		m.prompt, cmd = m.prompt.Update(key)
+		return m.syncSlash(m.prompt.Value()), cmd
+	}
+	return m, nil
+}
+
+// runSlash executes a chosen slash command.
+func (m Model) runSlash(name string) (Model, tea.Cmd) {
+	switch name {
+	case "/new":
+		m.lines = nil
+		m.lastTool = -1
+		m.session = nil
+		m.pendingUser = ""
+		m.syncTranscript()
+	case "/model":
+		return m.openPicker(), nil
+	case "/refresh":
+		return m, m.refreshModels
+	case "/help":
+		m.lines = append(m.lines,
+			"help: enter send  •  m model  •  / slash commands  •  ↑/↓ scroll  •  q quit")
+		m.syncTranscript()
+	}
+	return m, nil
+}
+
+// syncSlash recomputes the slash menu from the prompt text. The menu opens
+// when the prompt starts with "/" and closes when it no longer does.
+func (m Model) syncSlash(value string) Model {
+	if !strings.HasPrefix(value, "/") {
+		m.slashMode = false
+		m.slashCursor = 0
+		return m
+	}
+	partial := strings.ToLower(strings.TrimPrefix(value, "/"))
+	m.slashItems = nil
+	for _, cmd := range slashCommands {
+		if strings.HasPrefix(strings.TrimPrefix(cmd.name, "/"), partial) {
+			m.slashItems = append(m.slashItems, cmd)
+		}
+	}
+	if m.slashCursor >= len(m.slashItems) {
+		m.slashCursor = max(0, len(m.slashItems)-1)
+	}
+	m.slashMode = true
+	return m
+}
+
+// scrollbar on the right, and a filter prompt line at the bottom.
+func (m Model) pickerView() string {
+	cardW := min(60, m.width-4)
+	cardW = max(30, cardW)
+
+	var body strings.Builder
+	if m.modelsErr != "" {
+		body.WriteString(errStyle.Render("models unavailable: " + m.modelsErr))
+		body.WriteString("\n")
+	}
+	if len(m.pickerItems) == 0 {
+		if len(m.models) == 0 {
+			body.WriteString(hintStyle.Render("no models loaded"))
+		} else {
+			body.WriteString(hintStyle.Render("no models match \"" + m.pickerFilter + "\""))
+		}
+	} else {
+		vpW := m.pickerVp.Width()
+		vpH := m.pickerVPHeight()
+		body.WriteString(withScrollbar(m.pickerVp.View(), vpW, vpH,
+			m.pickerVp.ScrollPercent(), m.pickerVp.TotalLineCount() > vpH))
+	}
+
+	filter := "filter /  •  r refresh  •  enter select  •  esc cancel"
+	if m.pickerFiltering {
+		filter = "filter: " + m.pickerFilter + "▏"
+	} else if m.pickerFilter != "" {
+		filter = "filter: " + m.pickerFilter + "  •  enter select"
+	}
+	body.WriteString("\n" + hintStyle.Render(filter))
+
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("8")).
+		Width(cardW).
+		Render(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Render(" Models ") + "\n" + body.String())
+}
+
+// pickerContent renders the filtered model list with the cursor marker.
+func (m Model) pickerContent(width int) string {
+	sel := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15"))
+	normal := lipgloss.NewStyle().Faint(true)
+	var b strings.Builder
+	for i, id := range m.pickerItems {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		line := "  " + id
+		if i == m.pickerCursor {
+			b.WriteString(sel.Render("▸ " + id))
+			continue
+		}
+		b.WriteString(normal.Render(line))
+	}
+	return b.String()
+}
+
+func (m Model) resizePicker() Model {
+	cardW := min(60, m.width-4)
+	cardW = max(30, cardW)
+	innerW := cardW - 2
+	vpW := max(20, innerW-2)
+	m.pickerVp.SetWidth(vpW)
+	m.pickerVp.SetHeight(m.pickerVPHeight())
+	return m
 }
 
 func (m Model) updatePickerKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 	if key.Mod.Contains(tea.ModCtrl) && key.Code == 'c' {
 		return m.closeDone(), tea.Quit
 	}
+	if m.pickerFiltering {
+		switch key.Code {
+		case tea.KeyEscape, tea.KeyEnter:
+			m.pickerFiltering = false
+			return m, nil
+		case tea.KeyBackspace, tea.KeyDelete:
+			if len(m.pickerFilter) > 0 {
+				m.pickerFilter = m.pickerFilter[:len(m.pickerFilter)-1]
+				m.applyFilter()
+			}
+			return m, nil
+		}
+		if key.Text != "" {
+			m.pickerFilter += key.Text
+			m.applyFilter()
+		}
+		return m, nil
+	}
 	switch key.Code {
 	case 'q', 'Q':
 		m.pickerMode = false
 		return m, nil
+	case 'r', 'R':
+		m.pickerMode = false
+		return m, m.refreshModels
 	case tea.KeyEscape:
 		m.pickerMode = false
 		return m, nil
+	case '/':
+		m.pickerFiltering = true
+		return m, nil
 	case tea.KeyEnter:
-		if m.pickerBuilt && len(m.models) > 0 {
-			if it, ok := m.picker.SelectedItem().(modelItem); ok {
-				m.model = string(it)
-				m.pickerMode = false
-				return m, m.persistModel()
-			}
+		if m.pickerBuilt && len(m.pickerItems) > 0 && m.pickerCursor < len(m.pickerItems) {
+			m.model = m.pickerItems[m.pickerCursor]
+			m.pickerMode = false
+			return m, m.persistModel()
 		}
 		return m, nil
 	case 'j', tea.KeyDown:
-		m.picker.CursorDown()
+		if m.pickerCursor < len(m.pickerItems)-1 {
+			m.pickerCursor++
+			m.pickerVp.EnsureVisible(m.pickerCursor, 0, 1)
+		}
 		return m, nil
 	case 'k', tea.KeyUp:
-		m.picker.CursorUp()
+		if m.pickerCursor > 0 {
+			m.pickerCursor--
+			m.pickerVp.EnsureVisible(m.pickerCursor, 0, 1)
+		}
+		return m, nil
+	case tea.KeyPgDown:
+		m.pickerVp.PageDown()
+		return m, nil
+	case tea.KeyPgUp:
+		m.pickerVp.PageUp()
 		return m, nil
 	}
 	return m, nil
 }
 
+func (m *Model) applyFilter() {
+	m.pickerItems = nil
+	needle := strings.ToLower(m.pickerFilter)
+	for _, id := range m.models {
+		if needle == "" || strings.Contains(strings.ToLower(id), needle) {
+			m.pickerItems = append(m.pickerItems, id)
+		}
+	}
+	if m.pickerCursor >= len(m.pickerItems) {
+		m.pickerCursor = max(0, len(m.pickerItems)-1)
+	}
+	m.pickerVp.SetContent(m.pickerContent(m.pickerVp.Width()))
+	m.pickerVp.EnsureVisible(m.pickerCursor, 0, 1)
+}
+
 func (m Model) openPicker() Model {
 	if !m.pickerBuilt {
-		items := make([]list.Item, 0, len(m.models))
-		for _, id := range m.models {
-			items = append(items, modelItem(id))
-		}
-		m.picker = list.New(items, list.NewDefaultDelegate(), 60, 10)
-		m.picker.Title = "Models"
+		m.pickerVp = viewport.New(viewport.WithWidth(58), viewport.WithHeight(10))
 		m.pickerBuilt = true
+		m = m.resizePicker()
 	}
+	m.pickerFilter = ""
+	m.pickerFiltering = false
+	m.pickerCursor = 0
+	m.applyFilter()
+	for i, id := range m.pickerItems {
+		if id == m.model {
+			m.pickerCursor = i
+			break
+		}
+	}
+	m.pickerVp.SetContent(m.pickerContent(m.pickerVp.Width()))
+	m.pickerVp.EnsureVisible(m.pickerCursor, 0, 1)
 	m.pickerMode = true
 	return m
 }
@@ -325,6 +837,11 @@ func (m Model) updateKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.prompt, cmd = m.prompt.Update(key)
 		return m, cmd
 	}
+	if strings.HasPrefix(m.prompt.Value(), "/") && (key.Text != "" || key.Code == tea.KeyBackspace) {
+		var cmd tea.Cmd
+		m.prompt, cmd = m.prompt.Update(key)
+		return m.syncSlash(m.prompt.Value()), cmd
+	}
 	switch key.Code {
 	case 'q', 'Q':
 		return m.closeDone(), tea.Quit
@@ -342,10 +859,35 @@ func (m Model) updateKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.submit(text)
+	case tea.KeyBackspace:
+		var cmd tea.Cmd
+		m.prompt, cmd = m.prompt.Update(key)
+		if strings.HasPrefix(m.prompt.Value(), "/") && !m.slashMode {
+			m = m.syncSlash(m.prompt.Value())
+		}
+		return m, cmd
+	case tea.KeyUp:
+		m.transcript.ScrollUp(1)
+		return m, nil
+	case tea.KeyDown:
+		m.transcript.ScrollDown(1)
+		return m, nil
+	case tea.KeyPgUp:
+		m.transcript.PageUp()
+		return m, nil
+	case tea.KeyPgDown:
+		m.transcript.PageDown()
+		return m, nil
+	case tea.KeyHome:
+		m.transcript.GotoTop()
+		return m, nil
+	case tea.KeyEnd:
+		m.transcript.GotoBottom()
+		return m, nil
 	}
 	var cmd tea.Cmd
 	m.prompt, cmd = m.prompt.Update(key)
-	return m, cmd
+	return m.syncSlash(m.prompt.Value()), cmd
 }
 
 func (m Model) updateConfirmKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
@@ -369,6 +911,7 @@ func (m Model) submit(text string) (Model, tea.Cmd) {
 	m.err = ""
 	m.pendingUser = text
 	m.lines = append(m.lines, "user: "+text)
+	m.syncTranscript()
 	ch := make(chan agent.Event, 64)
 	errCh := make(chan error, 1)
 	ag := agent.New(m.store, m.client, m.workdir, agent.Options{
@@ -509,6 +1052,12 @@ func (m *Model) replay(sessionID string) {
 			}
 		}
 	}
+	m.syncTranscript()
+}
+
+func (m *Model) syncTranscript() {
+	m.transcript.SetContent(strings.Join(m.lines, "\n"))
+	m.transcript.GotoBottom()
 }
 
 func (m *Model) applyPart(p db.Part) {
@@ -525,6 +1074,7 @@ func (m *Model) applyPart(p db.Part) {
 	case "reasoning":
 		m.lines = append(m.lines, "reasoning: (collapsed)")
 	}
+	m.syncTranscript()
 }
 
 func (m *Model) applyTool(ev agent.Event) {
@@ -539,11 +1089,13 @@ func (m *Model) applyTool(ev agent.Event) {
 	if status == "" || status == "pending" {
 		m.lines = append(m.lines, name+": pending")
 		m.lastTool = len(m.lines) - 1
+		m.syncTranscript()
 		return
 	}
 	if m.lastTool >= 0 && m.lastTool < len(m.lines) {
 		m.lines[m.lastTool] = name + ": " + status
 	}
+	m.syncTranscript()
 }
 
 func (m Model) statusLine() string {
@@ -553,23 +1105,35 @@ func (m Model) statusLine() string {
 	case m.busy:
 		return busyStyle.Render(busyHint)
 	default:
-		label := "default"
-		if m.model != "" {
-			label = m.model
+		label := m.model
+		if label == "" && m.client != nil {
+			label = m.client.Model()
+		}
+		if label == "" {
+			label = "default"
 		}
 		var b strings.Builder
 		b.WriteString(hintStyle.Render(strings.Join([]string{
 			"model " + label,
 			"m switch",
+			"/ commands",
 			"enter to send",
 			"q to quit",
 		}, "  •  ")))
+		if m.transcript.TotalLineCount() > m.transcript.Height() {
+			b.WriteString("\n")
+			b.WriteString(hintStyle.Render("scroll: ↑/↓, page up/down or mouse wheel"))
+		}
 		if m.modelsErr != "" {
 			b.WriteString("\n")
 			b.WriteString(errStyle.Render("models: " + m.modelsErr))
 		} else if len(m.models) > 0 {
 			b.WriteString("\n")
-			b.WriteString(hintStyle.Render(fmt.Sprintf("models: %d available", len(m.models))))
+			count := fmt.Sprintf("models: %d available", len(m.models))
+			if m.modelsCached {
+				count += " (cached)"
+			}
+			b.WriteString(hintStyle.Render(count))
 		}
 		return b.String()
 	}

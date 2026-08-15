@@ -43,7 +43,7 @@ internal/
          webfetch}/           tool implementations
   ui/chat/                    chat TUI (transcript, prompt, picker)
   ui/confirm/                 y/n confirm view
-plans/v.0.0.1/                plan ledgers (status + closure gates)
+plans/v0.0.1/                plan ledgers (status + closure gates)
 docs/                         this documentation set
 skills/                       agent-harness conventions (AGENTS.md)
 ```

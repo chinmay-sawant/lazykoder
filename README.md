@@ -38,7 +38,7 @@ OPENCODE_API_KEY=your-key
 | --- | --- |
 | `main.go` | entry: workspace init, key load, chat program |
 | `internal/` | workspace, db, provider, agent, policy, tools, ui |
-| `plans/v.0.0.1/` | live plan ledgers with the closure gates |
+| `plans/v0.0.1/` | live plan ledgers with the closure gates |
 | `docs/` | thorough documentation, split by topic |
 | `Makefile` | build / run / test / vet / clean |
 
