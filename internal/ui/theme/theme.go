@@ -9,15 +9,16 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// Hex values for the default dark theme (neutral night + magenta accent).
+// Hex values for the default theme. Bg is solid black so the terminal
+// profile color cannot show through empty cells.
 const (
-	Bg      = "#121212"
-	Surface = "#1a1a1a"
+	Bg      = "#000000"
+	Surface = "#000000"
 	Text    = "#eceae6"
 	Mute    = "#8a8680"
 	Accent  = "#d4a0c7"
 	Danger  = "#e06c75"
-	Border  = "#3a3836"
+	Border  = "#2a2a2a"
 	Good    = "#9ece6a"
 )
 

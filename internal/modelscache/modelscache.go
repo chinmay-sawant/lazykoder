@@ -19,10 +19,16 @@ const DefaultTTL = 15 * time.Minute
 // responses, so it is not world-readable.
 const cacheMode = 0o600
 
+// Info is one cached model and its advertised context window.
+type Info struct {
+	ID      string `json:"id"`
+	Context int    `json:"context,omitempty"`
+}
+
 // file is the on-disk cache shape.
 type file struct {
-	FetchedAt int64    `json:"fetched_at"`
-	Models    []string `json:"models"`
+	FetchedAt int64  `json:"fetched_at"`
+	Models    []Info `json:"models"`
 }
 
 // Path returns the cache file path inside the workspace dir.
@@ -30,10 +36,30 @@ func Path(dir string) string {
 	return filepath.Join(dir, "models.json")
 }
 
+// IDs extracts model ids from a list of Info rows.
+func IDs(infos []Info) []string {
+	out := make([]string, 0, len(infos))
+	for _, m := range infos {
+		out = append(out, m.ID)
+	}
+	return out
+}
+
+// ContextOf returns the cached context window for id, or 0 if unknown.
+func ContextOf(infos []Info, id string) int {
+	for _, m := range infos {
+		if m.ID == id {
+			return m.Context
+		}
+	}
+	return 0
+}
+
 // Load returns the cached model list. fresh is true when the cache is younger
 // than ttl. A missing file returns nil models and no error, so callers fall
-// through to the API.
-func Load(path string, now time.Time, ttl time.Duration) (models []string, fresh bool, err error) {
+// through to the API. An older cache that stored models as a string array
+// still loads.
+func Load(path string, now time.Time, ttl time.Duration) (models []Info, fresh bool, err error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -42,7 +68,7 @@ func Load(path string, now time.Time, ttl time.Duration) (models []string, fresh
 		return nil, false, err
 	}
 	var f file
-	if err := json.Unmarshal(raw, &f); err != nil {
+	if err := unmarshalCache(raw, &f); err != nil {
 		return nil, false, err
 	}
 	if len(f.Models) == 0 {
@@ -51,8 +77,36 @@ func Load(path string, now time.Time, ttl time.Duration) (models []string, fresh
 	return f.Models, now.Sub(time.UnixMilli(f.FetchedAt)) < ttl, nil
 }
 
+func unmarshalCache(raw []byte, f *file) error {
+	var wire struct {
+		FetchedAt int64           `json:"fetched_at"`
+		Models    json.RawMessage `json:"models"`
+	}
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		return err
+	}
+	f.FetchedAt = wire.FetchedAt
+	if len(wire.Models) == 0 {
+		return nil
+	}
+	var infos []Info
+	if err := json.Unmarshal(wire.Models, &infos); err == nil && len(infos) > 0 && infos[0].ID != "" {
+		f.Models = infos
+		return nil
+	}
+	var ids []string
+	if err := json.Unmarshal(wire.Models, &ids); err != nil {
+		return err
+	}
+	f.Models = make([]Info, 0, len(ids))
+	for _, id := range ids {
+		f.Models = append(f.Models, Info{ID: id})
+	}
+	return nil
+}
+
 // Save writes the model list and fetch time to the cache file.
-func Save(path string, models []string, now time.Time) error {
+func Save(path string, models []Info, now time.Time) error {
 	raw, err := json.Marshal(file{FetchedAt: now.UnixMilli(), Models: models})
 	if err != nil {
 		return err

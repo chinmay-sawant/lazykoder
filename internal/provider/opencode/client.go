@@ -281,8 +281,28 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, erro
 	return out, nil
 }
 
+// ModelInfo is one entry from GET /models.
+type ModelInfo struct {
+	ID      string
+	Context int
+}
+
 // Models GETs <base>/models and returns the model ids.
 func (c *Client) Models(ctx context.Context) ([]string, error) {
+	infos, err := c.ModelInfos(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(infos))
+	for _, m := range infos {
+		ids = append(ids, m.ID)
+	}
+	return ids, nil
+}
+
+// ModelInfos GETs <base>/models and returns ids plus any context window the
+// payload advertises (context_window, context_length, limit.context, ...).
+func (c *Client) ModelInfos(ctx context.Context) ([]ModelInfo, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/models", nil)
 	if err != nil {
 		return nil, fmt.Errorf("opencode: build models request: %w", err)
@@ -297,18 +317,43 @@ func (c *Client) Models(ctx context.Context) ([]string, error) {
 		return nil, statusError("models request", resp.StatusCode, resp.Body)
 	}
 	var wire struct {
-		Data []struct {
-			ID string `json:"id"`
-		} `json:"data"`
+		Data []wireModel `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&wire); err != nil {
 		return nil, fmt.Errorf("opencode: decode models response: %w", err)
 	}
-	ids := make([]string, 0, len(wire.Data))
+	out := make([]ModelInfo, 0, len(wire.Data))
 	for _, m := range wire.Data {
-		ids = append(ids, m.ID)
+		if m.ID == "" {
+			continue
+		}
+		out = append(out, ModelInfo{ID: m.ID, Context: m.contextWindow()})
 	}
-	return ids, nil
+	return out, nil
+}
+
+type wireModel struct {
+	ID             string `json:"id"`
+	ContextWindow  int    `json:"context_window"`
+	ContextLength  int    `json:"context_length"`
+	MaxContext     int    `json:"max_context"`
+	MaxInputTokens int    `json:"max_input_tokens"`
+	Context        int    `json:"context"`
+	Limit          struct {
+		Context int `json:"context"`
+	} `json:"limit"`
+	Info struct {
+		Context int `json:"context"`
+	} `json:"info"`
+}
+
+func (m wireModel) contextWindow() int {
+	for _, n := range []int{m.ContextWindow, m.ContextLength, m.MaxContext, m.MaxInputTokens, m.Context, m.Limit.Context, m.Info.Context} {
+		if n > 0 {
+			return n
+		}
+	}
+	return 0
 }
 
 func statusError(kind string, status int, body io.Reader) error {

@@ -26,25 +26,23 @@ func TestRenderFormatsCommonMarkdown(t *testing.T) {
 	if strings.Contains(got, "```") {
 		t.Errorf("Render() left fence markers in output: %q", got)
 	}
-	if !strings.Contains(got, "╭") || !strings.Contains(got, "╰") {
-		t.Errorf("Render() missing code block border: %q", got)
+	if strings.Contains(got, "╭") || strings.Contains(got, "╰") {
+		t.Errorf("Render() still draws a code border: %q", got)
 	}
 }
 
 func TestRenderCodeBlockSpansWidth(t *testing.T) {
 	const width = 48
 	got := ansi.Strip(Render("```go\nfmt.Println(1)\n```", width))
-	var border string
+	if !strings.Contains(got, "fmt.Println(1)") {
+		t.Fatalf("code body missing: %q", got)
+	}
 	for _, line := range strings.Split(got, "\n") {
-		if strings.Contains(line, "╭") {
-			border = line
-			break
+		if strings.Contains(line, "fmt.Println(1)") {
+			if w := lipgloss.Width(line); w != width {
+				t.Errorf("code line width = %d, want %d: %q", w, width, line)
+			}
+			return
 		}
-	}
-	if border == "" {
-		t.Fatal("missing code block border")
-	}
-	if w := lipgloss.Width(border); w != width {
-		t.Errorf("code block width = %d, want %d: %q", w, width, border)
 	}
 }

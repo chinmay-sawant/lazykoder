@@ -327,6 +327,24 @@ func TestModels(t *testing.T) {
 	}
 }
 
+func TestModelInfosParsesContext(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"data":[{"id":"deepseek-v4-flash","context_window":131072},{"id":"other","limit":{"context":32000}}]}`)
+	}))
+	defer srv.Close()
+	c := NewClient("k", WithBaseURL(srv.URL))
+	infos, err := c.ModelInfos(context.Background())
+	if err != nil {
+		t.Fatalf("ModelInfos: %v", err)
+	}
+	if len(infos) != 2 {
+		t.Fatalf("len = %d", len(infos))
+	}
+	if infos[0].Context != 131072 || infos[1].Context != 32000 {
+		t.Errorf("contexts = %+v", infos)
+	}
+}
+
 func TestChatRequestModelOverride(t *testing.T) {
 	var got string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

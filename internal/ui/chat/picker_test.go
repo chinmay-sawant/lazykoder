@@ -311,7 +311,7 @@ func TestPickerCardFitsAndScrollbarDrags(t *testing.T) {
 func TestModelsLoadedFromCacheSkipsAPI(t *testing.T) {
 	dir := t.TempDir()
 	cachePath := filepath.Join(dir, "models.json")
-	if err := modelscache.Save(cachePath, []string{"deepseek-v4-flash", "claude-4"}, time.Now()); err != nil {
+	if err := modelscache.Save(cachePath, []modelscache.Info{{ID: "deepseek-v4-flash"}, {ID: "claude-4"}}, time.Now()); err != nil {
 		t.Fatalf("seed cache: %v", err)
 	}
 	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: dir, CachePath: cachePath})
@@ -332,7 +332,7 @@ func TestModelsCacheRefreshedWhenStale(t *testing.T) {
 	dir := t.TempDir()
 	cachePath := filepath.Join(dir, "models.json")
 	stale := time.Now().Add(-modelscache.DefaultTTL - time.Minute)
-	if err := modelscache.Save(cachePath, []string{"stale-model"}, stale); err != nil {
+	if err := modelscache.Save(cachePath, []modelscache.Info{{ID: "stale-model"}}, stale); err != nil {
 		t.Fatalf("seed stale cache: %v", err)
 	}
 	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
@@ -351,7 +351,7 @@ func TestModelsCacheRefreshedWhenStale(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reload cache: %v", err)
 	}
-	if len(models) != 2 || models[0] == "stale-model" {
+	if len(models) != 2 || models[0].ID == "stale-model" {
 		t.Errorf("cache not rewritten: %v", models)
 	}
 	if !fresh {
@@ -362,7 +362,7 @@ func TestModelsCacheRefreshedWhenStale(t *testing.T) {
 func TestModelsRefreshKeyReloadsFromAPI(t *testing.T) {
 	dir := t.TempDir()
 	cachePath := filepath.Join(dir, "models.json")
-	if err := modelscache.Save(cachePath, []string{"deepseek-v4-flash"}, time.Now()); err != nil {
+	if err := modelscache.Save(cachePath, []modelscache.Info{{ID: "deepseek-v4-flash"}}, time.Now()); err != nil {
 		t.Fatalf("seed cache: %v", err)
 	}
 	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))

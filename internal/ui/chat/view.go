@@ -8,27 +8,20 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
 
 // View renders the picker card, slash menu, confirm overlay, or the chat layout.
 func (m Model) View() tea.View {
 	if m.quitConfirm {
-		v := tea.NewView(m.quitScreen())
-		v.AltScreen = true
-		return v
+		return m.newView(m.quitScreen())
 	}
 	if m.pickerMode {
-		v := tea.NewView(m.pickerScreen())
-		v.AltScreen = true
-		v.MouseMode = tea.MouseModeCellMotion
-		return v
+		return m.newView(m.pickerScreen())
 	}
 	if m.sessionPickerMode {
-		v := tea.NewView(m.sessionPickerScreen())
-		v.AltScreen = true
-		v.MouseMode = tea.MouseModeCellMotion
-		return v
+		return m.newView(m.sessionPickerScreen())
 	}
 	screen := m.chatScreen()
 	if m.confirmMode {
@@ -43,9 +36,21 @@ func (m Model) View() tea.View {
 	if m.filePickerMode {
 		screen = overlayOn(screen, m.width, m.height, m.filePickerOverlay())
 	}
-	v := tea.NewView(screen)
+	return m.newView(screen)
+}
+
+// newView paints a full-size solid black layer so the host terminal
+// background never shows through empty cells.
+func (m Model) newView(content string) tea.View {
+	painted := lipgloss.NewStyle().
+		Background(theme.ColorBg()).
+		Width(max(1, m.width)).
+		Height(max(1, m.height)).
+		Render(content)
+	v := tea.NewView(painted)
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
+	v.BackgroundColor = theme.ColorBg()
 	return v
 }
 
@@ -146,7 +151,7 @@ func (m Model) promptLine() string {
 
 func (m Model) composerFooter(width int) string {
 	left := m.composerLeft()
-	right := m.modelLabel()
+	right := m.modelContextLabel()
 	if m.copyNotice != "" {
 		left = lipgloss.NewStyle().Foreground(theme.ColorGood()).Bold(true).Render(m.copyNotice)
 	}
@@ -158,16 +163,28 @@ func (m Model) composerFooter(width int) string {
 	return left + strings.Repeat(" ", gap) + hintStyle.Render(right)
 }
 
+func (m Model) modelContextLabel() string {
+	label := m.modelLabel()
+	window := modelscache.ContextOf(m.modelInfos, label)
+	if m.tokensUsed <= 0 && window <= 0 {
+		return label
+	}
+	used := formatTokens(m.tokensUsed)
+	if window > 0 {
+		return label + "  " + used + "/" + formatTokens(int64(window))
+	}
+	return label + "  " + used
+}
+
 func (m Model) composerLeft() string {
 	switch {
 	case m.err != "":
 		return errStyle.Render("error")
 	case m.busy:
-		busy := "thinking"
-		if tool := m.currentToolName(); tool != "" {
-			busy = "run  " + tool
+		if m.activity != "" {
+			return busyStyle.Render(m.activity)
 		}
-		return busyStyle.Render(busy)
+		return busyStyle.Render("thinking")
 	default:
 		if _, ok := m.selectedHistoryItem(); ok {
 			return hintStyle.Render("history: ↑/↓ previous/next")
@@ -369,7 +386,7 @@ func (m Model) modelStatusRect() (left, top, right, bottom int, ok bool) {
 	if m.busy || m.pickerMode || m.sessionPickerMode {
 		return 0, 0, 0, 0, false
 	}
-	label := m.modelLabel()
+	label := m.modelContextLabel()
 	top = lipgloss.Height(m.headerView()) + 1 + m.transcriptRenderHeight() + 1
 	if m.slashMode {
 		top += 1 + lipgloss.Height(m.slashView())

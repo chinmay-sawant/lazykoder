@@ -4,6 +4,7 @@ package chat
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -91,15 +92,12 @@ var (
 	userStyle      = lipgloss.NewStyle().Foreground(theme.ColorAccent())
 	roleStyle      = lipgloss.NewStyle().Foreground(theme.ColorMute()).Bold(true)
 	reasoningStyle = lipgloss.NewStyle().Foreground(theme.ColorMute())
-	toolCardStyle  = lipgloss.NewStyle().
-			Background(theme.ColorSurface()).
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(theme.ColorBorder()).
-			Padding(0, 1)
+	toolCardStyle = lipgloss.NewStyle().
+			Background(theme.ColorBg()).
+			Foreground(theme.ColorText())
 	toolOutputStyle = lipgloss.NewStyle().
 			Background(theme.ColorBg()).
-			Foreground(theme.ColorMute()).
-			Padding(0, 1)
+			Foreground(theme.ColorMute())
 	selectionStyle = lipgloss.NewStyle().
 			Background(theme.ColorAccent()).
 			Foreground(theme.ColorBg())
@@ -147,9 +145,12 @@ type Model struct {
 
 	model        string // current model; "" = provider default
 	models       []string
+	modelInfos   []modelscache.Info
 	modelsErr    string
 	modelsCached bool // models came from the cache, not a live fetch
 	cachePath    string
+	activity     string
+	tokensUsed   int64
 
 	confirmCh   chan confirmRequest
 	askCh       chan askRequest
@@ -245,6 +246,7 @@ var slashCommands = []slashCmd{
 
 type modelsMsg struct {
 	list      []string
+	infos     []modelscache.Info
 	err       error
 	fromCache bool
 }
@@ -316,8 +318,8 @@ func (m Model) Init() tea.Cmd {
 
 func (m Model) fetchModels() tea.Msg {
 	if m.cachePath != "" {
-		if models, fresh, err := modelscache.Load(m.cachePath, time.Now(), modelscache.DefaultTTL); err == nil && fresh && len(models) > 0 {
-			return modelsMsg{list: models, fromCache: true}
+		if infos, fresh, err := modelscache.Load(m.cachePath, time.Now(), modelscache.DefaultTTL); err == nil && fresh && len(infos) > 0 {
+			return modelsMsg{list: modelscache.IDs(infos), infos: infos, fromCache: true}
 		}
 	}
 	return m.refreshModels()
@@ -328,16 +330,26 @@ func (m Model) fetchModels() tea.Msg {
 func (m Model) refreshModels() tea.Msg {
 	ctx, cancel := context.WithTimeout(context.Background(), modelsTimeout)
 	defer cancel()
-	list, err := m.client.Models(ctx)
+	infos, err := m.client.ModelInfos(ctx)
+	cached := toCacheInfos(infos)
+	list := modelscache.IDs(cached)
 	if err == nil && m.cachePath != "" {
-		_ = modelscache.Save(m.cachePath, list, time.Now())
+		_ = modelscache.Save(m.cachePath, cached, time.Now())
 	}
 	if err != nil && m.cachePath != "" {
-		if models, _, lerr := modelscache.Load(m.cachePath, time.Now(), modelscache.DefaultTTL); lerr == nil && len(models) > 0 {
-			return modelsMsg{list: models, fromCache: true}
+		if stale, _, lerr := modelscache.Load(m.cachePath, time.Now(), modelscache.DefaultTTL); lerr == nil && len(stale) > 0 {
+			return modelsMsg{list: modelscache.IDs(stale), infos: stale, fromCache: true}
 		}
 	}
-	return modelsMsg{list: list, err: err}
+	return modelsMsg{list: list, infos: cached, err: err}
+}
+
+func toCacheInfos(infos []opencode.ModelInfo) []modelscache.Info {
+	out := make([]modelscache.Info, 0, len(infos))
+	for _, info := range infos {
+		out = append(out, modelscache.Info{ID: info.ID, Context: info.Context})
+	}
+	return out
 }
 
 // Update routes keys and streamed events through the model.
@@ -378,6 +390,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, pulseTick()
 	case modelsMsg:
 		m.models = msg.list
+		if len(msg.infos) > 0 {
+			m.modelInfos = msg.infos
+		}
 		m.modelsCached = msg.fromCache
 		if msg.err != nil {
 			m.modelsErr = msg.err.Error()
@@ -508,8 +523,10 @@ func (m Model) applyEvent(ev agent.Event) Model {
 		}
 	case agent.EventPart:
 		m.applyPart(ev.Part)
+		m = m.noteActivityFromPart(ev.Part)
 	case agent.EventTool:
 		m.applyTool(ev)
+		m.activity = toolActivity(ev.Tool)
 	case agent.EventError:
 		if ev.Err != nil && !isCancelErr(ev.Err) {
 			m.err = ev.Err.Error()
@@ -548,7 +565,83 @@ func (m Model) finishTurn(err error) Model {
 	m.eventCh = nil
 	m.errCh = nil
 	m.pulseOn = false
+	m.activity = ""
 	return m
+}
+
+func (m Model) noteActivityFromPart(p db.Part) Model {
+	switch p.Type {
+	case "reasoning":
+		if p.Text != nil && *p.Text != "" {
+			m.activity = "thinking  " + firstLine(*p.Text, 48)
+		} else {
+			m.activity = "thinking"
+		}
+	case "text":
+		if p.Text != nil && *p.Text != "" {
+			m.activity = "writing  " + firstLine(*p.Text, 48)
+		}
+	case "step-start":
+		if m.activity == "" {
+			m.activity = "thinking"
+		}
+	case "step-finish":
+		if p.TokensTotal != nil && *p.TokensTotal > 0 {
+			m.tokensUsed = *p.TokensTotal
+		} else if p.TokensInput != nil || p.TokensOutput != nil {
+			var n int64
+			if p.TokensInput != nil {
+				n += *p.TokensInput
+			}
+			if p.TokensOutput != nil {
+				n += *p.TokensOutput
+			}
+			if n > 0 {
+				m.tokensUsed = n
+			}
+		}
+	}
+	return m
+}
+
+func toolActivity(tc db.ToolCall) string {
+	name := tc.Tool
+	if name == "" {
+		name = "tool"
+	}
+	cmd := toolCommand(tc)
+	switch tc.Status {
+	case "completed":
+		if cmd != "" {
+			return name + " done  " + truncateRunes(cmd, 40)
+		}
+		return name + " done"
+	case "error", "denied":
+		return name + " " + tc.Status
+	default:
+		if cmd != "" {
+			return name + "  " + truncateRunes(cmd, 48)
+		}
+		return name
+	}
+}
+
+func firstLine(s string, maxRunes int) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	return truncateRunes(s, maxRunes)
+}
+
+func formatTokens(n int64) string {
+	if n < 1000 {
+		return fmt.Sprintf("%d", n)
+	}
+	if n < 10_000 {
+		return fmt.Sprintf("%.1fk", float64(n)/1000)
+	}
+	return fmt.Sprintf("%dk", n/1000)
 }
 
 func pulseTick() tea.Cmd {
@@ -584,6 +677,27 @@ func newPromptArea(width int) textarea.Model {
 	ta.SetWidth(max(minPaneWidth, width))
 	ta.SetHeight(promptMinRows)
 	ta.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("shift+enter"))
+	plain := lipgloss.NewStyle().Background(theme.ColorBg()).Foreground(theme.ColorText())
+	mute := lipgloss.NewStyle().Background(theme.ColorBg()).Foreground(theme.ColorMute())
+	ta.SetStyles(textarea.Styles{
+		Focused: textarea.StyleState{
+			Base:        plain,
+			Text:        plain,
+			CursorLine:  plain,
+			Placeholder: mute,
+			Prompt:      plain,
+			EndOfBuffer: plain,
+		},
+		Blurred: textarea.StyleState{
+			Base:        plain,
+			Text:        plain,
+			CursorLine:  plain,
+			Placeholder: mute,
+			Prompt:      plain,
+			EndOfBuffer: plain,
+		},
+		Cursor: textarea.CursorStyle{Color: theme.ColorText(), Blink: true},
+	})
 	ta.Focus()
 	return ta
 }

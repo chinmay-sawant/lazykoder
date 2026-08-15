@@ -15,10 +15,12 @@ pickers are centered cards.
   (`◆  bash  title  ·  just now  ·  completed`). The diamond stays on the
   card after the turn ends: white while pending or running, green on
   success, red on error or deny. `e` expands the last run.
-- Composer: a rounded input box. The footer shows `enter send` on the left
-  and the model on the right (click the model to switch). While a command
-  is in flight that tool card's border pulses. Completed and error cards
-  stay static with their status diamond.
+- Composer: a rounded input box on the solid black layer. Typed text uses
+  the same black background as the rest of the screen (no cursor-line
+  highlight). The footer shows live activity on the left (`thinking`, the
+  current command, or a writing snippet) and `model  used/window` on the
+  right (click the model to switch). Context windows come from GET /models
+  and are stored in `.lazykoder/models.json`.
 - Session list (`/sessions` or `ctrl+s`) groups runs as `just now`,
   `recently`, and `older`.
 - Session picker: `/sessions` or `ctrl+s` lists sessions for the project
@@ -33,8 +35,9 @@ pickers are centered cards.
   keep their existing navigation behavior. A click on a slash-menu row runs
   that command.
 - Assistant Markdown formats headings, emphasis, lists, inline code, and fenced
-  code blocks. Fenced blocks use a full-width dark bordered card with an
-  optional language label.
+  code blocks. Code sits on the same solid black layer as the rest of the
+  screen, with no extra card border. The TUI paints a full-size black
+  background so the host terminal color cannot show through.
 
 | Key | Action |
 | --- | --- |

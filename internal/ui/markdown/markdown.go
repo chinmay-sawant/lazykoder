@@ -27,14 +27,11 @@ var (
 	boldStyle       = lipgloss.NewStyle().Bold(true)
 	italicStyle     = lipgloss.NewStyle().Italic(true)
 	inlineCodeStyle = lipgloss.NewStyle().
-			Background(theme.ColorSurface()).
+			Background(theme.ColorBg()).
 			Foreground(theme.ColorText())
 	codeBlockStyle = lipgloss.NewStyle().
 			Background(theme.ColorBg()).
-			Foreground(theme.ColorText()).
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(theme.ColorBorder()).
-			Padding(0, 1)
+			Foreground(theme.ColorText())
 	codeLanguageStyle = lipgloss.NewStyle().
 				Foreground(theme.ColorMute()).
 				Bold(true)
@@ -46,8 +43,9 @@ var (
 )
 
 // Render formats common assistant Markdown without adding a new renderer
-// dependency. Fenced code blocks receive a dark bordered card. When width
-// is greater than zero the card spans that many columns (full terminal).
+// dependency. Fenced code blocks sit on the same solid black layer as the
+// rest of the TUI. When width is greater than zero the block spans that
+// many columns.
 func Render(input string, width int) string {
 	input = strings.ReplaceAll(input, "\r\n", "\n")
 	source := strings.Split(input, "\n")

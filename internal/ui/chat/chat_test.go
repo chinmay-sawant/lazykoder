@@ -13,6 +13,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/chinmay-sawant/lazykoder/internal/db"
+	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
 
@@ -125,7 +126,7 @@ func TestAssistantMarkdownRendered(t *testing.T) {
 	text := "```python\nprint(\"Hello, World!\")\n```\n\n**How to run it:**\n\n1. Save the code in `hello.py`"
 	m.applyPart(db.Part{Type: "text", Text: &text})
 	v := stripANSI(viewText(m))
-	for _, want := range []string{roleAssistant, "print(\"Hello, World!\")", "How to run it:", "hello.py", "╭"} {
+	for _, want := range []string{roleAssistant, "print(\"Hello, World!\")", "How to run it:", "hello.py"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("View() missing Markdown output %q: %q", want, v)
 		}
@@ -707,6 +708,32 @@ func TestSessionPickerEscKeepsCurrent(t *testing.T) {
 	}
 }
 
+func TestComposerShowsLiveActivity(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	m.busy = true
+	m.activity = "bash  echo hello"
+	v := stripANSI(viewText(m))
+	if !strings.Contains(v, "bash  echo hello") {
+		t.Fatalf("footer missing live activity: %q", v)
+	}
+	if strings.Contains(v, "enter send") {
+		t.Fatalf("idle hint shown while busy: %q", v)
+	}
+}
+
+func TestComposerShowsContext(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	m.model = "deepseek-v4-flash"
+	m.modelInfos = []modelscache.Info{{ID: "deepseek-v4-flash", Context: 128000}}
+	m.tokensUsed = 1200
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = mm.(Model)
+	v := stripANSI(viewText(m))
+	if !strings.Contains(v, "deepseek-v4-flash") || !strings.Contains(v, "1.2k/128k") {
+		t.Fatalf("footer missing context: %q", v)
+	}
+}
+
 func TestComposerPutsModelOnTheRight(t *testing.T) {
 	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
 	m.model = "deepseek-v4-flash"
@@ -757,9 +784,6 @@ func TestThinkingFrameUsesBrackets(t *testing.T) {
 	}
 	if !strings.Contains(v, "bash") || !strings.Contains(v, "pending") {
 		t.Fatalf("in-flight tool card missing bash pending: %q", v)
-	}
-	if !strings.Contains(v, "╭") {
-		t.Fatalf("in-flight tool card missing glow border: %q", v)
 	}
 	var header string
 	for _, line := range strings.Split(v, "\n") {

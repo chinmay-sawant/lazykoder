@@ -186,7 +186,11 @@ func (m *Model) applyPart(p db.Part) {
 		m.items = append(m.items, transcriptItem{kind: itemAssistant, text: *p.Text, when: itemTime(0, p.TimeCreated)})
 	case "reasoning":
 		if p.Text != nil {
-			m.items = append(m.items, transcriptItem{kind: itemReasoning, text: *p.Text, collapsed: true, when: itemTime(0, p.TimeCreated)})
+			m.items = append(m.items, transcriptItem{kind: itemReasoning, text: *p.Text, collapsed: !m.busy, when: itemTime(0, p.TimeCreated)})
+		}
+	case "step-finish":
+		if p.TokensTotal != nil && *p.TokensTotal > 0 {
+			m.tokensUsed = *p.TokensTotal
 		}
 	}
 	m.syncTranscript()
@@ -290,17 +294,18 @@ func (m Model) renderTool(ev agent.Event, collapsed bool, when int64) string {
 	if title != name {
 		label = name + "  " + title
 	}
-	diamond := lipgloss.NewStyle().Foreground(theme.StatusColor(status)).Render(theme.StatusDiamond)
+	diamondColor := theme.StatusColor(status)
+	if (status == "pending" || status == "running") && (m.busy || m.pulseOn) {
+		diamondColor = theme.PulseAccent(m.pulseT())
+	}
+	diamond := lipgloss.NewStyle().Foreground(diamondColor).Render(theme.StatusDiamond)
 	rest := chevron + "  " + label + ageSuffix(when) + "  ·  " + status
 	header := diamond + "  " + lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).Render(rest)
-	card := toolCardStyle.Width(m.toolCardWidth())
-	if (status == "pending" || status == "running") && (m.busy || m.pulseOn) {
-		card = card.BorderForeground(theme.PulseAccent(m.pulseT()))
-	}
+	card := toolCardStyle.Width(m.toolCardWidth()).Background(theme.ColorBg())
 	if collapsed {
 		return card.Render(header)
 	}
-	bodyWidth := max(minPaneWidth, m.toolCardWidth()-cardBorder*2)
+	bodyWidth := max(minPaneWidth, m.toolCardWidth())
 	body := []string{header}
 	switch ev.Tool.Tool {
 	case "edit":
