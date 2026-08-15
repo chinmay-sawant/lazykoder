@@ -391,7 +391,8 @@ func TestNewID(t *testing.T) {
 			t.Fatalf("non-hex char %q in %q", r, id)
 		}
 	}
-	if NewID("a") == NewID("a") {
+	a, b := NewID("a"), NewID("a")
+	if a == b {
 		t.Fatal("NewID returned duplicate values")
 	}
 }

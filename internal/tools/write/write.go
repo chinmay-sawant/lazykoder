@@ -7,6 +7,9 @@ import (
 	"strings"
 )
 
+// fileMode is the mode of files written by the write tool.
+const fileMode = 0o600
+
 // Result holds the write outcome and metadata.
 type Result struct {
 	Output   string
@@ -27,7 +30,7 @@ func Run(filePath, contents, rootDir string) (Result, error) {
 	if !st.IsDir() {
 		return Result{}, fmt.Errorf("write: %s: parent is not a directory", abs)
 	}
-	if err := os.WriteFile(abs, []byte(contents), 0o644); err != nil {
+	if err := os.WriteFile(abs, []byte(contents), fileMode); err != nil {
 		return Result{}, fmt.Errorf("write: %s: %w", abs, err)
 	}
 	n := len(contents)

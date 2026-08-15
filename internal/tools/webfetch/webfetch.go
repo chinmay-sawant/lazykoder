@@ -16,6 +16,9 @@ type Result struct {
 	Metadata map[string]any
 }
 
+// requestTimeout bounds the whole fetch, including the response body read.
+const requestTimeout = 30 * time.Second
+
 // Run GETs url (http/https only) and returns the body, capped at 5MB.
 func Run(ctx context.Context, urlStr, format string, client *http.Client) (Result, error) {
 	u, err := url.Parse(urlStr)
@@ -35,7 +38,7 @@ func Run(ctx context.Context, urlStr, format string, client *http.Client) (Resul
 	if client == nil {
 		client = http.DefaultClient
 	}
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {

@@ -32,6 +32,49 @@ const (
 	// chromeLines are the fixed rows around the transcript: title, blank,
 	// status and prompt lines.
 	chromeLines = 5
+
+	// modelsTimeout bounds the model-list API call.
+	modelsTimeout = 10 * time.Second
+
+	// Layout floors: the transcript, prompt and status bar never shrink
+	// below these sizes, and overlay panes keep a minimum width.
+	minPaneWidth  = 20
+	minPaneHeight = 3
+	minLeftPane   = 4
+	maxLeftPane   = 24
+	minRightPane  = 8
+	pickerMaxRows = 12
+
+	// titleBlockRows are the fixed rows above the transcript: the title
+	// line and one blank line.
+	titleBlockRows = 2
+	// centerDiv splits the leftover space for centering the overlay card.
+	centerDiv = 2
+	// paneDivider is the width of the " │ " separator between panes.
+	paneDivider = 3
+	// listInsetRows is the picker list offset below the card top border
+	// (border + header row).
+	listInsetRows = 2
+	// pickerVpMinWidth is the floor for the picker list viewport.
+	pickerVpMinWidth = 12
+	// slashQueryMinWidth is the floor for the slash menu query row.
+	slashQueryMinWidth = 16
+	// pickerVpDefaultW/H seed the picker viewport before the first resize.
+	pickerVpDefaultW = 58
+	pickerVpDefaultH = 10
+	// eventChanBuffer is the capacity of the per-turn event channel.
+	eventChanBuffer = 64
+
+	// cardBorder is the two columns of border/margin chrome on each side
+	// of the overlay card content.
+	cardBorder = 2
+	// percentBase converts a percentage to a fraction.
+	percentBase = 100
+	// paneCount is the number of overlay columns (left, divider, right).
+	paneCount = 3
+	// pickerFixedRows are the card rows outside the list (borders, header,
+	// footer) that reduce the available list height.
+	pickerFixedRows = 7
 )
 
 var (
@@ -198,7 +241,7 @@ func (m Model) fetchModels() tea.Msg {
 // refreshModels fetches the model list from the API, rewrites the cache, and
 // falls back to a stale cache when the fetch fails.
 func (m Model) refreshModels() tea.Msg {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), modelsTimeout)
 	defer cancel()
 	list, err := m.client.Models(ctx)
 	if err == nil && m.cachePath != "" {
@@ -272,9 +315,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.transcript.SetWidth(max(20, msg.Width-1))
-		m.transcript.SetHeight(max(3, msg.Height-chromeLines))
-		m.prompt.SetWidth(max(20, msg.Width))
+		m.transcript.SetWidth(max(minPaneWidth, msg.Width-1))
+		m.transcript.SetHeight(max(minPaneHeight, msg.Height-chromeLines))
+		m.prompt.SetWidth(max(minPaneWidth, msg.Width))
 		if m.pickerBuilt {
 			m = m.resizePicker()
 		}
@@ -317,6 +360,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // column, and jumps the viewport to the clicked position.
 func (m Model) mousePress(msg tea.MouseClickMsg) Model {
 	mu := msg.Mouse()
+	if m.pickerMode {
+		if x, y, ok := m.pickerCloseRect(); ok && mu.X == x && mu.Y == y {
+			return m.closePicker()
+		}
+	}
 	for _, target := range []int{0, 1} {
 		if m.dragTarget == 1 && target == 0 {
 			continue
@@ -425,11 +473,11 @@ func (m Model) promptLine() string {
 // transcriptRenderHeight returns the transcript height for rendering, shrinking
 // it when the slash popover needs space above the prompt.
 func (m Model) transcriptRenderHeight() int {
-	fixedRows := 2 + lipgloss.Height(m.statusLine()) + lipgloss.Height(m.promptLine())
+	fixedRows := titleBlockRows + lipgloss.Height(m.statusLine()) + lipgloss.Height(m.promptLine())
 	if m.slashMode {
 		fixedRows += 1 + lipgloss.Height(m.slashView())
 	}
-	return max(3, m.height-fixedRows)
+	return max(minPaneHeight, m.height-fixedRows)
 }
 
 // transcriptView renders the transcript viewport with a right-edge scrollbar.
@@ -462,25 +510,25 @@ func (m Model) scrollbarRect(target int) (top, bottom, col int, ok bool) {
 		if m.transcript.TotalLineCount() <= h {
 			return 0, 0, 0, false
 		}
-		return 2, 2 + h, m.width - 1, true
+		return titleBlockRows, titleBlockRows + h, m.width - 1, true
 	}
 	vpH := m.pickerVPHeight()
 	if len(m.pickerItems) <= vpH {
 		return 0, 0, 0, false
 	}
 	card := m.pickerView()
-	cardTop := max(0, (m.height-lipgloss.Height(card))/2)
-	cardLeft := max(0, (m.width-lipgloss.Width(card))/2)
-	innerW := max(20, m.overlayWidth()-2)
+	cardTop := max(0, (m.height-lipgloss.Height(card))/centerDiv)
+	cardLeft := max(0, (m.width-lipgloss.Width(card))/centerDiv)
+	innerW := max(minPaneWidth, m.overlayWidth()-cardBorder)
 	leftW, _ := splitPaneWidths(innerW)
-	listTop := cardTop + 2
-	listCol := cardLeft + 1 + leftW + 3 + m.pickerVp.Width()
+	listTop := cardTop + listInsetRows
+	listCol := cardLeft + 1 + leftW + paneDivider + m.pickerVp.Width()
 	return listTop, listTop + vpH, listCol, true
 }
 
 func (m Model) pickerVPHeight() int {
-	available := max(3, m.height*70/100-7)
-	return min(max(3, len(m.pickerItems)), min(12, available))
+	available := max(minPaneHeight, m.height*70/percentBase-pickerFixedRows)
+	return min(max(minPaneHeight, len(m.pickerItems)), min(pickerMaxRows, available))
 }
 
 // withScrollbar appends a scrollbar column at the right edge of a rendered
@@ -519,7 +567,7 @@ func withScrollbar(v string, width, height int, percent float64, overflow bool) 
 // the query is shown in an input-like row, followed by commands and details.
 func (m Model) slashView() string {
 	cardW := m.overlayWidth()
-	innerW := max(20, cardW-2)
+	innerW := max(minPaneWidth, cardW-cardBorder)
 
 	sel := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15"))
 	dim := lipgloss.NewStyle().Faint(true)
@@ -549,7 +597,7 @@ func (m Model) slashView() string {
 	query := lipgloss.NewStyle().
 		Border(lipgloss.NormalBorder()).
 		BorderForeground(lipgloss.Color("8")).
-		Width(max(16, innerW)).
+		Width(max(slashQueryMinWidth, innerW)).
 		Render(m.prompt.Value() + "▏")
 	footer := hintStyle.Width(innerW).Render("↑/↓ select  •  enter run  •  esc close")
 	content := lipgloss.JoinVertical(lipgloss.Left, query, body, footer)
@@ -648,7 +696,7 @@ func (m Model) syncSlash(value string) Model {
 // the selectable model list on the right, and a filter prompt at the bottom.
 func (m Model) pickerView() string {
 	cardW := m.overlayWidth()
-	innerW := max(20, cardW-2)
+	innerW := max(minPaneWidth, cardW-cardBorder)
 	leftW, rightW := splitPaneWidths(innerW)
 
 	current := m.model
@@ -696,7 +744,7 @@ func (m Model) pickerView() string {
 	}
 	footer := hintStyle.Width(innerW).Render(filter)
 	content := lipgloss.JoinVertical(lipgloss.Left,
-		lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Width(innerW).Render(" SETTINGS  /  MODEL"),
+		pickerHeader(innerW),
 		body,
 		footer,
 	)
@@ -708,22 +756,45 @@ func (m Model) pickerView() string {
 		Render(content)
 }
 
+func pickerHeader(width int) string {
+	title := " SETTINGS  /  MODEL"
+	if lipgloss.Width(title)+1 > width {
+		title = " SETTINGS / MODEL"
+	}
+	return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Width(width).Render(
+		title + strings.Repeat(" ", max(0, width-lipgloss.Width(title)-1)) + "X",
+	)
+}
+
+func (m Model) pickerCloseRect() (x, y int, ok bool) {
+	if !m.pickerMode {
+		return 0, 0, false
+	}
+	card := m.pickerView()
+	cardW, cardH := lipgloss.Width(card), lipgloss.Height(card)
+	left := max(0, (m.width-cardW)/centerDiv)
+	top := max(0, (m.height-cardH)/centerDiv)
+	// The close marker sits one row below the top border and two columns
+	// from the right border.
+	return left + cardW - cardBorder, top + 1, true
+}
+
 func (m Model) pickerScreen() string {
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, m.pickerView())
 }
 
 func (m Model) overlayWidth() int {
-	available := max(20, m.width-2)
-	desired := max(20, m.width*cardWidthPct/100)
+	available := max(minPaneWidth, m.width-cardBorder)
+	desired := max(minPaneWidth, m.width*cardWidthPct/percentBase)
 	return min(available, desired)
 }
 
 func splitPaneWidths(total int) (left, right int) {
-	left = max(4, min(24, total/3))
-	right = total - left - 3
-	if right < 8 {
-		right = 8
-		left = max(4, total-right-3)
+	left = max(minLeftPane, min(maxLeftPane, total/paneCount))
+	right = total - left - paneDivider
+	if right < minRightPane {
+		right = minRightPane
+		left = max(minLeftPane, total-right-paneDivider)
 	}
 	return left, right
 }
@@ -748,9 +819,9 @@ func (m Model) pickerContent(width int) string {
 }
 
 func (m Model) resizePicker() Model {
-	innerW := max(20, m.overlayWidth()-2)
+	innerW := max(minPaneWidth, m.overlayWidth()-cardBorder)
 	_, rightW := splitPaneWidths(innerW)
-	vpW := max(12, rightW-1)
+	vpW := max(pickerVpMinWidth, rightW-1)
 	m.pickerVp.SetWidth(vpW)
 	m.pickerVp.SetHeight(m.pickerVPHeight())
 	return m
@@ -779,14 +850,14 @@ func (m Model) updatePickerKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m, nil
 	}
 	switch key.Code {
-	case 'q', 'Q':
-		m.pickerMode = false
+	case 'q', 'Q', 'x', 'X':
+		m = m.closePicker()
 		return m, nil
 	case 'r', 'R':
-		m.pickerMode = false
+		m = m.closePicker()
 		return m, m.refreshModels
 	case tea.KeyEscape:
-		m.pickerMode = false
+		m = m.closePicker()
 		return m, nil
 	case '/':
 		m.pickerFiltering = true
@@ -820,6 +891,13 @@ func (m Model) updatePickerKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m Model) closePicker() Model {
+	m.pickerMode = false
+	m.pickerFiltering = false
+	m.dragOn = false
+	return m
+}
+
 func (m *Model) applyFilter() {
 	m.pickerItems = nil
 	needle := strings.ToLower(m.pickerFilter)
@@ -838,7 +916,7 @@ func (m *Model) applyFilter() {
 
 func (m Model) openPicker() Model {
 	if !m.pickerBuilt {
-		m.pickerVp = viewport.New(viewport.WithWidth(58), viewport.WithHeight(10))
+		m.pickerVp = viewport.New(viewport.WithWidth(pickerVpDefaultW), viewport.WithHeight(pickerVpDefaultH))
 		m.pickerBuilt = true
 		m = m.resizePicker()
 	}
@@ -963,7 +1041,7 @@ func (m Model) submit(text string) (Model, tea.Cmd) {
 	m.pendingUser = text
 	m.lines = append(m.lines, "user: "+text)
 	m.syncTranscript()
-	ch := make(chan agent.Event, 64)
+	ch := make(chan agent.Event, eventChanBuffer)
 	errCh := make(chan error, 1)
 	ag := agent.New(m.store, m.client, m.workdir, agent.Options{
 		Session:  m.session,
@@ -1191,5 +1269,5 @@ func (m Model) statusLine() string {
 }
 
 func (m Model) wrapStatus(status string) string {
-	return lipgloss.NewStyle().Width(max(20, m.width)).Render(status)
+	return lipgloss.NewStyle().Width(max(minPaneWidth, m.width)).Render(status)
 }

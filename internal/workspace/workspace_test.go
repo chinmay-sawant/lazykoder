@@ -72,7 +72,7 @@ func TestInitTwice(t *testing.T) {
 func TestInitPreservesGitignore(t *testing.T) {
 	cwd := t.TempDir()
 	existing := "# hello\nbin/\n"
-	if err := os.WriteFile(filepath.Join(cwd, ".gitignore"), []byte(existing), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(cwd, ".gitignore"), []byte(existing), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	env, err := Init(cwd)
@@ -96,7 +96,7 @@ func TestInitPreservesGitignore(t *testing.T) {
 
 func TestInitGitignoreAlreadyListed(t *testing.T) {
 	cwd := t.TempDir()
-	if err := os.WriteFile(filepath.Join(cwd, ".gitignore"), []byte("node_modules/\n.lazykoder/\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(cwd, ".gitignore"), []byte("node_modules/\n.lazykoder/\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	env, err := Init(cwd)

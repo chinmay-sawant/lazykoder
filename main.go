@@ -16,6 +16,9 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/workspace"
 )
 
+// defaultMaxSteps is the fallback when the user does not configure a step limit.
+const defaultMaxSteps = 8
+
 func main() {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -51,7 +54,7 @@ func main() {
 		Client:     client,
 		Workdir:    env.Dir,
 		Session:    sess,
-		MaxSteps:   8,
+		MaxSteps:   defaultMaxSteps,
 		InitialErr: initial,
 		CachePath:  filepath.Join(env.Dir, "models.json"),
 	}))

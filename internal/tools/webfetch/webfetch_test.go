@@ -13,7 +13,7 @@ import (
 func TestRunBody(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.Write([]byte("hello body"))
+		_, _ = w.Write([]byte("hello body"))
 	}))
 	defer srv.Close()
 
@@ -64,7 +64,7 @@ func TestRunNon2xx(t *testing.T) {
 
 func TestRunTruncatesLargeBody(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(strings.Repeat("x", 6*1024*1024)))
+		_, _ = w.Write([]byte(strings.Repeat("x", 6*1024*1024)))
 	}))
 	defer srv.Close()
 
@@ -84,7 +84,7 @@ func TestRunFormatParam(t *testing.T) {
 	got := make(chan string, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got <- r.URL.Query().Get("format")
-		w.Write([]byte("ok"))
+		_, _ = w.Write([]byte("ok"))
 	}))
 	defer srv.Close()
 
@@ -108,7 +108,7 @@ func TestRunFormatParam(t *testing.T) {
 func TestRunContextCancellation(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(2 * time.Second)
-		w.Write([]byte("late"))
+		_, _ = w.Write([]byte("late"))
 	}))
 	defer srv.Close()
 

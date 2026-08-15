@@ -10,6 +10,14 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/db"
 )
 
+const (
+	// dirMode is the mode of the .lazykoder workspace directory.
+	dirMode = 0o755
+	// gitignoreMode is the mode used when creating or appending the
+	// project .gitignore.
+	gitignoreMode = 0o600
+)
+
 // Env holds the initialized workspace: the .lazykoder dir, the db path, and the open store.
 type Env struct {
 	Dir    string
@@ -20,7 +28,7 @@ type Env struct {
 // Init creates <cwd>/.lazykoder (0755, exist-ok), opens and migrates the db, and appends ".lazykoder/" to <cwd>/.gitignore only if absent. Idempotent.
 func Init(cwd string) (*Env, error) {
 	dir := filepath.Join(cwd, ".lazykoder")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, dirMode); err != nil {
 		return nil, fmt.Errorf("workspace: mkdir %s: %w", dir, err)
 	}
 	dbPath := filepath.Join(dir, "lazykoder.db")
@@ -46,12 +54,12 @@ func ensureGitignore(cwd string) error {
 		if !os.IsNotExist(err) {
 			return err
 		}
-		return os.WriteFile(path, []byte(".lazykoder/\n"), 0o644)
+		return os.WriteFile(path, []byte(".lazykoder/\n"), gitignoreMode)
 	}
 	if hasIgnoreLine(content) {
 		return nil
 	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, gitignoreMode)
 	if err != nil {
 		return err
 	}

@@ -92,7 +92,6 @@ type fakeProvider struct {
 	mu        sync.Mutex
 	responses []string
 	requests  int
-	models    []string
 	modelList []string
 	srv       *httptest.Server
 }
@@ -469,7 +468,7 @@ func TestConfirmModeKeyIsolation(t *testing.T) {
 func TestQuitKeys(t *testing.T) {
 	st := newTestStore(t)
 	m := New(Options{Store: st, Client: deadClient(), Workdir: t.TempDir()})
-	m, cmd := updCmd(m, tea.KeyPressMsg{Code: 'q'})
+	_, cmd := updCmd(m, tea.KeyPressMsg{Code: 'q'})
 	if cmd == nil {
 		t.Fatal("q in normal mode returned nil cmd")
 	}
@@ -490,7 +489,7 @@ func TestQuitKeys(t *testing.T) {
 	m2, cmd = updCmd(m2, enter())
 	p.run(cmd)
 	m2 = p.drainUntil(m2, "y confirm")
-	m2, cmd = updCmd(m2, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	_, cmd = updCmd(m2, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	if cmd == nil {
 		t.Fatal("ctrl+c in confirm mode returned nil cmd")
 	}
@@ -591,7 +590,7 @@ func TestModelPickerSwitchAndPersist(t *testing.T) {
 		t.Fatal("Enter returned nil cmd")
 	}
 	p.run(cmd)
-	m = p.drainIdle(m)
+	p.drainIdle(m)
 	if got := fake.requestModel(0); got != "claude-4" {
 		t.Errorf("wire model = %q, want claude-4", got)
 	}
@@ -710,7 +709,7 @@ func TestModelPickerFilter(t *testing.T) {
 
 	m = upd(m, tea.KeyPressMsg{Code: 'm'})
 	m = upd(m, tea.KeyPressMsg{Code: '/'})
-	for _, r := range []rune("claude") {
+	for _, r := range "claude" {
 		m = upd(m, tea.KeyPressMsg{Code: r, Text: string(r)})
 	}
 	v := stripANSI(viewText(m))
@@ -954,6 +953,86 @@ func TestPickerCardCenteredSettingsLayout(t *testing.T) {
 		}
 	}
 	t.Fatalf("card border missing: %q", v)
+}
+
+func TestPickerCloseButton(t *testing.T) {
+	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
+	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
+	p := newPump(t)
+	p.run(m.Init())
+	m = p.runStep(m, p.next())
+
+	m = upd(m, tea.KeyPressMsg{Code: 'm'})
+	v := stripANSI(viewText(m))
+	headerFound := false
+	for _, line := range strings.Split(v, "\n") {
+		if strings.Contains(line, "SETTINGS  /  MODEL") {
+			headerFound = true
+			if !strings.HasSuffix(strings.TrimSpace(line), "X│") {
+				t.Fatalf("settings card close button is not at the header edge: %q", line)
+			}
+		}
+	}
+	if !headerFound {
+		t.Fatalf("settings card header missing: %q", v)
+	}
+	x, y, ok := m.pickerCloseRect()
+	if !ok {
+		t.Fatal("picker close button rectangle not found")
+	}
+	mm, _ := m.Update(tea.MouseClickMsg(tea.Mouse{X: x, Y: y, Button: tea.MouseLeft}))
+	m = mm.(Model)
+	if m.pickerMode {
+		t.Fatal("clicking the picker close button did not close the card")
+	}
+
+	m = upd(m, tea.KeyPressMsg{Code: 'm'})
+	m = upd(m, tea.KeyPressMsg{Code: 'x'})
+	if m.pickerMode {
+		t.Fatal("x did not close the picker card")
+	}
+}
+
+func TestPickerArrowKeysRefreshSelectionAndScroll(t *testing.T) {
+	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
+	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
+	p := newPump(t)
+	p.run(m.Init())
+	m = p.runStep(m, p.next())
+	m.models = make([]string, 0, 20)
+	for i := 0; i < 20; i++ {
+		m.models = append(m.models, fmt.Sprintf("model-%02d", i))
+	}
+
+	m = upd(m, tea.KeyPressMsg{Code: 'm'})
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyDown})
+	if m.pickerCursor != 1 {
+		t.Fatalf("down cursor = %d, want 1", m.pickerCursor)
+	}
+	v := stripANSI(m.pickerView())
+	if !strings.Contains(v, "▸ model-01") || strings.Contains(v, "▸ model-00") {
+		t.Fatalf("down did not refresh the visible selection: %q", v)
+	}
+
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyUp})
+	if m.pickerCursor != 0 {
+		t.Fatalf("up cursor = %d, want 0", m.pickerCursor)
+	}
+	v = stripANSI(m.pickerView())
+	if !strings.Contains(v, "▸ model-00") || strings.Contains(v, "▸ model-01") {
+		t.Fatalf("up did not refresh the visible selection: %q", v)
+	}
+
+	for i := 0; i < 12; i++ {
+		m = upd(m, tea.KeyPressMsg{Code: tea.KeyDown})
+	}
+	if m.pickerCursor != 12 {
+		t.Fatalf("scrolled cursor = %d, want 12", m.pickerCursor)
+	}
+	v = stripANSI(m.pickerView())
+	if !strings.Contains(v, "▸ model-12") {
+		t.Fatalf("scrolled view did not show the selected model: %q", v)
+	}
 }
 
 func TestPickerCardFitsAndScrollbarDrags(t *testing.T) {

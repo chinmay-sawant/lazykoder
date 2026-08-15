@@ -10,7 +10,7 @@ import (
 func TestRunFixture(t *testing.T) {
 	root := t.TempDir()
 	content := "line one\nline two\nline three\n"
-	if err := os.WriteFile(filepath.Join(root, "hello.txt"), []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "hello.txt"), []byte(content), 0o600); err != nil {
 		t.Fatalf("write fixture: %v", err)
 	}
 	res, err := Run("hello.txt", root)
@@ -33,7 +33,7 @@ func TestRunFixture(t *testing.T) {
 
 func TestRunEmptyFile(t *testing.T) {
 	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "empty.txt"), nil, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "empty.txt"), nil, 0o600); err != nil {
 		t.Fatalf("write fixture: %v", err)
 	}
 	res, err := Run("empty.txt", root)
@@ -63,7 +63,7 @@ func TestRunParentEscape(t *testing.T) {
 	root := t.TempDir()
 	parent := filepath.Dir(root)
 	secret := filepath.Join(parent, "secret.txt")
-	if err := os.WriteFile(secret, []byte("secret"), 0o644); err != nil {
+	if err := os.WriteFile(secret, []byte("secret"), 0o600); err != nil {
 		t.Fatalf("write secret: %v", err)
 	}
 	_, err := Run("../secret.txt", root)
@@ -89,7 +89,7 @@ func TestRunAbsoluteOutside(t *testing.T) {
 func TestRunTruncated(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "big.bin")
-	if err := os.WriteFile(path, make([]byte, 1<<20+100), 0o644); err != nil {
+	if err := os.WriteFile(path, make([]byte, 1<<20+100), 0o600); err != nil {
 		t.Fatalf("write big file: %v", err)
 	}
 	res, err := Run("big.bin", root)
@@ -111,7 +111,7 @@ func TestRunSymlinkEscape(t *testing.T) {
 	root := t.TempDir()
 	outside := t.TempDir()
 	target := filepath.Join(outside, "target.txt")
-	if err := os.WriteFile(target, []byte("outside"), 0o644); err != nil {
+	if err := os.WriteFile(target, []byte("outside"), 0o600); err != nil {
 		t.Fatalf("write target: %v", err)
 	}
 	link := filepath.Join(root, "escape.txt")
@@ -130,7 +130,7 @@ func TestRunSymlinkEscape(t *testing.T) {
 func TestRunSymlinkInsideAllowed(t *testing.T) {
 	root := t.TempDir()
 	real := filepath.Join(root, "real.txt")
-	if err := os.WriteFile(real, []byte("inside"), 0o644); err != nil {
+	if err := os.WriteFile(real, []byte("inside"), 0o600); err != nil {
 		t.Fatalf("write real file: %v", err)
 	}
 	if err := os.Symlink("real.txt", filepath.Join(root, "alias.txt")); err != nil {

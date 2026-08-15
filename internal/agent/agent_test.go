@@ -195,6 +195,9 @@ func queryToolCalls(t *testing.T, path string) []rowTC {
 		}
 		out = append(out, r)
 	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate tool_calls: %v", err)
+	}
 	return out
 }
 
@@ -232,7 +235,7 @@ func sessionIDFromEvents(t *testing.T, events []Event) string {
 func TestSendToolDispatch(t *testing.T) {
 	workdir := t.TempDir()
 	fixture := filepath.Join(workdir, "fixture.txt")
-	if err := os.WriteFile(fixture, []byte("line one\nline two\n"), 0o644); err != nil {
+	if err := os.WriteFile(fixture, []byte("line one\nline two\n"), 0o600); err != nil {
 		t.Fatalf("write fixture: %v", err)
 	}
 	webSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -731,6 +734,9 @@ func TestSendFixturePartTypes(t *testing.T) {
 			t.Fatalf("scan part group: %v", err)
 		}
 		got[typ] = n
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate part groups: %v", err)
 	}
 	for typ, want := range expected {
 		if got[typ] != want {

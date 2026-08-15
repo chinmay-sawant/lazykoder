@@ -52,7 +52,7 @@ func TestLoadMissingFile(t *testing.T) {
 
 func TestLoadCorruptFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "models.json")
-	if err := os.WriteFile(path, []byte("{not json"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("{not json"), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	if _, _, err := Load(path, time.Now(), DefaultTTL); err == nil {

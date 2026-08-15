@@ -20,6 +20,15 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/tools/write"
 )
 
+const (
+	// maxSessionTitle caps the session title derived from the first prompt.
+	maxSessionTitle = 60
+	// maxToolTitle caps the one-line tool title shown in the transcript.
+	maxToolTitle = 80
+	// maxToolOutput caps the output returned to the model for a tool call.
+	maxToolOutput = 8000
+)
+
 // Options configures an Agent.
 type Options struct {
 	Session  *db.Session
@@ -168,7 +177,7 @@ func (a *Agent) ensureSession(ctx context.Context, userText string, events chan<
 		return nil
 	}
 	sess, err := a.store.CreateSession(ctx, db.Session{
-		Title:     truncateRunes(strings.TrimSpace(userText), 60),
+		Title:     truncateRunes(strings.TrimSpace(userText), maxSessionTitle),
 		Directory: a.workdir,
 		Model:     a.opts.Model,
 	})
@@ -396,7 +405,7 @@ func toolTitle(tc opencode.ToolCall) string {
 	switch tc.Name {
 	case "bash":
 		if c := first("command"); c != "" {
-			return truncateRunes(c, 80)
+			return truncateRunes(c, maxToolTitle)
 		}
 	case "read", "write", "edit":
 		if p := first("filePath"); p != "" {
@@ -409,7 +418,7 @@ func toolTitle(tc opencode.ToolCall) string {
 	case "question":
 		var qs []question.Question
 		if raw, ok := args["questions"]; ok && json.Unmarshal(raw, &qs) == nil && len(qs) > 0 && qs[0].Question != "" {
-			return truncateRunes(qs[0].Question, 80)
+			return truncateRunes(qs[0].Question, maxToolTitle)
 		}
 	}
 	return tc.Name
@@ -494,8 +503,8 @@ func (a *Agent) execRead(ctx context.Context, events chan<- Event, partID, title
 		return a.updateTool(ctx, events, partID, title, tc, "error", errOut(err), errorJSON(err.Error()), nil, nil)
 	}
 	out := res.Output
-	if len([]rune(out)) > 8000 {
-		out = truncateRunes(out, 8000)
+	if len([]rune(out)) > maxToolOutput {
+		out = truncateRunes(out, maxToolOutput)
 		res.Metadata["truncated"] = true
 	}
 	meta, _ := json.Marshal(res.Metadata)
@@ -555,8 +564,8 @@ func (a *Agent) execWebfetch(ctx context.Context, events chan<- Event, partID, t
 	}
 	out := res.Output
 	truncated := false
-	if len([]rune(out)) > 8000 {
-		out = truncateRunes(out, 8000)
+	if len([]rune(out)) > maxToolOutput {
+		out = truncateRunes(out, maxToolOutput)
 		truncated = true
 	}
 	res.Metadata["truncated"] = truncated
@@ -641,8 +650,8 @@ func completedJSON(res bash.Result) string {
 	raw := res.Stdout + res.Stderr
 	truncated := false
 	r := []rune(raw)
-	if len(r) > 8000 {
-		raw = string(r[:8000])
+	if len(r) > maxToolOutput {
+		raw = string(r[:maxToolOutput])
 		truncated = true
 	}
 	out, _ := json.Marshal(toolResultJSON{ExitCode: res.ExitCode, Output: raw, Truncated: truncated})

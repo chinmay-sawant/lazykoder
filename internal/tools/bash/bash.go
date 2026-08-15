@@ -48,6 +48,7 @@ func (Exec) Run(ctx context.Context, command, workdir string) (Result, error) {
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
 	if !needsShell(command) {
 		if argv, ok := tokenize(command); ok {
+			//nolint:gosec // The bash tool exists to run model-supplied commands; policy gating happens in Run before this code.
 			cmd = exec.CommandContext(ctx, argv[0], argv[1:]...)
 		}
 	}
@@ -75,7 +76,9 @@ func (Exec) Run(ctx context.Context, command, workdir string) (Result, error) {
 		return res, err
 	}
 	if exitErr != nil {
-		return res, nil
+		// A non-zero exit code is a normal tool outcome (the caller reads
+		// Result.ExitCode), not a Go error.
+		return res, nil //nolint:nilerr // Non-zero exit is data, carried in Result.ExitCode.
 	}
 	res.ExitCode = 127
 	return res, err

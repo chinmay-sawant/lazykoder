@@ -15,6 +15,10 @@ import (
 // DefaultTTL is how long a cached model list stays fresh.
 const DefaultTTL = 15 * time.Minute
 
+// cacheMode is the mode of the cache file; the file may contain API
+// responses, so it is not world-readable.
+const cacheMode = 0o600
+
 // file is the on-disk cache shape.
 type file struct {
 	FetchedAt int64    `json:"fetched_at"`
@@ -53,5 +57,5 @@ func Save(path string, models []string, now time.Time) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, raw, 0o644)
+	return os.WriteFile(path, raw, cacheMode)
 }

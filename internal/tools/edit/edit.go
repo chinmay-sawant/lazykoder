@@ -12,6 +12,8 @@ const (
 	diffContext  = 3
 	maxLCSCells  = 4_000_000
 	maxTrunc     = 60
+	// fileMode is the mode of files written by the edit tool.
+	fileMode = 0o600
 )
 
 // Result holds the edit outcome and metadata.
@@ -43,7 +45,7 @@ func Run(filePath, oldString, newString, rootDir string) (Result, error) {
 	}
 	idx := strings.Index(content, oldString)
 	newContent := content[:idx] + newString + content[idx+len(oldString):]
-	if err := os.WriteFile(abs, []byte(newContent), 0o644); err != nil {
+	if err := os.WriteFile(abs, []byte(newContent), fileMode); err != nil {
 		return Result{}, fmt.Errorf("edit: %s: %w", abs, err)
 	}
 	return Result{

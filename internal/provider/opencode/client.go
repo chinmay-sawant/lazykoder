@@ -16,6 +16,11 @@ import (
 const (
 	defaultBaseURL = "https://opencode.ai/zen/go/v1"
 	defaultModel   = "deepseek-v4-flash"
+
+	// maxResponseBytes caps how much of a chat response body is read.
+	maxResponseBytes = 64 << 20
+	// maxErrorBodyLen caps how much of an error body is echoed in errors.
+	maxErrorBodyLen = 300
 )
 
 // ErrMissingAPIKey is returned when no API key is available from the environment.
@@ -240,7 +245,7 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, erro
 		return nil, statusError("chat request", resp.StatusCode, resp.Body)
 	}
 	var wire wireResponse
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<20)).Decode(&wire); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseBytes)).Decode(&wire); err != nil {
 		return nil, fmt.Errorf("opencode: decode response: %w", err)
 	}
 	out := &ChatResponse{}
@@ -307,7 +312,7 @@ func (c *Client) Models(ctx context.Context) ([]string, error) {
 }
 
 func statusError(kind string, status int, body io.Reader) error {
-	raw, err := io.ReadAll(io.LimitReader(body, 300))
+	raw, err := io.ReadAll(io.LimitReader(body, maxErrorBodyLen))
 	if err != nil {
 		return fmt.Errorf("opencode: %s failed: status %d", kind, status)
 	}
