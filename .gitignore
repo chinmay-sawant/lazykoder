@@ -1,0 +1,48 @@
+# Binaries and build output
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+/bin/
+/dist/
+/tmp/
+/build/
+
+# Test and coverage
+coverage.out
+coverage.html
+*.coverprofile
+*.prof
+cpu.out
+mem.out
+
+# Go workspace files that stay local
+go.work
+go.work.sum
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# IDE and editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# lazyKoder workspace (created at app start)
+.lazykoder/
+
+# Provided OpenCode session export (local context only)
+opencode_session_logs.json
