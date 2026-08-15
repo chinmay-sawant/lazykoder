@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/chinmay-sawant/lazykoder/internal/db"
 	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
@@ -714,10 +715,10 @@ func TestModelPickerFilter(t *testing.T) {
 	}
 	v := stripANSI(viewText(m))
 	card := v[strings.Index(v, "╭"):]
-	if strings.Contains(card, "deepseek-v4-flash") {
-		t.Errorf("filtered model still visible in card: %q", card)
+	if len(m.pickerItems) != 1 || m.pickerItems[0] != "claude-4" {
+		t.Errorf("filtered picker items = %v, want [claude-4]", m.pickerItems)
 	}
-	if !strings.Contains(card, "claude-4") {
+	if !strings.Contains(card, "AVAILABLE MODELS") || !strings.Contains(card, "claude-4") {
 		t.Errorf("matching model missing: %q", card)
 	}
 	if !strings.Contains(v, "filter: claude") {
@@ -756,6 +757,40 @@ func TestSlashMenuOpensAndDivides(t *testing.T) {
 	}
 	if !strings.Contains(v, "│") {
 		t.Errorf("slash menu missing vertical divider: %q", v)
+	}
+}
+
+func TestSlashMenuAnchorsAbovePrompt(t *testing.T) {
+	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
+	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
+	m = typeRune(m, '/')
+
+	lines := strings.Split(stripANSI(viewText(m)), "\n")
+	top := -1
+	bottom := -1
+	prompt := -1
+	for i, line := range lines {
+		if strings.Contains(line, "╭") && top == -1 {
+			top = i
+		}
+		if strings.Contains(line, "╰") {
+			bottom = i
+		}
+		if strings.Contains(line, "▏/") {
+			prompt = i
+		}
+	}
+	if top < 0 || bottom < 0 || prompt < 0 {
+		t.Fatalf("slash card or prompt missing: %q", lines)
+	}
+	if bottom >= prompt {
+		t.Errorf("slash card bottom row %d is not above prompt row %d", bottom, prompt)
+	}
+	if len(lines) > m.height {
+		t.Errorf("slash view has %d rows for a %d-row terminal", len(lines), m.height)
+	}
+	if !strings.Contains(stripANSI(viewText(m)), "/▏") {
+		t.Errorf("slash query input missing: %q", lines)
 	}
 }
 
@@ -889,7 +924,7 @@ func TestScrollbarClickIgnoredWithoutOverflow(t *testing.T) {
 	}
 }
 
-func TestPickerCardAbovePrompt(t *testing.T) {
+func TestPickerCardCenteredSettingsLayout(t *testing.T) {
 	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
 	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
 	p := newPump(t)
@@ -898,18 +933,27 @@ func TestPickerCardAbovePrompt(t *testing.T) {
 
 	m = upd(m, tea.KeyPressMsg{Code: 'm'})
 	v := stripANSI(viewText(m))
-	cardIdx := strings.Index(v, "╭")
-	promptIdx := strings.Index(v, "ask lazykoder... (type / for commands)")
-	bottomIdx := strings.Index(v, "╰")
-	if cardIdx < 0 || promptIdx < 0 || bottomIdx < 0 {
-		t.Fatalf("card or prompt missing: %q", v)
+	card := stripANSI(m.pickerView())
+	if !strings.Contains(v, "SETTINGS  /  MODEL") || !strings.Contains(v, "AVAILABLE MODELS") {
+		t.Fatalf("settings card labels missing: %q", v)
 	}
-	if cardIdx > promptIdx {
-		t.Error("card appears below the prompt; it should open upward above it")
+	if got, want := lipgloss.Width(card), m.width*cardWidthPct/100; got != want {
+		t.Errorf("card width = %d, want %d (%d%% of screen)", got, want, cardWidthPct)
 	}
-	if bottomIdx > promptIdx {
-		t.Errorf("card bottom edge (%d) should be above the prompt (%d)", bottomIdx, promptIdx)
+	cardLine := strings.Index(strings.Split(v, "\n")[0], "╭")
+	if cardLine >= 0 {
+		t.Fatalf("card unexpectedly starts on the first screen row: %q", v)
 	}
+	for _, line := range strings.Split(v, "\n") {
+		if strings.Contains(line, "╭") {
+			wantLeft := (m.width - lipgloss.Width(card)) / 2
+			if got := strings.Index(line, "╭"); got != wantLeft {
+				t.Errorf("card left offset = %d, want %d: %q", got, wantLeft, line)
+			}
+			return
+		}
+	}
+	t.Fatalf("card border missing: %q", v)
 }
 
 func TestPickerCardFitsAndScrollbarDrags(t *testing.T) {
@@ -928,18 +972,17 @@ func TestPickerCardFitsAndScrollbarDrags(t *testing.T) {
 
 	v := stripANSI(viewText(m))
 	lines := strings.Split(v, "\n")
-	bottomBorder := 0
+	bottomBorder := -1
 	for i, line := range lines {
 		if strings.Contains(line, "╰") {
 			bottomBorder = i
 		}
 	}
+	if bottomBorder < 0 {
+		t.Fatalf("card bottom border missing: %q", v)
+	}
 	if bottomBorder >= 30 {
 		t.Errorf("card bottom (%d) below the 30-row screen", bottomBorder)
-	}
-	promptIdx := strings.Index(v, "ask lazykoder... (type / for commands)")
-	if promptIdx < 0 || bottomBorder > strings.Index(v, "ask lazykoder") {
-		t.Errorf("card not above the prompt (border %d, prompt %d)", bottomBorder, promptIdx)
 	}
 
 	top, _, col, ok := m.scrollbarRect(1)

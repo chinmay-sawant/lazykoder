@@ -28,6 +28,7 @@ const (
 	busyHint      = "sending..."
 	defaultWidth  = 80
 	defaultHeight = 24
+	cardWidthPct  = 80
 	// chromeLines are the fixed rows around the transcript: title, blank,
 	// status and prompt lines.
 	chromeLines = 5
@@ -385,6 +386,12 @@ func (m Model) View() tea.View {
 		v.AltScreen = true
 		return v
 	}
+	if m.pickerMode {
+		v := tea.NewView(m.pickerScreen())
+		v.AltScreen = true
+		v.MouseMode = tea.MouseModeCellMotion
+		return v
+	}
 	var b strings.Builder
 	b.WriteString(m.titleLine())
 	b.WriteString("\n\n")
@@ -392,10 +399,7 @@ func (m Model) View() tea.View {
 	b.WriteString("\n")
 	b.WriteString(m.statusLine())
 	b.WriteString("\n")
-	if m.pickerMode {
-		b.WriteString(m.pickerView())
-		b.WriteString("\n")
-	} else if m.slashMode {
+	if m.slashMode {
 		b.WriteString(m.slashView())
 		b.WriteString("\n")
 	}
@@ -418,23 +422,25 @@ func (m Model) promptLine() string {
 		Render(m.prompt.View())
 }
 
-// transcriptRenderHeight returns the transcript height for rendering,
-// shrunk in picker mode so the card and prompt stay on screen.
+// transcriptRenderHeight returns the transcript height for rendering, shrinking
+// it when the slash popover needs space above the prompt.
 func (m Model) transcriptRenderHeight() int {
-	h := m.transcript.Height()
-	if m.pickerMode {
-		cardH := m.pickerVPHeight() + 4
-		h = m.height - 8 - cardH
-		h = max(3, h)
+	fixedRows := 2 + lipgloss.Height(m.statusLine()) + lipgloss.Height(m.promptLine())
+	if m.slashMode {
+		fixedRows += 1 + lipgloss.Height(m.slashView())
 	}
-	return h
+	return max(3, m.height-fixedRows)
 }
 
 // transcriptView renders the transcript viewport with a right-edge scrollbar.
 func (m Model) transcriptView() string {
+	atBottom := m.transcript.AtBottom()
 	vp := m.transcript
 	h := m.transcriptRenderHeight()
 	vp.SetHeight(h)
+	if atBottom {
+		vp.GotoBottom()
+	}
 	width := vp.Width()
 	return withScrollbar(vp.View(), width, h, vp.ScrollPercent(), vp.TotalLineCount() > h)
 }
@@ -462,13 +468,19 @@ func (m Model) scrollbarRect(target int) (top, bottom, col int, ok bool) {
 	if len(m.pickerItems) <= vpH {
 		return 0, 0, 0, false
 	}
-	cardTop := m.transcriptRenderHeight() + 3
-	return cardTop + 1, cardTop + 1 + vpH, m.pickerVp.Width() + 1, true
+	card := m.pickerView()
+	cardTop := max(0, (m.height-lipgloss.Height(card))/2)
+	cardLeft := max(0, (m.width-lipgloss.Width(card))/2)
+	innerW := max(20, m.overlayWidth()-2)
+	leftW, _ := splitPaneWidths(innerW)
+	listTop := cardTop + 2
+	listCol := cardLeft + 1 + leftW + 3 + m.pickerVp.Width()
+	return listTop, listTop + vpH, listCol, true
 }
 
 func (m Model) pickerVPHeight() int {
-	vpH := min(10, len(m.pickerItems))
-	return max(3, vpH)
+	available := max(3, m.height*70/100-7)
+	return min(max(3, len(m.pickerItems)), min(12, available))
 }
 
 // withScrollbar appends a scrollbar column at the right edge of a rendered
@@ -503,15 +515,15 @@ func withScrollbar(v string, width, height int, percent float64, overflow bool) 
 	return b.String()
 }
 
-// slashView renders the slash command menu as a two-pane card: available
-// commands on the left, the highlighted command's details on the right,
-// separated by a vertical line.
+// slashView renders the slash command menu as a prompt-anchored two-pane card:
+// the query is shown in an input-like row, followed by commands and details.
 func (m Model) slashView() string {
-	cardW := min(64, m.width-4)
-	cardW = max(36, cardW)
+	cardW := m.overlayWidth()
+	innerW := max(20, cardW-2)
 
 	sel := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15"))
 	dim := lipgloss.NewStyle().Faint(true)
+	leftW, rightW := splitPaneWidths(innerW)
 
 	var leftB strings.Builder
 	for i, cmd := range m.slashItems {
@@ -524,40 +536,29 @@ func (m Model) slashView() string {
 			leftB.WriteString(dim.Render("  " + cmd.name))
 		}
 	}
-	left := leftB.String()
+	left := lipgloss.NewStyle().Width(leftW).Render(leftB.String())
 
 	detail := "no matching command"
 	if len(m.slashItems) > 0 && m.slashCursor < len(m.slashItems) {
 		detail = m.slashItems[m.slashCursor].description
 	}
-	right := strings.TrimRight(lipgloss.NewStyle().Faint(true).Width(cardW/2).Render(detail), "\n")
+	right := lipgloss.NewStyle().Faint(true).Width(rightW).Render(detail)
 
-	divider := lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("│")
-	leftLines := strings.Split(left, "\n")
-	rightLines := strings.Split(right, "\n")
-	h := max(len(leftLines), len(rightLines))
-	for len(leftLines) < h {
-		leftLines = append(leftLines, "")
-	}
-	for len(rightLines) < h {
-		rightLines = append(rightLines, "")
-	}
-	var b strings.Builder
-	for i := 0; i < h; i++ {
-		if i > 0 {
-			b.WriteString("\n")
-		}
-		b.WriteString(leftLines[i])
-		b.WriteString("  ")
-		b.WriteString(divider)
-		b.WriteString("  ")
-		b.WriteString(rightLines[i])
-	}
-	return lipgloss.NewStyle().
+	divider := lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" │ ")
+	body := lipgloss.JoinHorizontal(lipgloss.Top, left, divider, right)
+	query := lipgloss.NewStyle().
+		Border(lipgloss.NormalBorder()).
+		BorderForeground(lipgloss.Color("8")).
+		Width(max(16, innerW)).
+		Render(m.prompt.Value() + "▏")
+	footer := hintStyle.Width(innerW).Render("↑/↓ select  •  enter run  •  esc close")
+	content := lipgloss.JoinVertical(lipgloss.Left, query, body, footer)
+	card := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("8")).
 		Width(cardW).
-		Render(b.String())
+		Render(content)
+	return lipgloss.PlaceHorizontal(m.width, lipgloss.Center, card)
 }
 
 // updateSlash handles keys while the slash menu is open.
@@ -643,28 +644,49 @@ func (m Model) syncSlash(value string) Model {
 	return m
 }
 
-// scrollbar on the right, and a filter prompt line at the bottom.
+// pickerView renders the model settings card with a label rail on the left,
+// the selectable model list on the right, and a filter prompt at the bottom.
 func (m Model) pickerView() string {
-	cardW := min(60, m.width-4)
-	cardW = max(30, cardW)
+	cardW := m.overlayWidth()
+	innerW := max(20, cardW-2)
+	leftW, rightW := splitPaneWidths(innerW)
 
-	var body strings.Builder
-	if m.modelsErr != "" {
-		body.WriteString(errStyle.Render("models unavailable: " + m.modelsErr))
-		body.WriteString("\n")
+	current := m.model
+	if current == "" && m.client != nil {
+		current = m.client.Model()
 	}
-	if len(m.pickerItems) == 0 {
+	if current == "" {
+		current = "provider default"
+	}
+	left := lipgloss.NewStyle().Width(leftW).Render(strings.Join([]string{
+		lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Render("MODEL"),
+		hintStyle.Render("Selected"),
+		current,
+		"",
+		hintStyle.Render("Choose the model used for\nthe next chat turn."),
+	}, "\n"))
+
+	vpH := m.pickerVPHeight()
+	rightHeader := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Render("AVAILABLE MODELS")
+	rightBody := ""
+	if m.modelsErr != "" {
+		rightBody = errStyle.Render("models unavailable: " + m.modelsErr)
+	} else if len(m.pickerItems) == 0 {
 		if len(m.models) == 0 {
-			body.WriteString(hintStyle.Render("no models loaded"))
+			rightBody = hintStyle.Render("no models loaded")
 		} else {
-			body.WriteString(hintStyle.Render("no models match \"" + m.pickerFilter + "\""))
+			rightBody = hintStyle.Render("no models match \"" + m.pickerFilter + "\"")
 		}
 	} else {
 		vpW := m.pickerVp.Width()
-		vpH := m.pickerVPHeight()
-		body.WriteString(withScrollbar(m.pickerVp.View(), vpW, vpH,
-			m.pickerVp.ScrollPercent(), m.pickerVp.TotalLineCount() > vpH))
+		rightBody = withScrollbar(m.pickerVp.View(), vpW, vpH,
+			m.pickerVp.ScrollPercent(), m.pickerVp.TotalLineCount() > vpH)
 	}
+	right := lipgloss.NewStyle().Width(rightW).Render(
+		lipgloss.JoinVertical(lipgloss.Left, rightHeader, rightBody),
+	)
+	divider := lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" │ ")
+	body := lipgloss.JoinHorizontal(lipgloss.Top, left, divider, right)
 
 	filter := "filter /  •  r refresh  •  enter select  •  esc cancel"
 	if m.pickerFiltering {
@@ -672,13 +694,38 @@ func (m Model) pickerView() string {
 	} else if m.pickerFilter != "" {
 		filter = "filter: " + m.pickerFilter + "  •  enter select"
 	}
-	body.WriteString("\n" + hintStyle.Render(filter))
+	footer := hintStyle.Width(innerW).Render(filter)
+	content := lipgloss.JoinVertical(lipgloss.Left,
+		lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Width(innerW).Render(" SETTINGS  /  MODEL"),
+		body,
+		footer,
+	)
 
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("8")).
 		Width(cardW).
-		Render(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Render(" Models ") + "\n" + body.String())
+		Render(content)
+}
+
+func (m Model) pickerScreen() string {
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, m.pickerView())
+}
+
+func (m Model) overlayWidth() int {
+	available := max(20, m.width-2)
+	desired := max(20, m.width*cardWidthPct/100)
+	return min(available, desired)
+}
+
+func splitPaneWidths(total int) (left, right int) {
+	left = max(4, min(24, total/3))
+	right = total - left - 3
+	if right < 8 {
+		right = 8
+		left = max(4, total-right-3)
+	}
+	return left, right
 }
 
 // pickerContent renders the filtered model list with the cursor marker.
@@ -701,10 +748,9 @@ func (m Model) pickerContent(width int) string {
 }
 
 func (m Model) resizePicker() Model {
-	cardW := min(60, m.width-4)
-	cardW = max(30, cardW)
-	innerW := cardW - 2
-	vpW := max(20, innerW-2)
+	innerW := max(20, m.overlayWidth()-2)
+	_, rightW := splitPaneWidths(innerW)
+	vpW := max(12, rightW-1)
 	m.pickerVp.SetWidth(vpW)
 	m.pickerVp.SetHeight(m.pickerVPHeight())
 	return m
@@ -785,6 +831,7 @@ func (m *Model) applyFilter() {
 	if m.pickerCursor >= len(m.pickerItems) {
 		m.pickerCursor = max(0, len(m.pickerItems)-1)
 	}
+	m.pickerVp.SetHeight(m.pickerVPHeight())
 	m.pickerVp.SetContent(m.pickerContent(m.pickerVp.Width()))
 	m.pickerVp.EnsureVisible(m.pickerCursor, 0, 1)
 }
@@ -799,8 +846,12 @@ func (m Model) openPicker() Model {
 	m.pickerFiltering = false
 	m.pickerCursor = 0
 	m.applyFilter()
+	current := m.model
+	if current == "" && m.client != nil {
+		current = m.client.Model()
+	}
 	for i, id := range m.pickerItems {
-		if id == m.model {
+		if id == current {
 			m.pickerCursor = i
 			break
 		}
@@ -1101,9 +1152,9 @@ func (m *Model) applyTool(ev agent.Event) {
 func (m Model) statusLine() string {
 	switch {
 	case m.err != "":
-		return errStyle.Render(m.err)
+		return m.wrapStatus(errStyle.Render(m.err))
 	case m.busy:
-		return busyStyle.Render(busyHint)
+		return m.wrapStatus(busyStyle.Render(busyHint))
 	default:
 		label := m.model
 		if label == "" && m.client != nil {
@@ -1135,6 +1186,10 @@ func (m Model) statusLine() string {
 			}
 			b.WriteString(hintStyle.Render(count))
 		}
-		return b.String()
+		return m.wrapStatus(b.String())
 	}
+}
+
+func (m Model) wrapStatus(status string) string {
+	return lipgloss.NewStyle().Width(max(20, m.width)).Render(status)
 }

@@ -44,8 +44,16 @@ While this view is up, no keys leak to the prompt or transcript.
 
 ## Model picker
 
-`m` opens a bubbles list of the models fetched from `GET /models` at
-startup. Navigation: `j`/`k` or arrows; `enter` selects, `esc`/`q` cancels.
+`m` or `/model` opens a centered settings card sized to about 80% of the
+terminal width. The left rail labels the setting and shows the selected model;
+the right pane contains the fetched model list. Navigation: `j`/`k` or arrows;
+`enter` selects, `esc`/`q` cancels. `/` enters model filtering and `r` refreshes
+the model list.
+
+Typing `/` in the chat prompt opens a command popover above the prompt. The
+popover keeps the active slash query in an input-like row and shows the
+highlighted command description beside the command list. `↑`/`↓` select a
+command, `enter` runs it, and `esc` closes the popover.
 
 Selecting a model:
 
