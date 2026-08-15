@@ -278,17 +278,79 @@ func TestReplayNoNetwork(t *testing.T) {
 		t.Fatalf("insert reasoning part: %v", err)
 	}
 	name := "bash"
+	callID := "call_replay"
 	status := "completed"
-	if _, err := st.InsertPart(context.Background(), db.Part{MessageID: am.ID, Type: "tool", ToolName: &name, ToolStatus: &status}); err != nil {
+	toolPart, err := st.InsertPart(context.Background(), db.Part{
+		MessageID:  am.ID,
+		Type:       "tool",
+		ToolName:   &name,
+		ToolCallID: &callID,
+		ToolStatus: &status,
+	})
+	if err != nil {
 		t.Fatalf("insert tool part: %v", err)
+	}
+	title := "echo hello"
+	inputJSON := `{"command":"echo hello"}`
+	output := "hello\n"
+	exitCode := 0
+	if err := st.InsertToolCall(context.Background(), db.ToolCall{
+		PartID:    toolPart.ID,
+		Tool:      name,
+		CallID:    callID,
+		Status:    status,
+		Title:     &title,
+		InputJSON: inputJSON,
+		Output:    &output,
+		ExitCode:  &exitCode,
+	}); err != nil {
+		t.Fatalf("insert tool call: %v", err)
 	}
 
 	m := New(Options{Store: st, Client: deadClient(), Workdir: t.TempDir(), Session: &sess})
 	v := stripANSI(viewText(m))
-	for _, want := range []string{"user: hello there", "assistant: hi back", "reasoning: (collapsed)", "bash: completed"} {
+	for _, want := range []string{"user: hello there", "assistant: hi back", "reasoning: hmm", "bash: completed", "echo hello", "hello"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("View() missing %q: %q", want, v)
 		}
+	}
+}
+
+func TestBashCommandAndOutputRendered(t *testing.T) {
+	fake := newFakeProvider(t, 0,
+		respBody("", "tool-calls", []fakeToolCall{{ID: "call_output", Name: "bash", Args: `{"command":"echo hello"}`}}),
+		respBody("done", "stop", nil),
+	)
+	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
+	p := newPump(t)
+	p.run(m.Init())
+	m = typeText(m, "run a command")
+	m, cmd := updCmd(m, enter())
+	if cmd == nil {
+		t.Fatal("Enter returned nil cmd")
+	}
+	p.run(cmd)
+	m = p.drainIdle(m)
+	v := stripANSI(viewText(m))
+	for _, want := range []string{"bash: completed", "echo hello", "output", "hello"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("View() missing %q: %q", want, v)
+		}
+	}
+}
+
+func TestAssistantMarkdownRendered(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	text := "```python\nprint(\"Hello, World!\")\n```\n\n**How to run it:**\n\n1. Save the code in `hello.py`"
+	m.applyPart(db.Part{Type: "text", Text: &text})
+	v := stripANSI(viewText(m))
+	for _, want := range []string{"assistant:", "print(\"Hello, World!\")", "How to run it:", "hello.py", "╭"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("View() missing Markdown output %q: %q", want, v)
+		}
+	}
+	if strings.Contains(v, "```") {
+		t.Errorf("View() left Markdown fences in output: %q", v)
 	}
 }
 
@@ -503,12 +565,19 @@ func TestQuitKeys(t *testing.T) {
 	m2, cmd = updCmd(m2, enter())
 	p.run(cmd)
 	m2 = p.drainUntil(m2, "y confirm")
-	_, cmd = updCmd(m2, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	m2, cmd = updCmd(m2, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	if cmd != nil {
+		t.Fatalf("first ctrl+c in confirm mode returned command %v, want nil", cmd)
+	}
+	if !m2.quitConfirm {
+		t.Fatal("first ctrl+c did not show quit confirmation")
+	}
+	m2, cmd = updCmd(m2, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	if cmd == nil {
-		t.Fatal("ctrl+c in confirm mode returned nil cmd")
+		t.Fatal("second ctrl+c in confirm mode returned nil cmd")
 	}
 	if msg := cmd(); msg != (tea.QuitMsg{}) {
-		t.Errorf("ctrl+c in confirm mode: cmd() = %#v, want tea.QuitMsg", msg)
+		t.Errorf("second ctrl+c in confirm mode: cmd() = %#v, want tea.QuitMsg", msg)
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for fake.requestCount() < 2 && time.Now().Before(deadline) {
@@ -574,6 +643,11 @@ func TestPromptPasteAndDoubleEscape(t *testing.T) {
 	if m.slashMode {
 		t.Fatal("pasting slash text opened the slash menu")
 	}
+	m = upd(m, tea.KeyPressMsg{Code: ' ', Text: " "})
+	m = upd(m, tea.KeyPressMsg{Code: 'x', Text: "x"})
+	if m.slashMode {
+		t.Fatal("typing after pasted slash text reopened the slash menu")
+	}
 	m.prompt.SetValue("pasted prompt")
 
 	m, cmd := updCmd(m, tea.KeyPressMsg{Code: tea.KeyEscape})
@@ -590,6 +664,19 @@ func TestPromptPasteAndDoubleEscape(t *testing.T) {
 	}
 	if got := m.prompt.Value(); got != "" {
 		t.Fatalf("prompt after second escape = %q, want empty", got)
+	}
+}
+
+func TestPromptUndo(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	m = upd(m, tea.PasteMsg{Content: "hello"})
+	m = upd(m, tea.KeyPressMsg{Code: '!', Text: "!"})
+	m, cmd := updCmd(m, tea.KeyPressMsg{Code: 'z', Mod: tea.ModCtrl})
+	if cmd != nil {
+		t.Fatalf("ctrl+z returned command %v, want nil", cmd)
+	}
+	if got := m.prompt.Value(); got != "hello" {
+		t.Fatalf("prompt after ctrl+z = %q, want %q", got, "hello")
 	}
 }
 
@@ -1015,6 +1102,49 @@ func TestMouseWheelScrollsTranscript(t *testing.T) {
 	m = mm.(Model)
 	if !m.transcript.AtBottom() {
 		t.Error("wheel down did not return to bottom")
+	}
+}
+
+func TestTranscriptDragSelectsAndCopiesText(t *testing.T) {
+	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
+	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
+	m.lines = append(m.lines, "first message", "second message")
+	m.syncTranscript()
+
+	mm, _ := m.Update(tea.MouseClickMsg(tea.Mouse{
+		X:      0,
+		Y:      titleBlockRows,
+		Button: tea.MouseLeft,
+	}))
+	m = mm.(Model)
+	mm, _ = m.Update(tea.MouseMotionMsg(tea.Mouse{
+		X:      6,
+		Y:      titleBlockRows + 1,
+		Button: tea.MouseLeft,
+	}))
+	m = mm.(Model)
+	mm, cmd := m.Update(tea.MouseReleaseMsg(tea.Mouse{
+		X:      6,
+		Y:      titleBlockRows + 1,
+		Button: tea.MouseLeft,
+	}))
+	m = mm.(Model)
+	if cmd == nil {
+		t.Fatal("mouse release returned nil clipboard command")
+	}
+	if m.copyNotice != "text copied" {
+		t.Fatalf("copy notice = %q, want %q", m.copyNotice, "text copied")
+	}
+	if !strings.Contains(stripANSI(viewText(m)), "text copied") {
+		t.Fatalf("View() missing copy notice: %q", viewText(m))
+	}
+
+	got, ok := m.selectedText()
+	if !ok {
+		t.Fatal("drag did not create a text selection")
+	}
+	if want := "first message\nsecond"; got != want {
+		t.Errorf("selected text = %q, want %q", got, want)
 	}
 }
 

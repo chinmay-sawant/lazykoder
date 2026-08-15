@@ -3,6 +3,7 @@ package chat
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -13,6 +14,7 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	"charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/chinmay-sawant/lazykoder/internal/agent"
 	"github.com/chinmay-sawant/lazykoder/internal/db"
@@ -21,6 +23,7 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/question"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/confirm"
+	"github.com/chinmay-sawant/lazykoder/internal/ui/markdown"
 )
 
 const (
@@ -64,6 +67,10 @@ const (
 	pickerVpDefaultH = 10
 	// eventChanBuffer is the capacity of the per-turn event channel.
 	eventChanBuffer = 64
+	// promptUndoLimit bounds the in-memory prompt edit history.
+	promptUndoLimit = 32
+	// copyNoticeDuration controls how long the clipboard confirmation stays visible.
+	copyNoticeDuration = 2 * time.Second
 
 	// cardBorder is the two columns of border/margin chrome on each side
 	// of the overlay card content.
@@ -78,10 +85,23 @@ const (
 )
 
 var (
-	errStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
-	busyStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
-	hintStyle = lipgloss.NewStyle().Faint(true)
-	userStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
+	errStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
+	busyStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
+	hintStyle      = lipgloss.NewStyle().Faint(true)
+	userStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
+	reasoningStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("5"))
+	toolCardStyle  = lipgloss.NewStyle().
+			Background(lipgloss.Color("#262626")).
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("8")).
+			Padding(0, 1)
+	toolOutputStyle = lipgloss.NewStyle().
+			Background(lipgloss.Color("#1c1c1c")).
+			Foreground(lipgloss.Color("#a0a0a0")).
+			Padding(0, 1)
+	selectionStyle = lipgloss.NewStyle().
+			Background(lipgloss.Color("7")).
+			Foreground(lipgloss.Color("0"))
 )
 
 // Options configures the chat model.
@@ -110,6 +130,8 @@ type Model struct {
 	transcript          viewport.Model
 	prompt              textinput.Model
 	escapePending       bool
+	quitConfirm         bool
+	promptUndo          []promptUndoState
 	inputHistory        []inputHistoryItem
 	historyCursor       int
 	historyDraft        string
@@ -142,9 +164,12 @@ type Model struct {
 	pickerBuilt     bool
 	pickerMode      bool
 
-	slashMode   bool
-	slashCursor int
-	slashItems  []slashCmd
+	slashMode      bool
+	slashCursor    int
+	slashItems     []slashCmd
+	slashFromPaste bool
+	selection      textSelection
+	copyNotice     string
 
 	dragTarget int // -1 none, 0 transcript, 1 picker
 	dragOn     bool
@@ -160,6 +185,25 @@ type inputHistoryItem struct {
 	messageID string
 	text      string
 }
+
+type promptUndoState struct {
+	value          string
+	slashFromPaste bool
+}
+
+type textPosition struct {
+	row int
+	col int
+}
+
+type textSelection struct {
+	anchor   textPosition
+	focus    textPosition
+	active   bool
+	dragging bool
+}
+
+type copyNoticeMsg struct{}
 
 var slashCommands = []slashCmd{
 	{name: "/new", description: "start a new session and clear the transcript"},
@@ -330,6 +374,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = msg.err.Error()
 		}
 		return m, nil
+	case copyNoticeMsg:
+		m.copyNotice = ""
+		return m, nil
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -347,12 +394,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.escapePending = false
 		m.historyCursor = -1
 		m.historyDraft = ""
+		m.copyNotice = ""
+		m = m.clearTextSelection()
+		m = m.rememberPrompt()
 		var cmd tea.Cmd
 		m.prompt, cmd = m.prompt.Update(msg)
 		m.slashMode = false
 		m.slashCursor = 0
+		m.slashFromPaste = strings.HasPrefix(m.prompt.Value(), "/")
 		return m, cmd
 	case tea.KeyPressMsg:
+		if msg.Mod.Contains(tea.ModCtrl) && msg.Code == 'c' {
+			if m.quitConfirm {
+				return m.closeDone(), tea.Quit
+			}
+			m.quitConfirm = true
+			return m, nil
+		}
+		if m.quitConfirm {
+			if msg.Code == tea.KeyEscape {
+				m.quitConfirm = false
+			}
+			return m, nil
+		}
+		if msg.Mod.Contains(tea.ModCtrl) && msg.Code == 'z' && !m.confirmMode && !m.pickerMode {
+			return m.undoPrompt(), nil
+		}
 		if m.confirmMode {
 			return m.updateConfirmKey(msg)
 		}
@@ -375,13 +442,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseClickMsg:
 		return m.mousePress(msg), nil
 	case tea.MouseMotionMsg:
+		if m.selection.dragging {
+			return m.updateTextSelection(msg), nil
+		}
 		if !m.dragOn {
 			return m, nil
 		}
 		return m.mouseDrag(msg), nil
 	case tea.MouseReleaseMsg:
+		m.selection.dragging = false
 		m.dragOn = false
-		return m, nil
+		text, ok := m.selectedText()
+		if !ok {
+			return m, nil
+		}
+		m.copyNotice = "text copied"
+		return m, tea.Batch(tea.SetClipboard(text), clearCopyNotice())
 	}
 	return m, nil
 }
@@ -390,8 +466,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // column, and jumps the viewport to the clicked position.
 func (m Model) mousePress(msg tea.MouseClickMsg) Model {
 	mu := msg.Mouse()
+	m.copyNotice = ""
 	if !m.pickerMode && !m.slashMode {
 		if _, top, right, bottom, ok := m.modelStatusRect(); ok && mu.X < right && mu.Y >= top && mu.Y < bottom {
+			m = m.clearTextSelection()
 			return m.openPicker()
 		}
 	}
@@ -411,10 +489,22 @@ func (m Model) mousePress(msg tea.MouseClickMsg) Model {
 		if !ok || mu.X != col || mu.Y < top || mu.Y >= bottom {
 			continue
 		}
+		m = m.clearTextSelection()
 		m = m.applyJump(target, mu.Y)
 		m.dragTarget = target
 		m.dragOn = true
 		return m
+	}
+	if mu.Button == tea.MouseLeft {
+		if pos, ok := m.transcriptPosition(mu); ok {
+			m.selection = textSelection{
+				anchor:   pos,
+				focus:    pos,
+				active:   true,
+				dragging: true,
+			}
+			m.syncTranscript()
+		}
 	}
 	return m
 }
@@ -462,8 +552,54 @@ func (m Model) applyJump(target, y int) Model {
 	return m
 }
 
+func (m Model) transcriptPosition(mu tea.Mouse) (textPosition, bool) {
+	if m.pickerMode || m.slashMode {
+		return textPosition{}, false
+	}
+	top := titleBlockRows
+	height := m.transcriptRenderHeight()
+	if mu.Y < top || mu.Y >= top+height || mu.X < 0 || mu.X >= m.transcript.Width() {
+		return textPosition{}, false
+	}
+	rows := m.plainTranscriptRows()
+	row := mu.Y - top + m.transcript.YOffset()
+	if row < 0 || row >= len(rows) {
+		return textPosition{}, false
+	}
+	col := mu.X + m.transcript.XOffset()
+	return textPosition{row: row, col: min(col, lipgloss.Width(rows[row]))}, true
+}
+
+func (m Model) updateTextSelection(msg tea.MouseMotionMsg) Model {
+	if pos, ok := m.transcriptPosition(msg.Mouse()); ok {
+		m.selection.focus = pos
+		m.syncTranscript()
+	}
+	return m
+}
+
+func (m Model) clearTextSelection() Model {
+	if !m.selection.active {
+		return m
+	}
+	m.selection = textSelection{}
+	m.syncTranscript()
+	return m
+}
+
+func clearCopyNotice() tea.Cmd {
+	return tea.Tick(copyNoticeDuration, func(time.Time) tea.Msg {
+		return copyNoticeMsg{}
+	})
+}
+
 // View renders the picker card, slash menu, confirm view, or the chat layout.
 func (m Model) View() tea.View {
+	if m.quitConfirm {
+		v := tea.NewView(m.quitScreen())
+		v.AltScreen = true
+		return v
+	}
 	if m.confirmMode {
 		v := tea.NewView(m.confirm.View())
 		v.AltScreen = true
@@ -491,6 +627,15 @@ func (m Model) View() tea.View {
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
 	return v
+}
+
+func (m Model) quitScreen() string {
+	card := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("3")).
+		Padding(1, cardBorder).
+		Render("Press Ctrl+C again to close lazyKoder\nEsc cancel")
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, card)
 }
 
 // promptLine renders the prompt inside a subtle translucent-looking panel:
@@ -646,6 +791,7 @@ func (m Model) slashView() string {
 
 // updateSlash handles keys while the slash menu is open.
 func (m Model) updateSlashKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
+	m = m.clearTextSelection()
 	switch key.Code {
 	case tea.KeyEscape:
 		m.slashMode = false
@@ -657,11 +803,14 @@ func (m Model) updateSlashKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 			name := m.slashItems[m.slashCursor].name
 			m.slashMode = false
 			m.slashCursor = 0
+			m.slashFromPaste = false
 			m.prompt.SetValue("")
+			m.promptUndo = nil
 			return m.runSlash(name)
 		}
 		return m, nil
 	case tea.KeyBackspace:
+		m = m.rememberPrompt()
 		var cmd tea.Cmd
 		m.prompt, cmd = m.prompt.Update(key)
 		return m.syncSlash(m.prompt.Value()), cmd
@@ -677,6 +826,7 @@ func (m Model) updateSlashKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m, nil
 	}
 	if key.Text != "" {
+		m = m.rememberPrompt()
 		var cmd tea.Cmd
 		m.prompt, cmd = m.prompt.Update(key)
 		return m.syncSlash(m.prompt.Value()), cmd
@@ -696,6 +846,8 @@ func (m Model) runSlash(name string) (Model, tea.Cmd) {
 		m.historyCursor = -1
 		m.historyDraft = ""
 		m.pendingHistoryIndex = -1
+		m.promptUndo = nil
+		m.slashFromPaste = false
 		m.syncTranscript()
 	case "/model":
 		return m.openPicker(), nil
@@ -715,6 +867,7 @@ func (m Model) syncSlash(value string) Model {
 	if !strings.HasPrefix(value, "/") {
 		m.slashMode = false
 		m.slashCursor = 0
+		m.slashFromPaste = false
 		return m
 	}
 	partial := strings.ToLower(strings.TrimPrefix(value, "/"))
@@ -729,6 +882,18 @@ func (m Model) syncSlash(value string) Model {
 	}
 	m.slashMode = true
 	return m
+}
+
+func (m Model) syncPromptSlash() Model {
+	if m.slashFromPaste {
+		if !strings.HasPrefix(m.prompt.Value(), "/") {
+			m.slashFromPaste = false
+		}
+		m.slashMode = false
+		m.slashCursor = 0
+		return m
+	}
+	return m.syncSlash(m.prompt.Value())
 }
 
 // pickerView renders the model settings card with a label rail on the left,
@@ -1003,13 +1168,14 @@ type errMsg struct {
 }
 
 func (m Model) updateKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
+	m.copyNotice = ""
+	if key.Code != 'c' && key.Code != 'C' {
+		m = m.clearTextSelection()
+	}
 	if key.Code != tea.KeyEscape {
 		m.escapePending = false
 	}
 	if key.Mod.Contains(tea.ModCtrl) {
-		if key.Code == 'c' {
-			return m.closeDone(), tea.Quit
-		}
 		var cmd tea.Cmd
 		m.prompt, cmd = m.prompt.Update(key)
 		return m, cmd
@@ -1017,9 +1183,10 @@ func (m Model) updateKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 	if strings.HasPrefix(m.prompt.Value(), "/") && (key.Text != "" || key.Code == tea.KeyBackspace) {
 		m.historyCursor = -1
 		m.historyDraft = ""
+		m = m.rememberPrompt()
 		var cmd tea.Cmd
 		m.prompt, cmd = m.prompt.Update(key)
-		return m.syncSlash(m.prompt.Value()), cmd
+		return m.syncPromptSlash(), cmd
 	}
 	switch key.Code {
 	case 'q', 'Q':
@@ -1030,6 +1197,8 @@ func (m Model) updateKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 			m.escapePending = false
 			m.historyCursor = -1
 			m.historyDraft = ""
+			m.promptUndo = nil
+			m.slashFromPaste = false
 			return m, nil
 		}
 		m.escapePending = true
@@ -1046,13 +1215,14 @@ func (m Model) updateKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 	case tea.KeyBackspace:
 		m.historyCursor = -1
 		m.historyDraft = ""
+		m = m.rememberPrompt()
 		var cmd tea.Cmd
 		m.prompt, cmd = m.prompt.Update(key)
-		if strings.HasPrefix(m.prompt.Value(), "/") && !m.slashMode {
-			m = m.syncSlash(m.prompt.Value())
-		}
-		return m, cmd
+		return m.syncPromptSlash(), cmd
 	case 'c', 'C':
+		if text, ok := m.selectedText(); ok {
+			return m, tea.SetClipboard(text)
+		}
 		if item, ok := m.selectedHistoryItem(); ok {
 			return m, tea.SetClipboard(item.text)
 		}
@@ -1087,9 +1257,10 @@ func (m Model) updateKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 	}
 	m.historyCursor = -1
 	m.historyDraft = ""
+	m = m.rememberPrompt()
 	var cmd tea.Cmd
 	m.prompt, cmd = m.prompt.Update(key)
-	return m.syncSlash(m.prompt.Value()), cmd
+	return m.syncPromptSlash(), cmd
 }
 
 func (m Model) updateConfirmKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
@@ -1111,9 +1282,12 @@ func (m Model) submit(text string) (Model, tea.Cmd) {
 	m.prompt.SetValue("")
 	m.busy = true
 	m.err = ""
+	m.copyNotice = ""
 	m.pendingUser = text
 	m.historyCursor = -1
 	m.historyDraft = ""
+	m.promptUndo = nil
+	m.slashFromPaste = false
 	m.pendingHistoryIndex = len(m.inputHistory)
 	m.inputHistory = append(m.inputHistory, inputHistoryItem{text: text})
 	m.lines = append(m.lines, renderUserLine(text))
@@ -1143,6 +1317,34 @@ func (m Model) submit(text string) (Model, tea.Cmd) {
 
 func renderUserLine(text string) string {
 	return userStyle.Render("user: " + text)
+}
+
+func (m Model) rememberPrompt() Model {
+	state := promptUndoState{value: m.prompt.Value(), slashFromPaste: m.slashFromPaste}
+	if len(m.promptUndo) > 0 && m.promptUndo[len(m.promptUndo)-1] == state {
+		return m
+	}
+	m.promptUndo = append(m.promptUndo, state)
+	if len(m.promptUndo) > promptUndoLimit {
+		m.promptUndo = m.promptUndo[len(m.promptUndo)-promptUndoLimit:]
+	}
+	return m
+}
+
+func (m Model) undoPrompt() Model {
+	if len(m.promptUndo) == 0 {
+		return m
+	}
+	state := m.promptUndo[len(m.promptUndo)-1]
+	m.promptUndo = m.promptUndo[:len(m.promptUndo)-1]
+	m.prompt.SetValue(state.value)
+	m.slashFromPaste = state.slashFromPaste
+	m.slashMode = false
+	m.slashCursor = 0
+	m.escapePending = false
+	m.historyCursor = -1
+	m.historyDraft = ""
+	return m
 }
 
 func (m Model) selectedHistoryItem() (inputHistoryItem, bool) {
@@ -1177,6 +1379,8 @@ func (m Model) navigateHistory(delta int) Model {
 	}
 	m.prompt.SetValue(m.inputHistory[m.historyCursor].text)
 	m.escapePending = false
+	m.promptUndo = nil
+	m.slashFromPaste = false
 	return m
 }
 
@@ -1200,6 +1404,8 @@ func (m Model) deleteSelectedHistory() (Model, tea.Cmd) {
 	draft := m.historyDraft
 	m.historyDraft = ""
 	m.prompt.SetValue(draft)
+	m.promptUndo = nil
+	m.slashFromPaste = false
 	m.syncTranscript()
 	if item.messageID == "" || m.store == nil {
 		return m, nil
@@ -1303,6 +1509,15 @@ func (m *Model) replay(sessionID string) {
 		m.err = "chat: " + err.Error()
 		return
 	}
+	tcs, err := m.store.ListToolCalls(ctx, sessionID)
+	if err != nil {
+		m.err = "chat: " + err.Error()
+		return
+	}
+	toolCalls := make(map[string]db.ToolCall, len(tcs))
+	for _, tc := range tcs {
+		toolCalls[tc.PartID] = tc
+	}
 	for _, msg := range msgs {
 		if !msg.Visible {
 			continue
@@ -1320,21 +1535,27 @@ func (m *Model) replay(sessionID string) {
 						m.inputHistory = append(m.inputHistory, inputHistoryItem{messageID: msg.ID, text: *p.Text})
 						m.lines = append(m.lines, renderUserLine(*p.Text))
 					} else {
-						m.lines = append(m.lines, msg.Role+": "+*p.Text)
+						m.lines = append(m.lines, renderAssistantLine(*p.Text))
 					}
 				}
 			case "reasoning":
-				m.lines = append(m.lines, "reasoning: (collapsed)")
+				if p.Text != nil {
+					m.lines = append(m.lines, renderReasoningLine(*p.Text))
+				}
 			case "tool":
-				name := "tool"
-				status := ""
-				if p.ToolName != nil {
-					name = *p.ToolName
+				tool := db.ToolCall{PartID: p.ID}
+				if stored, ok := toolCalls[p.ID]; ok {
+					tool = stored
+				} else {
+					tool.Tool = "tool"
+					if p.ToolName != nil {
+						tool.Tool = *p.ToolName
+					}
+					if p.ToolStatus != nil {
+						tool.Status = *p.ToolStatus
+					}
 				}
-				if p.ToolStatus != nil {
-					status = *p.ToolStatus
-				}
-				m.lines = append(m.lines, name+": "+status)
+				m.lines = append(m.lines, m.renderTool(agent.Event{Part: p, Tool: tool}))
 			}
 		}
 	}
@@ -1342,8 +1563,81 @@ func (m *Model) replay(sessionID string) {
 }
 
 func (m *Model) syncTranscript() {
-	m.transcript.SetContent(strings.Join(m.lines, "\n"))
-	m.transcript.GotoBottom()
+	atBottom := m.transcript.AtBottom()
+	yOffset := m.transcript.YOffset()
+	m.transcript.SetContent(m.transcriptContent())
+	if atBottom {
+		m.transcript.GotoBottom()
+		return
+	}
+	m.transcript.SetYOffset(yOffset)
+}
+
+func (m Model) transcriptContent() string {
+	content := strings.Join(m.lines, "\n")
+	if !m.selection.active || !m.selection.hasRange() {
+		return content
+	}
+	rows := strings.Split(content, "\n")
+	start, end := m.selection.bounds()
+	for row := start.row; row <= end.row && row < len(rows); row++ {
+		from := 0
+		to := lipgloss.Width(ansi.Strip(rows[row]))
+		if row == start.row {
+			from = start.col
+		}
+		if row == end.row {
+			to = end.col
+		}
+		if from < to {
+			rows[row] = lipgloss.StyleRanges(rows[row], lipgloss.NewRange(from, to, selectionStyle))
+		}
+	}
+	return strings.Join(rows, "\n")
+}
+
+func (m Model) plainTranscriptRows() []string {
+	content := ansi.Strip(strings.Join(m.lines, "\n"))
+	return strings.Split(content, "\n")
+}
+
+func (s textSelection) hasRange() bool {
+	if !s.active {
+		return false
+	}
+	start, end := s.bounds()
+	return start != end
+}
+
+func (s textSelection) bounds() (textPosition, textPosition) {
+	if s.anchor.row < s.focus.row || (s.anchor.row == s.focus.row && s.anchor.col <= s.focus.col) {
+		return s.anchor, s.focus
+	}
+	return s.focus, s.anchor
+}
+
+func (m Model) selectedText() (string, bool) {
+	if !m.selection.hasRange() {
+		return "", false
+	}
+	rows := m.plainTranscriptRows()
+	start, end := m.selection.bounds()
+	if start.row < 0 || end.row >= len(rows) {
+		return "", false
+	}
+	selected := make([]string, 0, end.row-start.row+1)
+	for row := start.row; row <= end.row; row++ {
+		from := 0
+		to := lipgloss.Width(rows[row])
+		if row == start.row {
+			from = start.col
+		}
+		if row == end.row {
+			to = end.col
+		}
+		selected = append(selected, ansi.Cut(rows[row], from, to))
+	}
+	return strings.Join(selected, "\n"), true
 }
 
 func (m *Model) applyPart(p db.Part) {
@@ -1356,40 +1650,105 @@ func (m *Model) applyPart(p db.Part) {
 			m.pendingUser = ""
 			return
 		}
-		m.lines = append(m.lines, "assistant: "+*p.Text)
+		m.lines = append(m.lines, renderAssistantLine(*p.Text))
 	case "reasoning":
-		m.lines = append(m.lines, "reasoning: (collapsed)")
+		if p.Text != nil {
+			m.lines = append(m.lines, renderReasoningLine(*p.Text))
+		}
 	}
 	m.syncTranscript()
 }
 
-func (m *Model) applyTool(ev agent.Event) {
-	name := ev.Tool.Tool
-	if name == "" && ev.Part.ToolName != nil {
-		name = *ev.Part.ToolName
+func renderReasoningLine(text string) string {
+	return reasoningStyle.Render("reasoning: " + text)
+}
+
+func renderAssistantLine(text string) string {
+	rendered := markdown.Render(text)
+	if strings.Contains(rendered, "\n") {
+		return "assistant:\n" + rendered
 	}
-	if name == "" {
+	return "assistant: " + rendered
+}
+
+func (m *Model) applyTool(ev agent.Event) {
+	if ev.Tool.Tool == "" && ev.Part.ToolName != nil {
+		ev.Tool.Tool = *ev.Part.ToolName
+	}
+	if ev.Tool.Tool == "" {
 		return
 	}
 	status := ev.Tool.Status
+	if status == "" && ev.Part.ToolStatus != nil {
+		status = *ev.Part.ToolStatus
+		ev.Tool.Status = status
+	}
 	if status == "" || status == "pending" {
-		m.lines = append(m.lines, name+": pending")
+		m.lines = append(m.lines, m.renderTool(ev))
 		m.lastTool = len(m.lines) - 1
 		m.syncTranscript()
 		return
 	}
 	if m.lastTool >= 0 && m.lastTool < len(m.lines) {
-		m.lines[m.lastTool] = name + ": " + status
+		m.lines[m.lastTool] = m.renderTool(ev)
 	}
 	m.syncTranscript()
 }
 
+func (m Model) renderTool(ev agent.Event) string {
+	name := ev.Tool.Tool
+	if name == "" && ev.Part.ToolName != nil {
+		name = *ev.Part.ToolName
+	}
+	status := ev.Tool.Status
+	if status == "" && ev.Part.ToolStatus != nil {
+		status = *ev.Part.ToolStatus
+	}
+	if status == "" {
+		status = "pending"
+	}
+
+	bodyWidth := max(minPaneWidth, m.toolCardWidth()-cardBorder*2)
+	header := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Render(name + ": " + status)
+	body := []string{header}
+	if command := toolCommand(ev.Tool); command != "" {
+		body = append(body, hintStyle.Width(bodyWidth).Render("$ "+command))
+	}
+	if ev.Tool.Output != nil && *ev.Tool.Output != "" {
+		output := strings.TrimSuffix(*ev.Tool.Output, "\n")
+		outputLabel := hintStyle.Width(bodyWidth).Render("output")
+		outputBox := toolOutputStyle.Width(bodyWidth).Render(output)
+		body = append(body, outputLabel, outputBox)
+	}
+	return toolCardStyle.Width(m.toolCardWidth()).Render(strings.Join(body, "\n"))
+}
+
+func (m Model) toolCardWidth() int {
+	return max(minPaneWidth, m.width-cardBorder*2)
+}
+
+func toolCommand(tc db.ToolCall) string {
+	if tc.Tool == "bash" {
+		var args struct {
+			Command string `json:"command"`
+		}
+		if err := json.Unmarshal([]byte(tc.InputJSON), &args); err == nil && args.Command != "" {
+			return args.Command
+		}
+	}
+	if tc.Title != nil {
+		return *tc.Title
+	}
+	return ""
+}
+
 func (m Model) statusLine() string {
+	var line string
 	switch {
 	case m.err != "":
-		return m.wrapStatus(errStyle.Render(m.err))
+		line = m.wrapStatus(errStyle.Render(m.err))
 	case m.busy:
-		return m.wrapStatus(busyStyle.Render(busyHint))
+		line = m.wrapStatus(busyStyle.Render(busyHint))
 	default:
 		label := m.model
 		if label == "" && m.client != nil {
@@ -1425,8 +1784,18 @@ func (m Model) statusLine() string {
 			}
 			b.WriteString(hintStyle.Render(count))
 		}
-		return m.wrapStatus(b.String())
+		line = m.wrapStatus(b.String())
 	}
+	if m.copyNotice == "" {
+		return line
+	}
+	notice := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("10")).
+		Bold(true).
+		Width(m.width).
+		Align(lipgloss.Right).
+		Render(m.copyNotice)
+	return line + "\n" + notice
 }
 
 func (m Model) modelStatusRect() (left, top, right, bottom int, ok bool) {

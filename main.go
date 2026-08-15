@@ -17,7 +17,7 @@ import (
 )
 
 // defaultMaxSteps is the fallback when the user does not configure a step limit.
-const defaultMaxSteps = 8
+const defaultMaxSteps = 16
 
 func main() {
 	cwd, err := os.Getwd()

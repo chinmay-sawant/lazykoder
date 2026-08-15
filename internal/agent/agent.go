@@ -27,6 +27,8 @@ const (
 	maxToolTitle = 80
 	// maxToolOutput caps the output returned to the model for a tool call.
 	maxToolOutput = 8000
+	// defaultMaxSteps bounds tool-calling turns when no limit is configured.
+	defaultMaxSteps = 16
 )
 
 // Options configures an Agent.
@@ -123,7 +125,7 @@ func (a *Agent) Send(ctx context.Context, userText string, events chan<- Event) 
 	}
 	maxSteps := a.opts.MaxSteps
 	if maxSteps <= 0 {
-		maxSteps = 8
+		maxSteps = defaultMaxSteps
 	}
 	for step := 0; step < maxSteps; step++ {
 		history, err := a.buildHistory(ctx)

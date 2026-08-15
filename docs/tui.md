@@ -5,13 +5,19 @@ chat, confirm, and the model picker.
 
 ## Chat view
 
-- Transcript: user and assistant text lines. Reasoning shows as
-  `reasoning: (collapsed)`. Tool calls render as one-line cards, for example
-  `bash: completed` or `bash: denied`.
+- Transcript: user and assistant text lines. Reasoning shows the stored text.
+  Tool calls render as dark cards with the command or title, status, and
+  captured response, for example `bash: completed` with its output below it.
 - Prompt: a `textinput` line. Enter sends, empty sends are ignored; while a
   turn is in flight the prompt ignores Enter.
 - Status line (idle): current model, hint line with keys, and the model-list
   health line (`models: N available`, or a red error).
+- Dragging across transcript rows selects and copies the range on mouse
+  release; a temporary `text copied` notice appears above the prompt. Clicks
+  on the model status and scrollbar keep their existing navigation behavior.
+- Assistant Markdown formats headings, emphasis, lists, inline code, and fenced
+  code blocks. Fenced blocks use a dark bordered card with an optional language
+  label.
 
 | Key | Action |
 | --- | --- |

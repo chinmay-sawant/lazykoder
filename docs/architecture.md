@@ -73,7 +73,7 @@ model count and to feed the interactive picker (`m` in the chat view).
 ## Agent loop
 
 One user turn runs in `internal/agent.Send` with a hard step bound (default
-8) so a runaway model cannot spam confirm prompts:
+16) so a runaway model cannot spam confirm prompts:
 
 1. Persist the user message + text part (create or resume a session).
 2. Rebuild provider history from the store (messages, parts, tool calls).
