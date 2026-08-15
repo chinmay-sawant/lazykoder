@@ -707,6 +707,77 @@ func TestSessionPickerEscKeepsCurrent(t *testing.T) {
 	}
 }
 
+func TestComposerPutsModelOnTheRight(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	m.model = "deepseek-v4-flash"
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = mm.(Model)
+	var footer string
+	for _, line := range strings.Split(stripANSI(viewText(m)), "\n") {
+		if strings.Contains(line, "deepseek-v4-flash") {
+			footer = line
+		}
+	}
+	if footer == "" {
+		t.Fatal("model missing from composer")
+	}
+	idxHint := strings.Index(footer, "enter send")
+	idxModel := strings.Index(footer, "deepseek-v4-flash")
+	if idxHint < 0 || idxModel < 0 || idxModel < idxHint {
+		t.Fatalf("model is not right of the hint: %q", footer)
+	}
+}
+
+func TestTurnShowsTimestamp(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	m.items = append(m.items, transcriptItem{kind: itemUser, text: "hello there", when: time.Now().UnixMilli()})
+	m.syncTranscript()
+	v := stripANSI(viewText(m))
+	if !strings.Contains(v, roleYou) || !strings.Contains(v, "just now") {
+		t.Fatalf("user turn missing timestamp: %q", v)
+	}
+}
+
+func TestThinkingFrameUsesBrackets(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	m.busy = true
+	m.pulseOn = true
+	v := stripANSI(viewText(m))
+	if !strings.Contains(v, "[") || !strings.Contains(v, "]") {
+		t.Fatalf("thinking frame missing brackets: %q", v)
+	}
+	if !strings.Contains(v, "│") {
+		t.Fatalf("thinking frame missing vertical bar: %q", v)
+	}
+}
+
+func TestSessionPickerGroupsByAge(t *testing.T) {
+	dir := t.TempDir()
+	st := newTestStore(t)
+	now := time.Now().UnixMilli()
+	if _, err := st.CreateSession(context.Background(), db.Session{
+		Title: "fresh-run", Directory: dir, TimeCreated: now, TimeUpdated: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	old := now - 3*24*60*60*1000
+	if _, err := st.CreateSession(context.Background(), db.Session{
+		Title: "old-run", Directory: dir, TimeCreated: old, TimeUpdated: old,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	m := New(Options{Store: st, Client: deadClient(), Workdir: dir})
+	m = typeText(m, "/sessions")
+	m = upd(m, enter())
+	v := stripANSI(viewText(m))
+	if !strings.Contains(v, "just now") || !strings.Contains(v, "older") {
+		t.Fatalf("session groups missing: %q", v)
+	}
+	if !strings.Contains(v, "fresh-run") || !strings.Contains(v, "old-run") {
+		t.Fatalf("session titles missing: %q", v)
+	}
+}
+
 func TestHeaderFitsAt80(t *testing.T) {
 	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: "/tmp/proj"})
 	mm, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
@@ -807,12 +878,12 @@ func TestPickerHasNoOrphanFor(t *testing.T) {
 func TestEmptyStateShown(t *testing.T) {
 	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
 	v := stripANSI(viewText(m))
-	if !strings.Contains(v, "type / for commands") {
+	if !strings.Contains(v, "new run") || !strings.Contains(v, "/ commands") {
 		t.Fatalf("empty state missing: %q", v)
 	}
 	m.items = append(m.items, transcriptItem{kind: itemUser, text: "hi"})
 	m.syncTranscript()
-	if strings.Contains(stripANSI(viewText(m)), "type / for commands") {
+	if strings.Contains(stripANSI(viewText(m)), "new run") {
 		t.Fatal("empty state still shown after a line")
 	}
 }

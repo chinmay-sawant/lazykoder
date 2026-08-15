@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -170,7 +171,7 @@ func (m Model) submit(text string) (Model, tea.Cmd) {
 	m.slashFromPaste = false
 	m.pendingHistoryIndex = len(m.inputHistory)
 	m.inputHistory = append(m.inputHistory, inputHistoryItem{text: text})
-	m.items = append(m.items, transcriptItem{kind: itemUser, text: text})
+	m.items = append(m.items, transcriptItem{kind: itemUser, text: text, when: time.Now().UnixMilli()})
 	m.syncTranscript()
 	m.turnSeq++
 	seq := m.turnSeq
@@ -191,7 +192,9 @@ func (m Model) submit(text string) (Model, tea.Cmd) {
 		go func() { errCh <- ag.Send(ctx, text, eventCh) }()
 		return nil
 	}
-	return m, tea.Batch(sendCmd, m.watchEvents(seq))
+	m.pulse = 0
+	m.pulseOn = true
+	return m, tea.Batch(sendCmd, m.watchEvents(seq), pulseTick())
 }
 
 func (m Model) watchEvents(seq int) tea.Cmd {

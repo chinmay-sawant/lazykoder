@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"time"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -11,6 +12,7 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/agent"
 	"github.com/chinmay-sawant/lazykoder/internal/db"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/markdown"
+	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
 
 type itemKind int
@@ -27,6 +29,7 @@ type transcriptItem struct {
 	kind      itemKind
 	text      string
 	collapsed bool
+	when      int64
 	tool      db.ToolCall
 	part      db.Part
 }
@@ -69,14 +72,14 @@ func (m *Model) replay(sessionID string) {
 				if p.Text != nil {
 					if msg.Role == "user" {
 						m.inputHistory = append(m.inputHistory, inputHistoryItem{messageID: msg.ID, text: *p.Text})
-						m.items = append(m.items, transcriptItem{kind: itemUser, text: *p.Text})
+						m.items = append(m.items, transcriptItem{kind: itemUser, text: *p.Text, when: itemTime(msg.TimeCreated, p.TimeCreated)})
 					} else {
-						m.items = append(m.items, transcriptItem{kind: itemAssistant, text: *p.Text})
+						m.items = append(m.items, transcriptItem{kind: itemAssistant, text: *p.Text, when: itemTime(msg.TimeCreated, p.TimeCreated)})
 					}
 				}
 			case "reasoning":
 				if p.Text != nil {
-					m.items = append(m.items, transcriptItem{kind: itemReasoning, text: *p.Text, collapsed: true})
+					m.items = append(m.items, transcriptItem{kind: itemReasoning, text: *p.Text, collapsed: true, when: itemTime(msg.TimeCreated, p.TimeCreated)})
 				}
 			case "tool":
 				tool := db.ToolCall{PartID: p.ID}
@@ -91,7 +94,11 @@ func (m *Model) replay(sessionID string) {
 						tool.Status = *p.ToolStatus
 					}
 				}
-				m.items = append(m.items, transcriptItem{kind: itemTool, collapsed: true, tool: tool, part: p})
+				when := itemTime(msg.TimeCreated, p.TimeCreated)
+				if tool.TimeStart != nil {
+					when = *tool.TimeStart
+				}
+				m.items = append(m.items, transcriptItem{kind: itemTool, collapsed: true, when: when, tool: tool, part: p})
 			}
 		}
 	}
@@ -135,9 +142,30 @@ func (m Model) transcriptContent() string {
 func (m Model) renderedItems() []string {
 	out := make([]string, 0, len(m.items))
 	for i, it := range m.items {
+		if i > 0 && (it.kind == itemUser || it.kind == itemAssistant) {
+			out = append(out, "")
+		}
 		out = append(out, m.renderItem(it, i == m.selectedItem))
 	}
 	return out
+}
+
+func itemTime(messageMS int64, partMS int64) int64 {
+	if partMS > 0 {
+		return partMS
+	}
+	if messageMS > 0 {
+		return messageMS
+	}
+	return time.Now().UnixMilli()
+}
+
+func roleLine(label string, when int64) string {
+	stamp := formatSessionAge(when)
+	if stamp == "" {
+		return roleStyle.Render(label)
+	}
+	return roleStyle.Render(label) + hintStyle.Render("  ·  "+stamp)
 }
 
 func (m Model) plainTranscriptRows() []string {
@@ -155,10 +183,10 @@ func (m *Model) applyPart(p db.Part) {
 			m.pendingUser = ""
 			return
 		}
-		m.items = append(m.items, transcriptItem{kind: itemAssistant, text: *p.Text})
+		m.items = append(m.items, transcriptItem{kind: itemAssistant, text: *p.Text, when: itemTime(0, p.TimeCreated)})
 	case "reasoning":
 		if p.Text != nil {
-			m.items = append(m.items, transcriptItem{kind: itemReasoning, text: *p.Text, collapsed: true})
+			m.items = append(m.items, transcriptItem{kind: itemReasoning, text: *p.Text, collapsed: true, when: itemTime(0, p.TimeCreated)})
 		}
 	}
 	m.syncTranscript()
@@ -180,7 +208,11 @@ func (m *Model) applyTool(ev agent.Event) {
 		status = "pending"
 		ev.Tool.Status = status
 	}
-	item := transcriptItem{kind: itemTool, collapsed: true, tool: ev.Tool, part: ev.Part}
+	when := itemTime(0, ev.Part.TimeCreated)
+	if ev.Tool.TimeStart != nil {
+		when = *ev.Tool.TimeStart
+	}
+	item := transcriptItem{kind: itemTool, collapsed: true, when: when, tool: ev.Tool, part: ev.Part}
 	if status == "" || status == "pending" {
 		m.items = append(m.items, item)
 		m.lastTool = len(m.items) - 1
@@ -201,22 +233,22 @@ func (m *Model) applyTool(ev agent.Event) {
 func (m Model) renderItem(it transcriptItem, selected bool) string {
 	switch it.kind {
 	case itemUser:
-		return roleStyle.Render(roleYou) + "\n" + userStyle.Render(it.text)
+		return roleLine(roleYou, it.when) + "\n" + userStyle.Render(it.text)
 	case itemAssistant:
 		rendered := markdown.Render(it.text)
-		return roleStyle.Render(roleAssistant) + "\n" + rendered
+		return roleLine(roleAssistant, it.when) + "\n" + rendered
 	case itemReasoning:
 		marker := "▸"
 		if !it.collapsed {
 			marker = "▾"
 		}
-		head := reasoningStyle.Render(marker + " " + thinkingLabel)
+		head := reasoningStyle.Render(marker+" "+thinkingLabel) + hintStyle.Render(ageSuffix(it.when))
 		if it.collapsed {
 			return head
 		}
 		return head + "\n" + reasoningStyle.Render(it.text)
 	case itemTool:
-		return m.renderTool(agent.Event{Part: it.part, Tool: it.tool}, it.collapsed)
+		return m.renderTool(agent.Event{Part: it.part, Tool: it.tool}, it.collapsed, it.when)
 	case itemNote:
 		return hintStyle.Render(it.text)
 	}
@@ -226,7 +258,14 @@ func (m Model) renderItem(it transcriptItem, selected bool) string {
 	return it.text
 }
 
-func (m Model) renderTool(ev agent.Event, collapsed bool) string {
+func ageSuffix(when int64) string {
+	if stamp := formatSessionAge(when); stamp != "" {
+		return "  ·  " + stamp
+	}
+	return ""
+}
+
+func (m Model) renderTool(ev agent.Event, collapsed bool, when int64) string {
 	name := ev.Tool.Tool
 	if name == "" && ev.Part.ToolName != nil {
 		name = *ev.Part.ToolName
@@ -243,7 +282,12 @@ func (m Model) renderTool(ev agent.Event, collapsed bool) string {
 		title = name
 	}
 	title = truncateRunes(title, maxToolTitle)
-	header := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Render(name + "  " + status + "  " + title)
+	marker := "▸"
+	if !collapsed {
+		marker = "▾"
+	}
+	head := marker + " run  " + name + "  " + title + ageSuffix(when) + "  ·  " + status
+	header := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).Render(head)
 	if collapsed {
 		return toolCardStyle.Width(m.toolCardWidth()).Render(header)
 	}

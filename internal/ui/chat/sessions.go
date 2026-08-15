@@ -11,6 +11,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/chinmay-sawant/lazykoder/internal/db"
+	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
 
 func (m Model) openSessionPicker() Model {
@@ -53,7 +54,7 @@ func (m Model) sessionPickerScreen() string {
 func (m Model) sessionPickerView() string {
 	cardW := m.overlayWidth()
 	innerW := max(minPaneWidth, cardW-cardBorder)
-	header := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Width(innerW).Render(" SESSIONS")
+	header := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).Width(innerW).Render(" RUNS")
 	body := hintStyle.Render("no sessions")
 	if len(m.sessionItems) > 0 {
 		vpH := m.sessionVPHeight()
@@ -64,17 +65,27 @@ func (m Model) sessionPickerView() string {
 	content := lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("8")).
+		BorderForeground(theme.ColorBorder()).
 		Width(cardW).
 		Render(content)
 }
 
 func (m Model) sessionPickerContent() string {
-	sel := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15"))
-	normal := lipgloss.NewStyle().Faint(true)
+	sel := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText())
+	normal := lipgloss.NewStyle().Foreground(theme.ColorMute())
+	group := lipgloss.NewStyle().Foreground(theme.ColorAccent()).Bold(true)
 	var b strings.Builder
+	lastGroup := ""
 	for i, sess := range m.sessionItems {
-		if i > 0 {
+		name := sessionAgeGroup(sess.TimeUpdated)
+		if name != lastGroup {
+			if lastGroup != "" {
+				b.WriteString("\n")
+			}
+			b.WriteString(group.Render(name))
+			b.WriteString("\n")
+			lastGroup = name
+		} else if i > 0 {
 			b.WriteString("\n")
 		}
 		line := sessionPickerLine(sess)
@@ -87,6 +98,21 @@ func (m Model) sessionPickerContent() string {
 	return b.String()
 }
 
+func sessionAgeGroup(ms int64) string {
+	if ms <= 0 {
+		return "older"
+	}
+	d := time.Since(time.UnixMilli(ms))
+	switch {
+	case d < time.Hour:
+		return "just now"
+	case d < 24*time.Hour:
+		return "recently"
+	default:
+		return "older"
+	}
+}
+
 func sessionPickerLine(sess db.Session) string {
 	title := strings.TrimSpace(sess.Title)
 	if title == "" {
@@ -96,7 +122,7 @@ func sessionPickerLine(sess db.Session) string {
 	if model == "" {
 		model = "default"
 	}
-	return fmt.Sprintf("%s  %s  %s", title, formatSessionAge(sess.TimeUpdated), model)
+	return fmt.Sprintf("%s  ·  %s  ·  %s", title, formatSessionAge(sess.TimeUpdated), model)
 }
 
 func formatSessionAge(ms int64) string {
@@ -118,7 +144,33 @@ func formatSessionAge(ms int64) string {
 
 func (m Model) sessionVPHeight() int {
 	available := max(minPaneHeight, m.height*70/percentBase-pickerFixedRows)
-	return min(max(minPaneHeight, len(m.sessionItems)), min(pickerMaxRows, available))
+	return min(max(minPaneHeight, m.sessionContentRows()), min(pickerMaxRows, available))
+}
+
+func (m Model) sessionContentRows() int {
+	n := len(m.sessionItems)
+	seen := map[string]struct{}{}
+	for _, sess := range m.sessionItems {
+		seen[sessionAgeGroup(sess.TimeUpdated)] = struct{}{}
+	}
+	return n + len(seen)
+}
+
+func (m Model) sessionDisplayRow(idx int) int {
+	row := 0
+	last := ""
+	for i, sess := range m.sessionItems {
+		g := sessionAgeGroup(sess.TimeUpdated)
+		if g != last {
+			last = g
+			row++
+		}
+		if i == idx {
+			return row
+		}
+		row++
+	}
+	return idx
 }
 
 func (m Model) resizeSessionPicker() Model {
@@ -138,7 +190,7 @@ func (m Model) refreshSessionPicker() Model {
 	m.sessionVp.SetHeight(m.sessionVPHeight())
 	m.sessionVp.SetContent(m.sessionPickerContent())
 	if len(m.sessionItems) > 0 {
-		m.sessionVp.EnsureVisible(m.sessionCursor, 0, 1)
+		m.sessionVp.EnsureVisible(m.sessionDisplayRow(m.sessionCursor), 0, 1)
 	}
 	return m
 }

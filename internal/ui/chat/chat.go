@@ -79,6 +79,9 @@ const (
 	// pickerFixedRows are the card rows outside the list (borders, header,
 	// footer) that reduce the available list height.
 	pickerFixedRows = 7
+	// pulseInterval and pulseSteps drive the thinking glow.
+	pulseInterval = 90 * time.Millisecond
+	pulseSteps    = 16
 )
 
 var (
@@ -167,6 +170,9 @@ type Model struct {
 	filePickerCursor int
 	filePickerFilter string
 	filePickerAt     int
+
+	pulse     int
+	pulseOn   bool
 
 	pickerVp        viewport.Model
 	pickerItems     []string
@@ -272,6 +278,8 @@ type eventDoneMsg struct {
 	err error
 }
 
+type pulseMsg struct{}
+
 // New returns a chat model for the given options.
 func New(opts Options) Model {
 	m := Model{
@@ -361,6 +369,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.finishTurn(msg.err), nil
+	case pulseMsg:
+		if !m.busy {
+			m.pulseOn = false
+			return m, nil
+		}
+		m.pulse = (m.pulse + 1) % pulseSteps
+		return m, pulseTick()
 	case modelsMsg:
 		m.models = msg.list
 		m.modelsCached = msg.fromCache
@@ -532,7 +547,23 @@ func (m Model) finishTurn(err error) Model {
 	m.askMode = false
 	m.eventCh = nil
 	m.errCh = nil
+	m.pulseOn = false
 	return m
+}
+
+func pulseTick() tea.Cmd {
+	return tea.Tick(pulseInterval, func(time.Time) tea.Msg { return pulseMsg{} })
+}
+
+func (m Model) pulseT() float64 {
+	step := m.pulse
+	if step > pulseSteps/2 {
+		step = pulseSteps - step
+	}
+	if pulseSteps < 2 {
+		return 0
+	}
+	return float64(step) / float64(pulseSteps/2)
 }
 
 func isCancelErr(err error) bool {
@@ -569,9 +600,12 @@ func (m Model) promptHeight() int {
 }
 
 func (m Model) chromeHeight() int {
-	h := lipgloss.Height(m.headerView()) + 1 + lipgloss.Height(m.statusLine()) + lipgloss.Height(m.promptLine())
+	h := lipgloss.Height(m.headerView()) + 1 + lipgloss.Height(m.promptLine())
 	if m.slashMode {
 		h += 1 + lipgloss.Height(m.slashView())
+	}
+	if m.err != "" {
+		h += lipgloss.Height(errStyle.Width(max(minPaneWidth, m.width)).Render(m.err))
 	}
 	return max(chromeLines, h)
 }

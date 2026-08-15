@@ -6,16 +6,19 @@ pickers are centered cards.
 
 ## Chat view
 
-- Header: `lazykoder`, the session title (or `new session`), model, and
-  project directory basename.
+- Header: `lazykoder`, the session title (or `new session`), and the project
+  directory basename.
 - Transcript: user turns labeled `you`, assistant turns labeled `assistant`,
-  with Markdown. Reasoning starts collapsed as `▸ thinking`; `t` expands it
-  when the prompt is empty. Tool cards start collapsed (`tool  status  title`);
-  `e` expands the last tool card to show command and output.
-- Prompt: a multiline `textarea`. Enter sends, shift+enter inserts a newline,
-  empty sends are ignored. `q` is a letter. Quit is `ctrl+c` twice.
-- Status line (idle): the current model id (click to switch). Busy shows
-  `thinking` or the in-flight tool name. Errors stay red.
+  each with a relative timestamp (`just now`, `2m ago`). Reasoning starts
+  collapsed as `▸ thinking`; `t` expands it when the prompt is empty. Tool
+  runs start collapsed (`▸ run  bash  title  ·  just now  ·  completed`);
+  `e` expands the last run.
+- Composer: a rounded input box. The footer shows `enter send` on the left
+  and the model on the right (click the model to switch). While a turn is in
+  flight the screen is framed with pulsing `[` `]` brackets and a glowing
+  vertical bar.
+- Session list (`/sessions` or `ctrl+s`) groups runs as `just now`,
+  `recently`, and `older`.
 - Session picker: `/sessions` or `ctrl+s` lists sessions for the project
   directory (newest first). Enter loads one; esc keeps the current session.
 - Empty session: a short hint in the transcript, not a blank pane.

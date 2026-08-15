@@ -43,10 +43,26 @@ func (m Model) View() tea.View {
 	if m.filePickerMode {
 		screen = overlayOn(screen, m.width, m.height, m.filePickerOverlay())
 	}
+	if m.busy || m.pulseOn {
+		screen = m.withThinkingFrame(screen)
+	}
 	v := tea.NewView(screen)
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
 	return v
+}
+
+func (m Model) withThinkingFrame(screen string) string {
+	glow := lipgloss.NewStyle().Foreground(theme.PulseAccent(m.pulseT())).Bold(true)
+	w := max(minPaneWidth, m.width)
+	lines := strings.Split(screen, "\n")
+	inner := max(1, w-2)
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		padded := padDisplay(line, inner)
+		out = append(out, glow.Render("[")+padded+glow.Render("]"))
+	}
+	return strings.Join(out, "\n")
 }
 
 func (m Model) chatScreen() string {
@@ -55,10 +71,12 @@ func (m Model) chatScreen() string {
 	b.WriteString("\n")
 	b.WriteString(m.transcriptView())
 	b.WriteString("\n")
-	b.WriteString(m.statusLine())
-	b.WriteString("\n")
 	if m.slashMode {
 		b.WriteString(m.slashView())
+		b.WriteString("\n")
+	}
+	if m.err != "" {
+		b.WriteString(errStyle.Width(max(minPaneWidth, m.width)).Render(m.err))
 		b.WriteString("\n")
 	}
 	b.WriteString(m.promptLine())
@@ -129,21 +147,62 @@ func (m Model) quitScreen() string {
 // a dark background with bright text so the input stays clearly readable.
 // A bottom margin lifts it one row above the bottom edge.
 func (m Model) promptLine() string {
+	innerW := max(minPaneWidth, m.width-2)
 	p := m.prompt
 	p.SetHeight(m.promptHeight())
-	p.SetWidth(max(minPaneWidth, m.width-2))
+	p.SetWidth(max(minPaneWidth, innerW-2))
+	body := lipgloss.JoinVertical(lipgloss.Left, p.View(), m.composerFooter(innerW-2))
+	border := theme.ColorBorder()
+	if m.busy || m.pulseOn {
+		border = theme.PulseAccent(m.pulseT())
+	}
 	return lipgloss.NewStyle().
-		Background(lipgloss.Color("#262626")).
-		Padding(0, 1).
-		MarginBottom(1).
-		Width(m.width).
-		Render(p.View())
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(border).
+		Background(theme.ColorSurface()).
+		Width(max(minPaneWidth, m.width)).
+		Render(body)
+}
+
+func (m Model) composerFooter(width int) string {
+	left := m.composerLeft()
+	right := m.modelLabel()
+	if m.copyNotice != "" {
+		left = lipgloss.NewStyle().Foreground(theme.ColorGood()).Bold(true).Render(m.copyNotice)
+	}
+	gap := width - lipgloss.Width(left) - lipgloss.Width(right)
+	if gap < 1 {
+		gap = 1
+		right = truncateRunes(right, max(4, width-lipgloss.Width(left)-1))
+	}
+	return left + strings.Repeat(" ", gap) + hintStyle.Render(right)
+}
+
+func (m Model) composerLeft() string {
+	switch {
+	case m.err != "":
+		return errStyle.Render("error")
+	case m.busy:
+		busy := "thinking"
+		if tool := m.currentToolName(); tool != "" {
+			busy = "run  " + tool
+		}
+		return busyStyle.Render(busy)
+	default:
+		if _, ok := m.selectedHistoryItem(); ok {
+			return hintStyle.Render("history: ↑/↓ previous/next")
+		}
+		return hintStyle.Render("enter send")
+	}
 }
 
 func (m Model) transcriptRenderHeight() int {
-	fixedRows := lipgloss.Height(m.headerView()) + 1 + lipgloss.Height(m.statusLine()) + lipgloss.Height(m.promptLine())
+	fixedRows := lipgloss.Height(m.headerView()) + 1 + lipgloss.Height(m.promptLine())
 	if m.slashMode {
 		fixedRows += 1 + lipgloss.Height(m.slashView())
+	}
+	if m.err != "" {
+		fixedRows += lipgloss.Height(errStyle.Width(max(minPaneWidth, m.width)).Render(m.err))
 	}
 	return max(minPaneHeight, m.height-fixedRows)
 }
@@ -153,9 +212,9 @@ func (m Model) transcriptView() string {
 	h := m.transcriptRenderHeight()
 	if len(m.items) == 0 {
 		empty := strings.Join([]string{
-			hintStyle.Render("lazykoder is a local OpenCode chat."),
-			hintStyle.Render("try: list the files in this project"),
-			hintStyle.Render("type / for commands"),
+			lipgloss.NewStyle().Foreground(theme.ColorText()).Bold(true).Render("new run"),
+			hintStyle.Render("ask anything about this project"),
+			hintStyle.Render("/ commands   @ files   ctrl+s history"),
 		}, "\n")
 		return lipgloss.NewStyle().Width(max(minPaneWidth, m.width)).Height(h).Render(empty)
 	}
@@ -166,7 +225,16 @@ func (m Model) transcriptView() string {
 		vp.GotoBottom()
 	}
 	width := vp.Width()
-	return withScrollbar(vp.View(), width, h, vp.ScrollPercent(), vp.TotalLineCount() > h)
+	body := withScrollbar(vp.View(), width, h, vp.ScrollPercent(), vp.TotalLineCount() > h)
+	if !m.busy && !m.pulseOn {
+		return body
+	}
+	bar := lipgloss.NewStyle().Foreground(theme.PulseAccent(m.pulseT())).Bold(true).Render("│")
+	rows := strings.Split(body, "\n")
+	for i, row := range rows {
+		rows[i] = bar + row
+	}
+	return strings.Join(rows, "\n")
 }
 
 func (m Model) helpOverlay() string {
@@ -192,24 +260,23 @@ func (m Model) helpOverlay() string {
 }
 
 func (m Model) headerView() string {
-	brand := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#ffffff")).Render("lazykoder")
+	brand := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorAccent()).Render("lazykoder")
 	title := m.sessionTitle()
-	model := m.modelLabel()
 	cwd := filepath.Base(m.workdir)
 	if cwd == "" || cwd == "." {
 		cwd = m.workdir
 	}
 	sep := hintStyle.Render("  ·  ")
 	w := max(minPaneWidth, m.width)
-	right := hintStyle.Render(model + "  " + cwd)
+	right := hintStyle.Render(cwd)
 	avail := w - lipgloss.Width(brand) - lipgloss.Width(sep) - lipgloss.Width(right) - lipgloss.Width(sep)
 	if avail < 8 {
 		row1 := truncateRunes(brand+"  "+title, w)
-		row2 := truncateRunes(model+"  "+cwd, w)
+		row2 := truncateRunes(cwd, w)
 		return row1 + "\n" + hintStyle.Render(row2)
 	}
 	title = truncateRunes(title, avail)
-	return brand + sep + title + sep + right
+	return brand + sep + lipgloss.NewStyle().Foreground(theme.ColorText()).Render(title) + sep + right
 }
 
 func (m Model) confirmOverlay() string {
@@ -327,47 +394,18 @@ func splitPaneWidths(total int) (left, right int) {
 	return left, right
 }
 
-func (m Model) statusLine() string {
-	var line string
-	switch {
-	case m.err != "":
-		line = m.wrapStatus(errStyle.Render(m.err))
-	case m.busy:
-		busy := "thinking"
-		if tool := m.currentToolName(); tool != "" {
-			busy = tool
-		}
-		line = m.wrapStatus(busyStyle.Render(busy))
-	default:
-		line = m.wrapStatus(hintStyle.Render(m.modelLabel()))
-		if _, ok := m.selectedHistoryItem(); ok {
-			line += "\n" + hintStyle.Render("history: ↑/↓ previous/next  •  c copy  •  d delete")
-		}
-		if m.transcript.TotalLineCount() > m.transcript.Height() {
-			line += "\n" + hintStyle.Render("scroll: ↑/↓, page up/down or mouse wheel")
-		}
-	}
-	if m.copyNotice == "" {
-		return line
-	}
-	notice := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("10")).
-		Bold(true).
-		Width(m.width).
-		Align(lipgloss.Right).
-		Render(m.copyNotice)
-	return line + "\n" + notice
-}
-
 func (m Model) modelStatusRect() (left, top, right, bottom int, ok bool) {
-	if m.busy || m.err != "" || m.pickerMode || m.slashMode {
+	if m.busy || m.err != "" || m.pickerMode || m.slashMode || m.sessionPickerMode {
 		return 0, 0, 0, 0, false
 	}
 	label := m.modelLabel()
-	statusTop := lipgloss.Height(m.headerView()) + 1 + m.transcriptRenderHeight()
-	return 0, statusTop, min(m.width, lipgloss.Width(label)), statusTop + 1, true
-}
-
-func (m Model) wrapStatus(status string) string {
-	return lipgloss.NewStyle().Width(max(minPaneWidth, m.width)).Render(status)
+	top = lipgloss.Height(m.headerView()) + 1 + m.transcriptRenderHeight() + 1
+	if m.slashMode {
+		top += 1 + lipgloss.Height(m.slashView())
+	}
+	// Footer sits inside the composer: top border + prompt rows.
+	top += 1 + m.promptHeight()
+	right = m.width - 1
+	left = max(0, right-lipgloss.Width(label))
+	return left, top, right, top + 1, true
 }
