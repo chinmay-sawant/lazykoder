@@ -872,13 +872,13 @@ func (m Model) updatePickerKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 	case 'j', tea.KeyDown:
 		if m.pickerCursor < len(m.pickerItems)-1 {
 			m.pickerCursor++
-			m.pickerVp.EnsureVisible(m.pickerCursor, 0, 1)
+			m = m.refreshPickerCursor()
 		}
 		return m, nil
 	case 'k', tea.KeyUp:
 		if m.pickerCursor > 0 {
 			m.pickerCursor--
-			m.pickerVp.EnsureVisible(m.pickerCursor, 0, 1)
+			m = m.refreshPickerCursor()
 		}
 		return m, nil
 	case tea.KeyPgDown:
@@ -895,6 +895,12 @@ func (m Model) closePicker() Model {
 	m.pickerMode = false
 	m.pickerFiltering = false
 	m.dragOn = false
+	return m
+}
+
+func (m Model) refreshPickerCursor() Model {
+	m.pickerVp.SetContent(m.pickerContent(m.pickerVp.Width()))
+	m.pickerVp.EnsureVisible(m.pickerCursor, 0, 1)
 	return m
 }
 

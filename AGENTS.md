@@ -166,6 +166,25 @@ Module: `github.com/chinmay-sawant/lazykoder` (renamed from `lazykoder` on 2026-
 - Do not re-invent bubbletea idioms: use `bubbles` (list, table, textinput)
   rather than hand-rolling widgets, and follow charmbracelet conventions.
 
+## Code structure (this repo)
+
+- **File size hard limit:** no Go file may grow past ~2,000 lines. The
+  absolute maximum is 2,500 lines and needs a written reason. The largest
+  file today is `internal/ui/chat/chat.go` (~1,280 lines) - do not let it
+  (or anything else) cross 2,000.
+- **Split module-wise, not length-wise:** divide code by responsibility
+  (each package, view, store, or tool gets its own focused file), not by
+  "cut the file here" chunks. When a file approaches the limit, extract a
+  cohesive piece into a new file in the same package (e.g. `views.go`,
+  `keys.go`, `messages.go`) rather than appending.
+- **Use abstractions properly:** introduce interfaces at real seams
+  (storage, provider, runners, renderers), keep constructors small, and
+  prefer composition over fat structs. Abstractions exist to make the
+  module testable and navigable - one purpose per abstraction, no
+  speculative generality.
+- Verify with `go build ./...` + tests after any file split; do not
+  reorder or rename code during a split (see lint whack-a-mole rule).
+
 ## Skills (this folder)
 
 - `skills/grok/`, `skills/opencode/`, `skills/agy/` — the audit-ledgers
