@@ -13,9 +13,30 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/ui/markdown"
 )
 
-func renderUserLine(text string) string {
-	return userStyle.Render("user: " + text)
+type itemKind int
+
+const (
+	itemUser itemKind = iota
+	itemAssistant
+	itemReasoning
+	itemTool
+	itemNote
+)
+
+type transcriptItem struct {
+	kind      itemKind
+	text      string
+	collapsed bool
+	tool      db.ToolCall
+	part      db.Part
 }
+
+const (
+	roleYou       = "you"
+	roleAssistant = "assistant"
+	thinkingLabel = "thinking"
+	maxToolTitle  = 72
+)
 
 func (m *Model) replay(sessionID string) {
 	ctx := context.Background()
@@ -48,14 +69,14 @@ func (m *Model) replay(sessionID string) {
 				if p.Text != nil {
 					if msg.Role == "user" {
 						m.inputHistory = append(m.inputHistory, inputHistoryItem{messageID: msg.ID, text: *p.Text})
-						m.lines = append(m.lines, renderUserLine(*p.Text))
+						m.items = append(m.items, transcriptItem{kind: itemUser, text: *p.Text})
 					} else {
-						m.lines = append(m.lines, renderAssistantLine(*p.Text))
+						m.items = append(m.items, transcriptItem{kind: itemAssistant, text: *p.Text})
 					}
 				}
 			case "reasoning":
 				if p.Text != nil {
-					m.lines = append(m.lines, renderReasoningLine(*p.Text))
+					m.items = append(m.items, transcriptItem{kind: itemReasoning, text: *p.Text, collapsed: true})
 				}
 			case "tool":
 				tool := db.ToolCall{PartID: p.ID}
@@ -70,7 +91,7 @@ func (m *Model) replay(sessionID string) {
 						tool.Status = *p.ToolStatus
 					}
 				}
-				m.lines = append(m.lines, m.renderTool(agent.Event{Part: p, Tool: tool}))
+				m.items = append(m.items, transcriptItem{kind: itemTool, collapsed: true, tool: tool, part: p})
 			}
 		}
 	}
@@ -89,7 +110,7 @@ func (m *Model) syncTranscript() {
 }
 
 func (m Model) transcriptContent() string {
-	content := strings.Join(m.lines, "\n")
+	content := strings.Join(m.renderedItems(), "\n")
 	if !m.selection.active || !m.selection.hasRange() {
 		return content
 	}
@@ -111,8 +132,16 @@ func (m Model) transcriptContent() string {
 	return strings.Join(rows, "\n")
 }
 
+func (m Model) renderedItems() []string {
+	out := make([]string, 0, len(m.items))
+	for i, it := range m.items {
+		out = append(out, m.renderItem(it, i == m.selectedItem))
+	}
+	return out
+}
+
 func (m Model) plainTranscriptRows() []string {
-	content := ansi.Strip(strings.Join(m.lines, "\n"))
+	content := ansi.Strip(strings.Join(m.renderedItems(), "\n"))
 	return strings.Split(content, "\n")
 }
 
@@ -126,25 +155,13 @@ func (m *Model) applyPart(p db.Part) {
 			m.pendingUser = ""
 			return
 		}
-		m.lines = append(m.lines, renderAssistantLine(*p.Text))
+		m.items = append(m.items, transcriptItem{kind: itemAssistant, text: *p.Text})
 	case "reasoning":
 		if p.Text != nil {
-			m.lines = append(m.lines, renderReasoningLine(*p.Text))
+			m.items = append(m.items, transcriptItem{kind: itemReasoning, text: *p.Text, collapsed: true})
 		}
 	}
 	m.syncTranscript()
-}
-
-func renderReasoningLine(text string) string {
-	return reasoningStyle.Render("reasoning: " + text)
-}
-
-func renderAssistantLine(text string) string {
-	rendered := markdown.Render(text)
-	if strings.Contains(rendered, "\n") {
-		return "assistant:\n" + rendered
-	}
-	return "assistant: " + rendered
 }
 
 func (m *Model) applyTool(ev agent.Event) {
@@ -159,19 +176,57 @@ func (m *Model) applyTool(ev agent.Event) {
 		status = *ev.Part.ToolStatus
 		ev.Tool.Status = status
 	}
+	if status == "" {
+		status = "pending"
+		ev.Tool.Status = status
+	}
+	item := transcriptItem{kind: itemTool, collapsed: true, tool: ev.Tool, part: ev.Part}
 	if status == "" || status == "pending" {
-		m.lines = append(m.lines, m.renderTool(ev))
-		m.lastTool = len(m.lines) - 1
+		m.items = append(m.items, item)
+		m.lastTool = len(m.items) - 1
+		m.selectedItem = m.lastTool
 		m.syncTranscript()
 		return
 	}
-	if m.lastTool >= 0 && m.lastTool < len(m.lines) {
-		m.lines[m.lastTool] = m.renderTool(ev)
+	if m.lastTool >= 0 && m.lastTool < len(m.items) && m.items[m.lastTool].kind == itemTool {
+		item.collapsed = m.items[m.lastTool].collapsed
+		m.items[m.lastTool] = item
+	} else {
+		m.items = append(m.items, item)
+		m.lastTool = len(m.items) - 1
 	}
 	m.syncTranscript()
 }
 
-func (m Model) renderTool(ev agent.Event) string {
+func (m Model) renderItem(it transcriptItem, selected bool) string {
+	switch it.kind {
+	case itemUser:
+		return roleStyle.Render(roleYou) + "\n" + userStyle.Render(it.text)
+	case itemAssistant:
+		rendered := markdown.Render(it.text)
+		return roleStyle.Render(roleAssistant) + "\n" + rendered
+	case itemReasoning:
+		marker := "▸"
+		if !it.collapsed {
+			marker = "▾"
+		}
+		head := reasoningStyle.Render(marker + " " + thinkingLabel)
+		if it.collapsed {
+			return head
+		}
+		return head + "\n" + reasoningStyle.Render(it.text)
+	case itemTool:
+		return m.renderTool(agent.Event{Part: it.part, Tool: it.tool}, it.collapsed)
+	case itemNote:
+		return hintStyle.Render(it.text)
+	}
+	if selected {
+		return it.text
+	}
+	return it.text
+}
+
+func (m Model) renderTool(ev agent.Event, collapsed bool) string {
 	name := ev.Tool.Tool
 	if name == "" && ev.Part.ToolName != nil {
 		name = *ev.Part.ToolName
@@ -183,20 +238,79 @@ func (m Model) renderTool(ev agent.Event) string {
 	if status == "" {
 		status = "pending"
 	}
-
-	bodyWidth := max(minPaneWidth, m.toolCardWidth()-cardBorder*2)
-	header := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Render(name + ": " + status)
-	body := []string{header}
-	if command := toolCommand(ev.Tool); command != "" {
-		body = append(body, hintStyle.Width(bodyWidth).Render("$ "+command))
+	title := toolCommand(ev.Tool)
+	if title == "" {
+		title = name
 	}
-	if ev.Tool.Output != nil && *ev.Tool.Output != "" {
-		output := strings.TrimSuffix(*ev.Tool.Output, "\n")
-		outputLabel := hintStyle.Width(bodyWidth).Render("output")
-		outputBox := toolOutputStyle.Width(bodyWidth).Render(output)
-		body = append(body, outputLabel, outputBox)
+	title = truncateRunes(title, maxToolTitle)
+	header := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Render(name + "  " + status + "  " + title)
+	if collapsed {
+		return toolCardStyle.Width(m.toolCardWidth()).Render(header)
+	}
+	bodyWidth := max(minPaneWidth, m.toolCardWidth()-cardBorder*2)
+	body := []string{header}
+	switch ev.Tool.Tool {
+	case "edit":
+		if diff := toolMetadataDiff(ev.Tool); diff != "" {
+			body = append(body, renderDiff(diff, bodyWidth))
+			break
+		}
+		fallthrough
+	case "write":
+		if ev.Tool.Output != nil && *ev.Tool.Output != "" {
+			preview := *ev.Tool.Output
+			if ev.Tool.Tool == "write" && len([]rune(preview)) > 400 {
+				preview = string([]rune(preview)[:400]) + "…"
+			}
+			body = append(body, toolOutputStyle.Width(bodyWidth).Render(strings.TrimSuffix(preview, "\n")))
+		}
+	default:
+		if command := toolCommand(ev.Tool); command != "" {
+			body = append(body, hintStyle.Width(bodyWidth).Render("$ "+command))
+		}
+		if ev.Tool.Output != nil && *ev.Tool.Output != "" {
+			output := strings.TrimSuffix(*ev.Tool.Output, "\n")
+			outputLabel := hintStyle.Width(bodyWidth).Render("output")
+			outputBox := toolOutputStyle.Width(bodyWidth).Render(output)
+			body = append(body, outputLabel, outputBox)
+		}
 	}
 	return toolCardStyle.Width(m.toolCardWidth()).Render(strings.Join(body, "\n"))
+}
+
+func toolMetadataDiff(tc db.ToolCall) string {
+	if tc.MetadataJSON == nil || *tc.MetadataJSON == "" {
+		return ""
+	}
+	var meta struct {
+		Diff     string `json:"diff"`
+		FileDiff string `json:"filediff"`
+	}
+	if json.Unmarshal([]byte(*tc.MetadataJSON), &meta) != nil {
+		return ""
+	}
+	if meta.Diff != "" {
+		return meta.Diff
+	}
+	return meta.FileDiff
+}
+
+func renderDiff(diff string, width int) string {
+	var b strings.Builder
+	for i, line := range strings.Split(diff, "\n") {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		switch {
+		case strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++"):
+			b.WriteString(diffAddStyle.Render(line))
+		case strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---"):
+			b.WriteString(diffDelStyle.Render(line))
+		default:
+			b.WriteString(hintStyle.Render(line))
+		}
+	}
+	return toolOutputStyle.Width(width).Render(b.String())
 }
 
 func (m Model) toolCardWidth() int {
@@ -212,8 +326,117 @@ func toolCommand(tc db.ToolCall) string {
 			return args.Command
 		}
 	}
+	if tc.Tool == "edit" || tc.Tool == "write" || tc.Tool == "read" {
+		var args struct {
+			FilePath string `json:"filePath"`
+		}
+		if err := json.Unmarshal([]byte(tc.InputJSON), &args); err == nil && args.FilePath != "" {
+			return args.FilePath
+		}
+	}
 	if tc.Title != nil {
 		return *tc.Title
+	}
+	return ""
+}
+
+func truncateRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	if n <= 1 {
+		return s
+	}
+	return string(r[:n-1]) + "…"
+}
+
+func (m Model) toggleSelectedMeta() Model {
+	idx := m.selectedItem
+	if idx < 0 || idx >= len(m.items) {
+		idx = m.lastMetaIndex()
+	}
+	if idx < 0 {
+		return m
+	}
+	it := m.items[idx]
+	if it.kind != itemReasoning && it.kind != itemTool {
+		idx = m.lastMetaIndex()
+		if idx < 0 {
+			return m
+		}
+		it = m.items[idx]
+	}
+	it.collapsed = !it.collapsed
+	m.items[idx] = it
+	m.selectedItem = idx
+	m.syncTranscript()
+	return m
+}
+
+func (m Model) lastMetaIndex() int {
+	for i := len(m.items) - 1; i >= 0; i-- {
+		if m.items[i].kind == itemReasoning || m.items[i].kind == itemTool {
+			return i
+		}
+	}
+	return -1
+}
+
+func (m Model) lastReasoningIndex() int {
+	for i := len(m.items) - 1; i >= 0; i-- {
+		if m.items[i].kind == itemReasoning {
+			return i
+		}
+	}
+	return -1
+}
+
+func (m Model) lastToolIndex() int {
+	for i := len(m.items) - 1; i >= 0; i-- {
+		if m.items[i].kind == itemTool {
+			return i
+		}
+	}
+	return -1
+}
+
+func (m Model) toggleReasoning() Model {
+	idx := m.lastReasoningIndex()
+	if idx < 0 {
+		return m
+	}
+	it := m.items[idx]
+	it.collapsed = !it.collapsed
+	m.items[idx] = it
+	m.selectedItem = idx
+	m.syncTranscript()
+	return m
+}
+
+func (m Model) toggleLastTool() Model {
+	idx := m.lastToolIndex()
+	if idx < 0 {
+		return m
+	}
+	it := m.items[idx]
+	it.collapsed = !it.collapsed
+	m.items[idx] = it
+	m.selectedItem = idx
+	m.lastTool = idx
+	m.syncTranscript()
+	return m
+}
+
+func (m Model) currentToolName() string {
+	idx := m.lastToolIndex()
+	if idx < 0 {
+		return ""
+	}
+	name := m.items[idx].tool.Tool
+	status := m.items[idx].tool.Status
+	if status == "pending" || status == "running" {
+		return name
 	}
 	return ""
 }

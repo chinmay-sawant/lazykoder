@@ -104,6 +104,11 @@ var schemaMigrations = [][]string{
 	{
 		`ALTER TABLE messages ADD COLUMN visible INTEGER NOT NULL DEFAULT 1`,
 	},
+	{
+		// Sessions created before findings 1.2 stored <project>/.lazykoder
+		// as directory. Strip that suffix so ListSessionsByDir(project) finds them.
+		`UPDATE sessions SET directory = substr(directory, 1, length(directory) - 11) WHERE directory LIKE '%/.lazykoder'`,
+	},
 }
 
 // Migrate runs numbered migrations. schema_migrations records the applied

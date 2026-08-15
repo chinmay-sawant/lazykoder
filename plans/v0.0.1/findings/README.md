@@ -1,7 +1,7 @@
 # v0.0.1 / Findings - TUI and product-feel ledger
 
 > **Parent:** `plans/v0.0.1/README.md` - chat TUI, confirm view, session replay
-> **Status:** planned 2026-08-16 (no rows landed; mark `[x]` only when the gate passes)
+> **Status:** implemented 2026-08-16 (all three phases landed; automated gates green, tmux checked)
 > **Estimated effort:** 4-6 days across three phases
 > **Priority:** P0 for phase 1 (the app is unusable as a chat surface); P1 for phases 2-3
 > **Skill:** `skills/phase-wise-checklist/SKILLS.md`
@@ -75,12 +75,12 @@ Confirmed against the running binary and `.lazykoder/lazykoder.db`:
 
 ## Closure gates (whole findings folder)
 
-- [ ] `go test ./... -count=1` passes on a rebuilt tree (record exit code) - pending
-- [ ] `go vet ./...` passes - pending
-- [ ] Typing `question` in the prompt does not quit the app - pending (chat test + tmux)
-- [ ] Restart in the project root replays the latest session for that project, not an empty pane - pending
-- [ ] Tool cards appear while a turn is in flight, not only after `EventDone` - pending
-- [ ] Full-screen render at 120x36 and 80x24: no clipped `/help`, no wrapped hint novel, no slash description colliding with the next row - pending (tmux capture)
-- [ ] `docs/tui.md` matches the new keys and layout - pending
+- [x] `go test ./... -count=1` passes on a rebuilt tree - exit 0, 2026-08-16
+- [x] `go vet ./...` passes - exit 0, 2026-08-16
+- [x] Typing `question` in the prompt does not quit the app - `TestQTypesInPrompt` + tmux 2026-08-16
+- [x] Restart in the project root replays the latest session for that project - tmux 2026-08-16, title `say hello world in the golang`
+- [x] Tool cards appear while a turn is in flight - `TestLiveToolCardBeforeTurnEnds`
+- [x] Full-screen render at 120x36 and 80x24: header + compact status, help overlay readable, slash footer, empty state, `@` picker - tmux 2026-08-16
+- [x] `docs/tui.md` matches the new keys and layout
 
-Manual checks (need a live terminal / API key): send a real turn, confirm bash cards appear live, Esc cancels, session picker opens an older session.
+Manual checks recorded in tmux session `lazykoder-ui-qa` (killed after captures). Live API turn / Esc-cancel-on-real-key left to the user in a real terminal.

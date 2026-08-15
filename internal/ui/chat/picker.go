@@ -32,8 +32,6 @@ func (m Model) pickerView() string {
 		lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Render("MODEL"),
 		hintStyle.Render("Selected"),
 		current,
-		"",
-		hintStyle.Render("Choose the model used for\nthe next chat turn."),
 	}, "\n"))
 
 	vpH := m.pickerVPHeight()
@@ -206,7 +204,11 @@ func (m Model) closePicker() Model {
 
 func (m Model) refreshPickerCursor() Model {
 	m.pickerVp.SetContent(m.pickerContent(m.pickerVp.Width()))
-	m.pickerVp.EnsureVisible(m.pickerCursor, 0, 1)
+	if m.pickerCursor == 0 {
+		m.pickerVp.GotoTop()
+	} else {
+		m.pickerVp.EnsureVisible(m.pickerCursor, 0, 1)
+	}
 	return m
 }
 
@@ -223,7 +225,11 @@ func (m *Model) applyFilter() {
 	}
 	m.pickerVp.SetHeight(m.pickerVPHeight())
 	m.pickerVp.SetContent(m.pickerContent(m.pickerVp.Width()))
-	m.pickerVp.EnsureVisible(m.pickerCursor, 0, 1)
+	if m.pickerCursor == 0 {
+		m.pickerVp.GotoTop()
+	} else {
+		m.pickerVp.EnsureVisible(m.pickerCursor, 0, 1)
+	}
 }
 
 func (m Model) openPicker() Model {
@@ -247,7 +253,11 @@ func (m Model) openPicker() Model {
 		}
 	}
 	m.pickerVp.SetContent(m.pickerContent(m.pickerVp.Width()))
-	m.pickerVp.EnsureVisible(m.pickerCursor, 0, 1)
+	if m.pickerCursor == 0 {
+		m.pickerVp.GotoTop()
+	} else {
+		m.pickerVp.EnsureVisible(m.pickerCursor, 0, 1)
+	}
 	m.pickerMode = true
 	return m
 }

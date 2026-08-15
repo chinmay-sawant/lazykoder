@@ -52,7 +52,7 @@ func main() {
 	p := tea.NewProgram(chat.New(chat.Options{
 		Store:      env.DB,
 		Client:     client,
-		Workdir:    env.Dir,
+		Workdir:    cwd,
 		Session:    sess,
 		MaxSteps:   defaultMaxSteps,
 		InitialErr: initial,

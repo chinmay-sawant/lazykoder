@@ -85,8 +85,8 @@ func TestInputHistoryCopyDeleteAndVisibility(t *testing.T) {
 	if len(m.inputHistory) != 2 || m.inputHistory[0].messageID == "" || m.inputHistory[1].messageID == "" {
 		t.Fatalf("input history missing persisted message IDs: %+v", m.inputHistory)
 	}
-	if m.lines[0] == "user: first prompt" {
-		t.Fatal("user message was not highlighted")
+	if len(m.items) == 0 || m.items[0].text != "first prompt" {
+		t.Fatal("first user message missing from transcript")
 	}
 
 	m = upd(m, tea.KeyPressMsg{Code: tea.KeyUp})
@@ -117,7 +117,7 @@ func TestInputHistoryCopyDeleteAndVisibility(t *testing.T) {
 	if msg := cmd(); msg != nil {
 		t.Fatalf("delete command returned %v", msg)
 	}
-	if strings.Contains(stripANSI(viewText(m)), "user: second prompt") {
+	if strings.Contains(stripANSI(viewText(m)), "second prompt") {
 		t.Fatal("deleted user message remains visible in the transcript")
 	}
 	messages, err := st.ListMessages(context.Background(), sess.ID)
@@ -137,7 +137,7 @@ func TestInputHistoryCopyDeleteAndVisibility(t *testing.T) {
 		t.Fatalf("deleted message %q not found in database", messageID)
 	}
 	replayed := New(Options{Store: st, Client: newClient(fake.srv), Workdir: tmp, Session: &sess})
-	if strings.Contains(stripANSI(viewText(replayed)), "user: second prompt") {
+	if strings.Contains(stripANSI(viewText(replayed)), "second prompt") {
 		t.Fatal("soft-deleted user message returned in the UI replay")
 	}
 }

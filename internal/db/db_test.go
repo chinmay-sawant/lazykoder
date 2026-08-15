@@ -41,8 +41,8 @@ WHERE type = 'table' AND name IN ('sessions', 'messages', 'parts', 'tool_calls',
 	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&n); err != nil {
 		t.Fatalf("count migrations: %v", err)
 	}
-	if n != 2 {
-		t.Fatalf("got %d schema_migrations rows, want 2", n)
+	if n != 3 {
+		t.Fatalf("got %d schema_migrations rows, want 3", n)
 	}
 }
 
@@ -454,5 +454,73 @@ func TestUpdateSessionModel(t *testing.T) {
 	}
 	if sessions[0].TimeUpdated <= sess.TimeUpdated {
 		t.Errorf("time_updated not bumped: %d <= %d", sessions[0].TimeUpdated, sess.TimeUpdated)
+	}
+}
+
+func TestCreateSessionListedByProjectRoot(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	project := "/home/user/proj"
+	sess, err := s.CreateSession(ctx, Session{Title: "root", Directory: project})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	got, err := s.ListSessionsByDir(ctx, project)
+	if err != nil {
+		t.Fatalf("ListSessionsByDir: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != sess.ID {
+		t.Fatalf("listed %+v, want session %s", got, sess.ID)
+	}
+	hidden, err := s.ListSessionsByDir(ctx, project+"/.lazykoder")
+	if err != nil {
+		t.Fatalf("ListSessionsByDir lazykoder: %v", err)
+	}
+	if len(hidden) != 0 {
+		t.Fatalf("project/.lazykoder listed %d sessions, want 0", len(hidden))
+	}
+	loaded, err := s.GetSession(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if loaded.Directory != project {
+		t.Errorf("GetSession directory = %q, want %q", loaded.Directory, project)
+	}
+}
+
+func TestRepairSessionDirectories(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	project := "/home/user/proj"
+	old := project + "/.lazykoder"
+	if _, err := s.CreateSession(ctx, Session{Title: "old", Directory: old}); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	before, err := s.ListSessionsByDir(ctx, project)
+	if err != nil {
+		t.Fatalf("ListSessionsByDir before: %v", err)
+	}
+	if len(before) != 0 {
+		t.Fatalf("project listed %d sessions before repair, want 0", len(before))
+	}
+	if err := s.RepairSessionDirectories(ctx); err != nil {
+		t.Fatalf("RepairSessionDirectories: %v", err)
+	}
+	after, err := s.ListSessionsByDir(ctx, project)
+	if err != nil {
+		t.Fatalf("ListSessionsByDir after: %v", err)
+	}
+	if len(after) != 1 || after[0].Title != "old" || after[0].Directory != project {
+		t.Fatalf("repaired sessions = %+v, want title old dir %s", after, project)
+	}
+	if err := s.RepairSessionDirectories(ctx); err != nil {
+		t.Fatalf("second RepairSessionDirectories: %v", err)
+	}
+	again, err := s.ListSessionsByDir(ctx, project)
+	if err != nil {
+		t.Fatalf("ListSessionsByDir after second repair: %v", err)
+	}
+	if len(again) != 1 || again[0].Directory != project {
+		t.Fatalf("second repair changed rows: %+v", again)
 	}
 }

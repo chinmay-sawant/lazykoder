@@ -47,9 +47,9 @@ Real execution: simple single-program commands run via parsed argv; commands
 with shell metacharacters fall back to `sh -c`. Context cancellation kills
 the process.
 
-## Confirm view
+## Confirm overlay
 
-The only confirm design in the app is the y/n delete layout:
+Destructive bash (`rm` class) opens a centered y/n card over the dimmed chat:
 
 ```
 Delete <subject> (<qualifier>)?
@@ -64,8 +64,8 @@ y confirm  •  n cancel
 - Keys never leak to the prompt or transcript while the modal is up.
 
 Subject mapping: for bash the subject is the command and the qualifier is
-`rm` or `rm -rf` (Destructive). For the question tool the subject is the
-question text and the qualifier is the optional header.
+`rm` or `rm -rf` (Destructive). The question tool uses a separate option
+list overlay, not this y/n card.
 
 ## Denied calls
 

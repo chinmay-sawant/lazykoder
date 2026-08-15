@@ -4,12 +4,14 @@ package confirm
 import (
 	"charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+
+	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
 
 var (
-	errStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
-	focusStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("212")).Bold(true)
-	hintStyle  = lipgloss.NewStyle().Faint(true)
+	errStyle   = lipgloss.NewStyle().Foreground(theme.ColorDanger())
+	focusStyle = lipgloss.NewStyle().Foreground(theme.ColorAccent()).Bold(true)
+	hintStyle  = lipgloss.NewStyle().Foreground(theme.ColorMute())
 )
 
 // Model is a full-view confirm (not an overlay).

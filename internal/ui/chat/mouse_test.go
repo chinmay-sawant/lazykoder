@@ -12,7 +12,7 @@ func TestMouseWheelScrollsTranscript(t *testing.T) {
 	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
 	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
 	for i := 0; i < 60; i++ {
-		m.lines = append(m.lines, fmt.Sprintf("line %02d", i))
+		m.items = append(m.items, transcriptItem{kind: itemNote, text: fmt.Sprintf("line %02d", i)})
 	}
 	m.syncTranscript()
 	if !m.transcript.AtBottom() {
@@ -33,7 +33,10 @@ func TestMouseWheelScrollsTranscript(t *testing.T) {
 func TestTranscriptDragSelectsAndCopiesText(t *testing.T) {
 	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
 	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
-	m.lines = append(m.lines, "first message", "second message")
+	m.items = append(m.items,
+		transcriptItem{kind: itemNote, text: "first message"},
+		transcriptItem{kind: itemNote, text: "second message"},
+	)
 	m.syncTranscript()
 
 	mm, _ := m.Update(tea.MouseClickMsg(tea.Mouse{
@@ -77,7 +80,7 @@ func TestScrollbarClickJumpAndDrag(t *testing.T) {
 	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
 	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
 	for i := 0; i < 80; i++ {
-		m.lines = append(m.lines, fmt.Sprintf("line %02d", i))
+		m.items = append(m.items, transcriptItem{kind: itemNote, text: fmt.Sprintf("line %02d", i)})
 	}
 	m.syncTranscript()
 	if !m.transcript.AtBottom() {

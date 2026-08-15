@@ -1,17 +1,26 @@
 # TUI
 
-The interface is a Bubble Tea v2 program (alt screen) with three full views:
-chat, confirm, and the model picker.
+The interface is a Bubble Tea v2 program (alt screen). The chat screen stays
+visible under confirm, ask, slash, and help overlays. The model and session
+pickers are centered cards.
 
 ## Chat view
 
-- Transcript: user and assistant text lines. Reasoning shows the stored text.
-  Tool calls render as dark cards with the command or title, status, and
-  captured response, for example `bash: completed` with its output below it.
-- Prompt: a `textinput` line. Enter sends, empty sends are ignored; while a
-  turn is in flight the prompt ignores Enter.
-- Status line (idle): current model, hint line with keys, and the model-list
-  health line (`models: N available`, or a red error).
+- Header: `lazykoder`, the session title (or `new session`), model, and
+  project directory basename.
+- Transcript: user turns labeled `you`, assistant turns labeled `assistant`,
+  with Markdown. Reasoning starts collapsed as `▸ thinking`; `t` expands it
+  when the prompt is empty. Tool cards start collapsed (`tool  status  title`);
+  `e` expands the last tool card to show command and output.
+- Prompt: a multiline `textarea`. Enter sends, shift+enter inserts a newline,
+  empty sends are ignored. `q` is a letter. Quit is `ctrl+c` twice.
+- Status line (idle): the current model id (click to switch). Busy shows
+  `thinking` or the in-flight tool name. Errors stay red.
+- Session picker: `/sessions` or `ctrl+s` lists sessions for the project
+  directory (newest first). Enter loads one; esc keeps the current session.
+- Empty session: a short hint in the transcript, not a blank pane.
+- `/help` or `?` (empty prompt) opens a key overlay. `esc` closes it.
+- `@` in the prompt opens a project file picker. Enter inserts `@path`.
 - Dragging across transcript rows selects and copies the range on mouse
   release; a temporary `text copied` notice appears above the prompt. Clicks
   on the model status and scrollbar keep their existing navigation behavior.
@@ -22,20 +31,27 @@ chat, confirm, and the model picker.
 | Key | Action |
 | --- | --- |
 | `enter` | send the prompt |
-| `m` | open the model picker (idle only) |
-| `q` | quit |
-| `ctrl+c` | quit |
+| `shift+enter` | insert a newline |
+| `q` | type the letter `q` (the prompt is focused) |
+| `esc` | cancel an in-flight turn; when idle, twice clears the prompt |
+| `t` | expand or collapse reasoning (empty prompt) |
+| `e` | expand or collapse the last tool card (empty prompt) |
+| `ctrl+s` | open the session picker (idle only) |
+| `/sessions` | same as `ctrl+s` |
+| click model | open the model picker |
+| `ctrl+c` | two-step quit (press twice) |
 
 Busy turns, provider errors and the missing-key message render as red status
 text; the user text stays in the transcript.
 
-## Confirm view
+## Confirm overlay
 
-Full-screen switch (the y/n delete layout):
+A centered card over the dimmed chat (the y/n delete layout). The transcript
+stays underneath.
 
 ```
 Delete <subject> (<qualifier>)?
- 
+
 y confirm  •  n cancel
 ```
 
@@ -46,7 +62,13 @@ y confirm  •  n cancel
 | `ctrl+c` | quit the app, never confirm |
 | any other key | ignored |
 
-While this view is up, no keys leak to the prompt or transcript.
+While this overlay is up, no keys leak to the prompt or transcript.
+
+## Question overlay
+
+The `question` tool opens an option list over the chat: the question text,
+optional header, then numbered options. `j`/`k` or arrows move, `1`-`9` or
+enter selects, `esc` cancels.
 
 ## Model picker
 
@@ -56,10 +78,9 @@ the right pane contains the fetched model list. Navigation: `j`/`k` or arrows;
 `enter` selects, `esc`/`q` cancels. `/` enters model filtering and `r` refreshes
 the model list.
 
-Typing `/` in the chat prompt opens a command popover above the prompt. The
-popover keeps the active slash query in an input-like row and shows the
-highlighted command description beside the command list. `↑`/`↓` select a
-command, `enter` runs it, and `esc` closes the popover.
+Typing `/` in the chat prompt opens a compact command popover above the
+prompt. One column of matching commands, selected description on the footer
+line. `↑`/`↓` select, `enter` runs, `esc` closes and leaves `/` in the prompt.
 
 Selecting a model:
 

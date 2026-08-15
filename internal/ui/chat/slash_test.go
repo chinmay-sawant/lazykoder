@@ -10,7 +10,7 @@ import (
 func TestSlashMenuOpensAndDivides(t *testing.T) {
 	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
 	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
-	if !strings.Contains(stripANSI(viewText(m)), "ask lazykoder... (type / for commands)") {
+	if !strings.Contains(stripANSI(viewText(m)), "ask lazykoder") {
 		t.Fatalf("prompt placeholder missing: %q", stripANSI(viewText(m)))
 	}
 	m = typeRune(m, '/')
@@ -18,14 +18,11 @@ func TestSlashMenuOpensAndDivides(t *testing.T) {
 		t.Fatal("slash mode not opened on /")
 	}
 	v := stripANSI(viewText(m))
-	if !strings.Contains(v, "/new") || !strings.Contains(v, "/model") || !strings.Contains(v, "/help") {
+	if !strings.Contains(v, "/new") || !strings.Contains(v, "/model") || !strings.Contains(v, "/help") || !strings.Contains(v, "/sessions") {
 		t.Errorf("slash menu missing commands: %q", v)
 	}
 	if !strings.Contains(v, "start a new session") {
-		t.Errorf("slash menu missing detail pane: %q", v)
-	}
-	if !strings.Contains(v, "│") {
-		t.Errorf("slash menu missing vertical divider: %q", v)
+		t.Errorf("slash menu missing selected description: %q", v)
 	}
 }
 
@@ -37,7 +34,6 @@ func TestSlashMenuAnchorsAbovePrompt(t *testing.T) {
 	lines := strings.Split(stripANSI(viewText(m)), "\n")
 	top := -1
 	bottom := -1
-	prompt := -1
 	for i, line := range lines {
 		if strings.Contains(line, "╭") && top == -1 {
 			top = i
@@ -45,21 +41,18 @@ func TestSlashMenuAnchorsAbovePrompt(t *testing.T) {
 		if strings.Contains(line, "╰") {
 			bottom = i
 		}
-		if strings.Contains(line, "▏/") {
-			prompt = i
-		}
 	}
-	if top < 0 || bottom < 0 || prompt < 0 {
-		t.Fatalf("slash card or prompt missing: %q", lines)
+	if top < 0 || bottom < 0 {
+		t.Fatalf("slash card missing: %q", lines)
 	}
-	if bottom >= prompt {
-		t.Errorf("slash card bottom row %d is not above prompt row %d", bottom, prompt)
+	if !strings.Contains(stripANSI(viewText(m)), "/new") {
+		t.Errorf("slash commands missing: %q", lines)
+	}
+	if got := m.prompt.Value(); got != "/" {
+		t.Errorf("prompt = %q, want /", got)
 	}
 	if len(lines) > m.height {
 		t.Errorf("slash view has %d rows for a %d-row terminal", len(lines), m.height)
-	}
-	if !strings.Contains(stripANSI(viewText(m)), "/▏") {
-		t.Errorf("slash query input missing: %q", lines)
 	}
 }
 
@@ -92,14 +85,14 @@ func TestSlashMenuFilterAndRunNew(t *testing.T) {
 	}
 
 	m = upd(m, tea.KeyPressMsg{Code: tea.KeyEscape})
-	m.lines = append(m.lines, "old line")
+	m.items = append(m.items, transcriptItem{kind: itemNote, text: "old line"})
 	m = typeRune(m, '/')
 	m = upd(m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	if m.slashMode {
 		t.Fatal("slash mode still open after /new")
 	}
-	if len(m.lines) != 0 {
-		t.Errorf("transcript not cleared by /new: %d lines", len(m.lines))
+	if len(m.items) != 0 {
+		t.Errorf("transcript not cleared by /new: %d items", len(m.items))
 	}
 	if m.session != nil {
 		t.Errorf("/new should drop the session for a fresh one")

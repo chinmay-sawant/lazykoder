@@ -90,6 +90,7 @@ type fakeProvider struct {
 	responses []string
 	requests  int
 	modelList []string
+	delay     time.Duration
 	srv       *httptest.Server
 }
 
@@ -119,7 +120,11 @@ func newFakeProvider(t *testing.T, status int, responses ...string) *fakeProvide
 		if idx < len(responses) {
 			resp = responses[idx]
 		}
+		delay := f.delay
 		f.mu.Unlock()
+		if delay > 0 {
+			time.Sleep(delay)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		if status != 0 {
 			w.WriteHeader(status)
@@ -191,12 +196,18 @@ func (p *pump) runStep(m Model, msg tea.Msg) Model {
 	return mm.(Model)
 }
 
+func (p *pump) apply(m Model, msg tea.Msg) Model {
+	mm, cmd := m.Update(msg)
+	p.run(cmd)
+	return mm.(Model)
+}
+
 func (p *pump) drainUntil(m Model, want string) Model {
 	for i := 0; i < 300; i++ {
 		if strings.Contains(stripANSI(viewText(m)), want) {
 			return m
 		}
-		m = upd(m, p.next())
+		m = p.apply(m, p.next())
 	}
 	p.t.Fatalf("never saw %q in view", want)
 	return m
@@ -204,10 +215,10 @@ func (p *pump) drainUntil(m Model, want string) Model {
 
 func (p *pump) drainIdle(m Model) Model {
 	for i := 0; i < 300; i++ {
-		if !strings.Contains(stripANSI(viewText(m)), "sending...") {
+		if !m.busy && !strings.Contains(stripANSI(viewText(m)), "sending...") {
 			return m
 		}
-		m = upd(m, p.next())
+		m = p.apply(m, p.next())
 	}
 	p.t.Fatalf("model still busy after draining")
 	return m

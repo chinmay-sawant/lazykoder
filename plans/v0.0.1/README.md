@@ -58,7 +58,7 @@ internal/ui/chat                # transcript, prompt, streaming status
 internal/ui/confirm             # y/n confirm view (rm + sub-agents)
 ```
 
-Side effects live in `tea.Cmd`. `Update` stays deterministic. Confirm is a dedicated view, not an OS dialog.
+Side effects live in `tea.Cmd`. `Update` stays deterministic. Confirm is an overlay card on the chat, not an OS dialog.
 
 ### Launch sequence
 
@@ -253,7 +253,7 @@ y confirm  •  n cancel
 - Line 1: error color for `Delete ` and the trailing qualifier/`?`; focused/bold color for the subject
 - Blank line
 - Hint line in muted color: `y confirm  •  n cancel`
-- Full view switch (like `viewDelete`). Keys do not leak to the list, chat prompt, or transcript
+- Overlay card on the dimmed chat. Keys do not leak to the list, chat prompt, or transcript
 - `y` / `Y` = confirm once
 - `n` / `N` / `esc` / `q` = cancel
 - `ctrl+c` = quit the app, never confirm

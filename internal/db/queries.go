@@ -233,6 +233,35 @@ func (s *Store) UpdateSessionModel(ctx context.Context, sessionID, model string)
 	return nil
 }
 
+// lazykoderDirSuffix is the workspace folder incorrectly stored as
+// sessions.directory before findings 1.2.
+const lazykoderDirSuffix = "/.lazykoder"
+
+// RepairSessionDirectories rewrites session rows whose directory is the
+// .lazykoder workspace folder so they point at the project root. Idempotent.
+func (s *Store) RepairSessionDirectories(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, `
+UPDATE sessions
+SET directory = substr(directory, 1, length(directory) - ?)
+WHERE directory LIKE '%`+lazykoderDirSuffix+`'`, len(lazykoderDirSuffix))
+	if err != nil {
+		return fmt.Errorf("db: repair session directories: %w", err)
+	}
+	return nil
+}
+
+// GetSession returns one session by id.
+func (s *Store) GetSession(ctx context.Context, id string) (Session, error) {
+	var sess Session
+	err := s.db.QueryRowContext(ctx, `SELECT `+sessionColumns+` FROM sessions WHERE id = ?`, id).
+		Scan(&sess.ID, &sess.Title, &sess.Directory, &sess.Provider, &sess.Model,
+			&sess.Variant, &sess.TimeCreated, &sess.TimeUpdated, &sess.Status)
+	if err != nil {
+		return Session{}, fmt.Errorf("db: get session: %w", err)
+	}
+	return sess, nil
+}
+
 // ListSessionsByDir returns the sessions of a directory ordered by
 // time_updated DESC.
 func (s *Store) ListSessionsByDir(ctx context.Context, directory string) ([]Session, error) {

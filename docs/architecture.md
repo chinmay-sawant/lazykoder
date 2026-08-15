@@ -38,7 +38,7 @@ cwd = process working directory
      ensure .gitignore lists .lazykoder/ (append only)
 3. read OPENCODE_API_KEY (fallback OPENCODE_ZEN_API_KEY)
 4. resume latest session for cwd, if any (transcript rebuilt from the store)
-5. tea.NewProgram(chat.New(...))   # alt screen, started via make run
+5. tea.NewProgram(chat.New(...))   # Workdir is the project cwd; env.Dir is .lazykoder for db + models.json
 6. first send creates a session row, a user text part, provider calls,
    then assistant parts
 ```

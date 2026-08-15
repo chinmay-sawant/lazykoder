@@ -1,7 +1,7 @@
 # v0.0.1 / Findings / Phase 2 - Chat chrome
 
 > **Parent:** `plans/v0.0.1/findings/README.md` - evidence items 1, 5, 6, 8
-> **Status:** planned 2026-08-16 (no rows landed; mark `[x]` only when the gate passes)
+> **Status:** implemented 2026-08-16 (gates green)
 > **Estimated effort:** 2-3 days
 > **Priority:** P1 (after findings phase 1; this is the visual product)
 > **Gate:** the chat screen has a header, a compact status row, turn-styled transcript, collapsible tool cards, a multiline prompt, a small slash popover, and confirm as an overlay
@@ -10,107 +10,96 @@
 
 ## Overview
 
-The current view is a data dump of the store: `user:` / `assistant:` / `reasoning:` prefixes, a hint novel, a one-line `textinput`, an 80% slash card, and a full-screen confirm wipe. Replace those surfaces with a designed chat layout. Do not add features from phase 3 (palette sweep, `@` picker, help overlay) here except as needed to keep the screen readable.
+The current view is a data dump of the store: `user:` / `assistant:` / `reasoning:` prefixes, a hint novel, a one-line `textinput`, an 80% slash card, and a full-screen confirm wipe. Replace those surfaces with a designed chat layout.
 
 ## Executive Summary
 
-- Header carries session title, model, and project cwd. The static `lazykoder` word does no work (`TestTitleStatic` will change).
-- Status is one row of facts, not key-binding prose. Hints move to `?` or `/help` (help *overlay* is findings phase 3; this phase only stops dumping hints into the status).
+- Header carries session title, model, and project cwd.
+- Status is one row of facts, not key-binding prose.
 - Transcript is turns, not prefixes. Reasoning starts collapsed. Tool cards start collapsed.
-- Prompt is a `textarea` (Charm bubbles), `enter` sends, `shift+enter` newline.
+- Prompt is a `textarea`. `enter` sends, `shift+enter` newline.
 - Slash is a small popover above the prompt, one command column, no nested borders.
-- Confirm stays y/n deny-by-default but renders as an overlay on the chat. The `question` tool gets a real option list instead of `Delete <question>?`.
-
-This evolves the parent plan's "full view switch" confirm spec. The safety copy and key bindings for `rm` stay.
+- Confirm stays y/n deny-by-default but renders as an overlay. The `question` tool is a real option list.
 
 ## 2.1 Header bar (P1)
 
-- [ ] Replace `titleLine()` (`internal/ui/chat/view.go`) with a one-row (or two-row on narrow) header: session title (or `new session`), current model, and the project cwd basename or shortened path
-- [ ] Header uses the same width as the terminal, no wrapping into the transcript at 80 columns. Truncate the title with an ellipsis before wrapping the bar
-- [ ] `transcriptRenderHeight` / `titleBlockRows` / `chromeLines` updated so the prompt never clips
-- [ ] Test: `View()` contains the session title after replay, not only the word `lazykoder` - update `TestTitleStatic`
-- [ ] Test: at width 80 the header is at most 2 rows and the prompt is still visible - chat view test, exit 0
+- [x] Replace `titleLine()` with `headerView()`: session title (or `new session`), current model, and project cwd basename
+- [x] Header uses the same width as the terminal. Truncate the title; at 80 columns at most 2 rows
+- [x] `transcriptRenderHeight` / chrome height updated so the prompt never clips
+- [x] Test: `View()` contains the session title after replay - `TestTitleStatic`, exit 0
+- [x] Test: at width 80 the header is at most 2 rows and the prompt is still visible - `TestHeaderFitsAt80`, exit 0
 
 ## 2.2 Compact status (P1)
 
-- [ ] Idle status is one row: model id (clickable, existing `modelStatusRect`), optional token/cost placeholder, nothing else. Remove `click model to switch`, `/ commands`, `enter to send`, `q to quit`, `models: N available` from the default idle line
-- [ ] Busy status is one row: `sending` until findings 1.4 lands, then the current tool name or `thinking`. Do not invent a live tps number here; leave a segment hole for [../phase-4-tokens-status-todos.md](../phase-4-tokens-status-todos.md) 4.3
-- [ ] Error status stays red and still one wrapped block, not mixed with hints
-- [ ] Scroll / history hints render only while that mode is active (existing history and overflow branches), still not as a permanent novel
-- [ ] Test: idle `View()` at 80 columns has a single status row that does not contain `enter to send` or `q to quit` - exit 0
-- [ ] Test: click-model still opens the picker (`TestModelPickerOpensOnlyFromModelClick` or successor)
+- [x] Idle status is one row: model id (clickable). Removed `click model to switch`, `/ commands`, `enter to send`, `q to quit`, `models: N available`
+- [x] Busy status is one row: `thinking` or the current tool name. No live tps number (hole for phase 4)
+- [x] Error status stays red
+- [x] Scroll / history hints render only while that mode is active
+- [x] Test: idle `View()` at 80 columns does not contain `enter to send` or `q to quit` - `TestIdleStatusIsOneFactRow`, exit 0
+- [x] Test: click-model still opens the picker - `TestModelPickerOpensOnlyFromModelClick`, exit 0
 
 ## 2.3 Turn layout (P1)
 
-- [ ] Stop prefixing lines with `user:` / `assistant:` / `reasoning:` (`internal/ui/chat/transcript.go` `renderUserLine`, `renderAssistantLine`, `renderReasoningLine`)
-- [ ] User turn: muted role label or right/left treatment plus the text. Assistant turn: role label plus markdown body (existing `internal/ui/markdown`)
-- [ ] Reasoning is collapsed by default (`▸ thinking` or similar). A documented key (e.g. `t` on a selected turn, or click) expands the stored reasoning text. Replay restores collapsed
-- [ ] Step-start / step-finish stay out of the transcript (already omitted). Do not start rendering them
-- [ ] Test: fixture user + assistant + reasoning; `View()` has the texts and does not contain the raw `user:` / `assistant:` / `reasoning:` prefixes - exit 0
-- [ ] Test: reasoning body is absent while collapsed and present after the expand key - exit 0
+- [x] Stopped prefixing lines with `user:` / `assistant:` / `reasoning:` - structured `transcriptItem`s
+- [x] User turn: `you` + text. Assistant turn: `assistant` + markdown
+- [x] Reasoning collapsed by default (`▸ thinking`). `t` (empty prompt) expands. Replay restores collapsed
+- [x] Step-start / step-finish stay out of the transcript
+- [x] Test: fixture user + assistant + reasoning; `View()` has the texts and does not contain raw prefixes - `TestReplayNoNetwork`, exit 0
+- [x] Test: reasoning body is absent while collapsed and present after expand - `TestReasoningToggle`, exit 0
 
 ## 2.4 Collapsible tool cards (P1)
 
-Evidence: current `renderTool` always prints header + `$ command` + full `output`. Real sessions already store 55 bash calls, including heredoc `cat > main.go` titles.
-
-- [ ] Collapsed card is one header row: `tool  status  title-or-command` (truncate the command). No output body
-- [ ] New and in-flight cards start collapsed. Completed cards stay collapsed until expanded (key or click on that card)
-- [ ] Expanded card shows command and output using the existing inner box, still width-clamped
-- [ ] Replay builds collapsed cards from the store
-- [ ] Test: completed bash fixture; default `View()` contains `bash` and `completed` and does not contain the full output body; after expand, output is present - exit 0
-- [ ] Test: `TestBashCommandAndOutputRendered` updated to expand (or to assert the collapsed header plus an explicit expand step)
+- [x] Collapsed card is one header row: `tool  status  title-or-command`
+- [x] New and in-flight cards start collapsed. `e` expands the last tool
+- [x] Expanded card shows command and output
+- [x] Replay builds collapsed cards from the store
+- [x] Test: completed bash fixture; default `View()` has bash/completed and no output body; after expand, output is present - `TestBashCommandAndOutputRendered`, exit 0
 
 ## 2.5 Multiline prompt (P1)
 
-- [ ] Replace `textinput` with Charm `textarea` (already in the bubbles module; no new dependency). `enter` sends, `shift+enter` inserts a newline. Empty / whitespace-only still ignored
-- [ ] Prompt height grows with content up to a small cap (e.g. 6 rows) and then scrolls. `transcriptRenderHeight` shrinks with the prompt
-- [ ] Placeholder is one short line (`ask lazykoder` or similar). Drop `(type / for commands)` from the placeholder; slash still opens on `/`
-- [ ] Existing prompt undo, paste, history up/down, and double-esc clear still work on the textarea
-- [ ] Test: `shift+enter` (or the v2 equivalent) grows the value with a newline and does not submit - exit 0
-- [ ] Test: `enter` on `hello` still submits (`TestEmptyEnterIgnored` and submit tests stay green)
+- [x] Replaced `textinput` with Charm `textarea`. `enter` sends, `shift+enter` inserts a newline
+- [x] Prompt height grows with content up to 6 rows. Transcript shrinks with the prompt
+- [x] Placeholder is `ask lazykoder`
+- [x] Prompt undo, paste, history up/down, and double-esc clear still work
+- [x] Test: `shift+enter` grows the value with a newline and does not submit - `TestShiftEnterDoesNotSubmit`, exit 0
+- [x] Test: `enter` on `hello` still submits - `TestEmptyEnterIgnored` and submit tests green
 
 ## 2.6 Compact slash popover (P1)
 
-Evidence: 80% card, nested input box, description wrap colliding with `/model` at 80x24.
-
-- [ ] Slash menu is a small card anchored above the prompt, width min(60, terminal-4) or similar, not `overlayWidth()` 80%
-- [ ] One column of command names. Selected description is a single footer line under the list, not a right pane that wraps into the next row
-- [ ] No inner bordered input box. The chat prompt remains the query; the card only lists matches
-- [ ] Filter, `↑`/`↓`, `enter`, `esc` behavior stays. `esc` still leaves `/` in the prompt (documented)
-- [ ] Test: `View()` in slash mode at 80 columns has no description text sitting on the `/model` row - exit 0
-- [ ] Test: existing filter + `/new` + escape-leaves-slash tests stay green (`slash_test.go`)
+- [x] Slash menu is a small card (max 60 cols) anchored above the prompt
+- [x] One column of command names. Selected description is a footer line
+- [x] No inner bordered input box
+- [x] Filter, `↑`/`↓`, `enter`, `esc` behavior stays. `esc` still leaves `/`
+- [x] Test: `View()` in slash mode at 80 columns has no description on the `/model` row - `TestSlashDescriptionNotOnNextCommand`, exit 0
+- [x] Test: existing filter + `/new` + escape-leaves-slash tests stay green (`slash_test.go`)
 
 ## 2.7 Confirm overlay and question list (P1)
 
-This changes `plans/v0.0.1/README.md` "full view switch" and `docs/tui.md`. Safety rules do not change.
-
-- [ ] `rm` confirm renders as a centered overlay on top of the dimmed chat, not a full-view replace. Copy stays `Delete <subject> (<qualifier>)?` / `y confirm  •  n cancel`. Keys still isolated (`TestConfirmModeKeyIsolation`)
-- [ ] Default remains deny. `n` / `esc` / `q` (only in this overlay) cancel. `ctrl+c` quits without executing
-- [ ] `question` tool no longer uses `confirm.New(question, header)` as a yes/no `Delete`. New option list: highlight the question, list options, `j`/`k` or numbers, `enter` selects. Fewer than two options still errors as today
-- [ ] Parent README + `docs/tui.md` + `docs/safety.md` updated to say overlay, not full-view wipe. Question flow documented separately from `rm`
-- [ ] Test: confirm allow/deny tests still pass; `View()` during confirm still contains the chat transcript underneath or a dimmed frame, plus the overlay copy - exit 0
-- [ ] Test: `TestAskQuestion` drives a two-option question via the list, not y/n-as-index-0/1 - exit 0
+- [x] `rm` confirm renders as a centered overlay on the dimmed chat. Copy stays `Delete <subject> (<qualifier>)?` / `y confirm  •  n cancel`
+- [x] Default remains deny. `n` / `esc` / `q` (overlay only) cancel. `ctrl+c` quits without executing
+- [x] `question` tool uses an option list: highlight, `j`/`k` or numbers, `enter` selects
+- [x] Parent README + `docs/tui.md` + `docs/safety.md` updated to overlay + separate question flow
+- [x] Test: confirm allow/deny tests still pass; ask overlay keeps the chat underneath - `TestConfirmDeny`, `TestAskQuestion`, exit 0
+- [x] Test: `TestAskQuestion` drives a two-option question via the list, not y/n-as-index-0/1 - exit 0
 
 ## 2.8 Picker wrap and scrollbar (P1, small)
 
-Evidence: left copy wraps `for` alone at 120x36; thumb near bottom while cursor is on the first model.
-
-- [ ] Left rail description uses a width that does not orphan short words. If it cannot fit, drop the paragraph and keep `MODEL` / `Selected` / current id
-- [ ] Scrollbar thumb matches `pickerVp.ScrollPercent()` against the visible cursor. After `openPicker` with cursor on the current model at index 0, thumb is at the top
-- [ ] Test: picker `View()` at 120 width does not contain a lone `for` line - exit 0
-- [ ] Test: existing `TestPickerArrowKeysRefreshSelectionAndScroll` still green; add an assertion that at cursor 0 the thumb row is the first track row
+- [x] Left rail keeps `MODEL` / `Selected` / current id. Dropped the wrapping paragraph
+- [x] After `openPicker` with cursor 0, `GotoTop()` so the thumb is at the top (`ScrollPercent` 0)
+- [x] Test: picker `View()` at 120 width does not contain a lone `for` line - `TestPickerHasNoOrphanFor`, exit 0
+- [x] Test: `TestPickerArrowKeysRefreshSelectionAndScroll` asserts scroll percent 0 at cursor 0 - exit 0
 
 ## Dependencies
 
-- Needs: findings phase 1 (real session title, live tool statuses, `q` not stolen from the prompt)
-- Blocks: findings phase 3 (diffs, palette, help overlay land on these components)
+- Needs: findings phase 1
+- Blocks: findings phase 3
 - Must not: re-plan phase 4 tps/todos. Status leaves a hole
-- New dependencies: none (use `charm.land/bubbles/v2/textarea`)
+- New dependencies: none (`charm.land/bubbles/v2/textarea`)
 
 ## Closure gates
 
-- [ ] `go test ./internal/ui/chat ./internal/ui/confirm -count=1` exit 0 - pending
-- [ ] `go test ./... -count=1` exit 0 - pending
-- [ ] `go vet ./...` exit 0 - pending
-- [ ] tmux 120x36 and 80x24: header + one status row + prompt visible; slash description does not collide; confirm overlay does not wipe the chat - pending
-- [ ] `docs/tui.md` and `docs/safety.md` match overlay confirm + textarea keys - pending
+- [x] `go test ./internal/ui/chat ./internal/ui/confirm -count=1` exit 0 - 2026-08-16
+- [x] `go test ./... -count=1` exit 0 - 2026-08-16
+- [x] `go vet ./...` exit 0 - 2026-08-16
+- [x] tmux 120x36 and 80x24: header + compact status + prompt visible; slash description is a footer; confirm overlay covered by tests - 2026-08-16
+- [x] `docs/tui.md` and `docs/safety.md` match overlay confirm + textarea keys

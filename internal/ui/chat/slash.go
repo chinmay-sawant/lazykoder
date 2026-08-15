@@ -7,44 +7,33 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// slashView renders the slash command menu as a prompt-anchored two-pane card:
-// the query is shown in an input-like row, followed by commands and details.
-func (m Model) slashView() string {
-	cardW := m.overlayWidth()
-	innerW := max(minPaneWidth, cardW-cardBorder)
+const slashCardMaxWidth = 60
 
+// slashView renders a compact command list above the prompt.
+func (m Model) slashView() string {
+	cardW := min(slashCardMaxWidth, max(minPaneWidth, m.width-4))
 	sel := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15"))
 	dim := lipgloss.NewStyle().Faint(true)
-	leftW, rightW := splitPaneWidths(innerW)
-
-	var leftB strings.Builder
+	var body strings.Builder
 	for i, cmd := range m.slashItems {
 		if i > 0 {
-			leftB.WriteString("\n")
+			body.WriteString("\n")
 		}
 		if i == m.slashCursor {
-			leftB.WriteString(sel.Render("▸ " + cmd.name))
+			body.WriteString(sel.Render("▸ " + cmd.name))
 		} else {
-			leftB.WriteString(dim.Render("  " + cmd.name))
+			body.WriteString(dim.Render("  " + cmd.name))
 		}
 	}
-	left := lipgloss.NewStyle().Width(leftW).Render(leftB.String())
-
+	if len(m.slashItems) == 0 {
+		body.WriteString(dim.Render("no matching command"))
+	}
 	detail := "no matching command"
 	if len(m.slashItems) > 0 && m.slashCursor < len(m.slashItems) {
 		detail = m.slashItems[m.slashCursor].description
 	}
-	right := lipgloss.NewStyle().Faint(true).Width(rightW).Render(detail)
-
-	divider := lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" │ ")
-	body := lipgloss.JoinHorizontal(lipgloss.Top, left, divider, right)
-	query := lipgloss.NewStyle().
-		Border(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("8")).
-		Width(max(slashQueryMinWidth, innerW)).
-		Render(m.prompt.Value() + "▏")
-	footer := hintStyle.Width(innerW).Render("↑/↓ select  •  enter run  •  esc close")
-	content := lipgloss.JoinVertical(lipgloss.Left, query, body, footer)
+	footer := hintStyle.Width(cardW - cardBorder).Render(detail)
+	content := lipgloss.JoinVertical(lipgloss.Left, body.String(), footer)
 	card := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("8")).
@@ -78,12 +67,12 @@ func (m Model) updateSlashKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.prompt, cmd = m.prompt.Update(key)
 		return m.syncSlash(m.prompt.Value()), cmd
-	case 'j', tea.KeyDown:
+	case tea.KeyDown:
 		if m.slashCursor < len(m.slashItems)-1 {
 			m.slashCursor++
 		}
 		return m, nil
-	case 'k', tea.KeyUp:
+	case tea.KeyUp:
 		if m.slashCursor > 0 {
 			m.slashCursor--
 		}
@@ -102,25 +91,15 @@ func (m Model) updateSlashKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 func (m Model) runSlash(name string) (Model, tea.Cmd) {
 	switch name {
 	case "/new":
-		m.lines = nil
-		m.lastTool = -1
-		m.session = nil
-		m.pendingUser = ""
-		m.inputHistory = nil
-		m.historyCursor = -1
-		m.historyDraft = ""
-		m.pendingHistoryIndex = -1
-		m.promptUndo = nil
-		m.slashFromPaste = false
-		m.syncTranscript()
+		return m.loadSession(nil), nil
+	case "/sessions":
+		return m.openSessionPicker(), nil
 	case "/model":
 		return m.openPicker(), nil
 	case "/refresh":
 		return m, m.refreshModels
 	case "/help":
-		m.lines = append(m.lines,
-			"help: enter send  •  click model  •  / slash commands  •  ↑/↓ history  •  q quit")
-		m.syncTranscript()
+		m.helpMode = true
 	}
 	return m, nil
 }

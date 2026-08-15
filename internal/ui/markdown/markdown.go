@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+
+	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
 
 const (
@@ -18,28 +20,28 @@ const (
 
 var (
 	headingStyles = []lipgloss.Style{
-		lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")),
-		lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("14")),
-		lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("13")),
+		lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()),
+		lipgloss.NewStyle().Bold(true).Foreground(theme.ColorAccent()),
+		lipgloss.NewStyle().Bold(true).Foreground(theme.ColorMute()),
 	}
 	boldStyle       = lipgloss.NewStyle().Bold(true)
 	italicStyle     = lipgloss.NewStyle().Italic(true)
 	inlineCodeStyle = lipgloss.NewStyle().
-			Background(lipgloss.Color("#262626")).
-			Foreground(lipgloss.Color("#f0f0f0"))
+			Background(theme.ColorSurface()).
+			Foreground(theme.ColorText())
 	codeBlockStyle = lipgloss.NewStyle().
-			Background(lipgloss.Color("#1c1c1c")).
-			Foreground(lipgloss.Color("#d4d4d4")).
+			Background(theme.ColorBg()).
+			Foreground(theme.ColorText()).
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("8")).
+			BorderForeground(theme.ColorBorder()).
 			Padding(0, 1)
 	codeLanguageStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("8")).
+				Foreground(theme.ColorMute()).
 				Bold(true)
 	quoteStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("8")).
+			Foreground(theme.ColorMute()).
 			BorderLeft(true).
-			BorderForeground(lipgloss.Color("8")).
+			BorderForeground(theme.ColorBorder()).
 			PaddingLeft(1)
 )
 

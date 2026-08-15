@@ -38,9 +38,10 @@ func (m Model) updateKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m.syncPromptSlash(), cmd
 	}
 	switch key.Code {
-	case 'q', 'Q':
-		return m.closeDone(), tea.Quit
 	case tea.KeyEscape:
+		if m.busy {
+			return m.cancelTurn(), nil
+		}
 		if m.escapePending {
 			m.prompt.SetValue("")
 			m.escapePending = false
@@ -53,6 +54,12 @@ func (m Model) updateKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.escapePending = true
 		return m, nil
 	case tea.KeyEnter:
+		if key.Mod.Contains(tea.ModShift) {
+			m = m.rememberPrompt()
+			m.prompt.InsertString("\n")
+			m.prompt.SetHeight(m.promptHeight())
+			return m, nil
+		}
 		if m.busy {
 			return m, nil
 		}
@@ -61,6 +68,19 @@ func (m Model) updateKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.submit(text)
+	case '?':
+		if m.prompt.Value() == "" {
+			m.helpMode = true
+			return m, nil
+		}
+	case 't', 'T':
+		if m.prompt.Value() == "" {
+			return m.toggleReasoning(), nil
+		}
+	case 'e', 'E':
+		if m.prompt.Value() == "" {
+			return m.toggleLastTool(), nil
+		}
 	case tea.KeyBackspace:
 		m.historyCursor = -1
 		m.historyDraft = ""
@@ -107,8 +127,19 @@ func (m Model) updateKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 	m.historyCursor = -1
 	m.historyDraft = ""
 	m = m.rememberPrompt()
+	if key.Text == "@" && !m.slashFromPaste {
+		var cmd tea.Cmd
+		m.prompt, cmd = m.prompt.Update(key)
+		m = m.syncPromptSlash()
+		return m.openFilePicker(), cmd
+	}
 	var cmd tea.Cmd
 	m.prompt, cmd = m.prompt.Update(key)
+	if m.filePickerMode && key.Text != "" {
+		m.filePickerFilter += key.Text
+		m.filePickerItems = listProjectFiles(m.workdir, m.filePickerFilter)
+		m.filePickerCursor = 0
+	}
 	return m.syncPromptSlash(), cmd
 }
 
@@ -139,10 +170,15 @@ func (m Model) submit(text string) (Model, tea.Cmd) {
 	m.slashFromPaste = false
 	m.pendingHistoryIndex = len(m.inputHistory)
 	m.inputHistory = append(m.inputHistory, inputHistoryItem{text: text})
-	m.lines = append(m.lines, renderUserLine(text))
+	m.items = append(m.items, transcriptItem{kind: itemUser, text: text})
 	m.syncTranscript()
-	ch := make(chan agent.Event, eventChanBuffer)
-	errCh := make(chan error, 1)
+	m.turnSeq++
+	seq := m.turnSeq
+	ctx, cancel := context.WithCancel(context.Background())
+	m.turnCancel = cancel
+	m.turnCtx = ctx
+	m.eventCh = make(chan agent.Event, eventChanBuffer)
+	m.errCh = make(chan error, 1)
 	ag := agent.New(m.store, m.client, m.workdir, agent.Options{
 		Session:  m.session,
 		MaxSteps: m.maxSteps,
@@ -150,18 +186,43 @@ func (m Model) submit(text string) (Model, tea.Cmd) {
 		Confirm:  m.confirmHook,
 		Ask:      m.askHook,
 	})
+	eventCh, errCh := m.eventCh, m.errCh
 	sendCmd := func() tea.Msg {
-		go func() { errCh <- ag.Send(context.Background(), text, ch) }()
+		go func() { errCh <- ag.Send(ctx, text, eventCh) }()
 		return nil
 	}
-	watchCmd := func() tea.Msg {
-		var evs []agent.Event
-		for ev := range ch {
-			evs = append(evs, ev)
+	return m, tea.Batch(sendCmd, m.watchEvents(seq))
+}
+
+func (m Model) watchEvents(seq int) tea.Cmd {
+	return func() tea.Msg {
+		if m.eventCh == nil {
+			return eventDoneMsg{seq: seq}
 		}
-		return eventBatchMsg{events: evs, err: <-errCh}
+		ev, ok := <-m.eventCh
+		if !ok {
+			var err error
+			if m.errCh != nil {
+				err = <-m.errCh
+			}
+			return eventDoneMsg{seq: seq, err: err}
+		}
+		return eventMsg{seq: seq, ev: ev}
 	}
-	return m, tea.Batch(sendCmd, watchCmd)
+}
+
+func (m Model) cancelTurn() Model {
+	if m.turnCancel != nil {
+		m.turnCancel()
+	}
+	m.turnSeq++
+	m.busy = false
+	m.pendingUser = ""
+	m.err = "cancelled"
+	m.items = append(m.items, transcriptItem{kind: itemNote, text: "cancelled"})
+	m.syncTranscript()
+	m.turnCancel = nil
+	return m
 }
 
 func (m Model) rememberPrompt() Model {
@@ -234,13 +295,16 @@ func (m Model) deleteSelectedHistory() (Model, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
-	for i := len(m.lines) - 1; i >= 0; i-- {
-		if !strings.Contains(m.lines[i], "user: "+item.text) {
+	for i := len(m.items) - 1; i >= 0; i-- {
+		if m.items[i].kind != itemUser || m.items[i].text != item.text {
 			continue
 		}
-		m.lines = append(m.lines[:i], m.lines[i+1:]...)
+		m.items = append(m.items[:i], m.items[i+1:]...)
 		if m.lastTool >= i {
 			m.lastTool--
+		}
+		if m.selectedItem >= i {
+			m.selectedItem--
 		}
 		break
 	}
@@ -291,6 +355,8 @@ func (m Model) confirmHook(dec policy.Decision, subject string) (bool, error) {
 		return ok, nil
 	case <-m.doneCh:
 		return false, nil
+	case <-turnCtxDone(m.turnCtx):
+		return false, nil
 	}
 }
 
@@ -304,10 +370,22 @@ func (m Model) askHook(q question.Question) (int, error) {
 	}
 	select {
 	case idx := <-resp:
+		if idx < 0 || idx >= len(q.Options) {
+			return 0, errors.New("chat: cancelled")
+		}
 		return idx, nil
 	case <-m.doneCh:
 		return 0, errors.New("chat: cancelled")
+	case <-turnCtxDone(m.turnCtx):
+		return 0, errors.New("chat: cancelled")
 	}
+}
+
+func turnCtxDone(ctx context.Context) <-chan struct{} {
+	if ctx == nil {
+		return nil
+	}
+	return ctx.Done()
 }
 
 func (m Model) resolveConfirm(allow bool) Model {

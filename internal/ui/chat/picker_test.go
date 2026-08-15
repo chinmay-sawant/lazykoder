@@ -95,17 +95,11 @@ func TestModelPickerCancel(t *testing.T) {
 	if strings.Contains(v, "esc cancel") {
 		t.Errorf("picker still shown after esc: %q", v)
 	}
-	if !strings.Contains(v, "click model to switch") {
-		t.Errorf("normal view not restored after esc: %q", v)
-	}
 	m = clickModelStatus(t, m)
 	m = upd(m, tea.KeyPressMsg{Code: 'q'})
 	v = stripANSI(viewText(m))
 	if strings.Contains(v, "esc cancel") {
 		t.Errorf("picker still shown after q: %q", v)
-	}
-	if !strings.Contains(v, "click model to switch") {
-		t.Errorf("normal view not restored after q: %q", v)
 	}
 }
 
@@ -245,6 +239,9 @@ func TestPickerArrowKeysRefreshSelectionAndScroll(t *testing.T) {
 	if !strings.Contains(v, "▸ model-00") || strings.Contains(v, "▸ model-01") {
 		t.Fatalf("up did not refresh the visible selection: %q", v)
 	}
+	if p := m.pickerVp.ScrollPercent(); p != 0 {
+		t.Errorf("scroll percent at cursor 0 = %v, want 0", p)
+	}
 
 	for i := 0; i < 12; i++ {
 		m = upd(m, tea.KeyPressMsg{Code: tea.KeyDown})
@@ -323,7 +320,7 @@ func TestModelsLoadedFromCacheSkipsAPI(t *testing.T) {
 	m = p.runStep(m, p.next())
 
 	v := stripANSI(viewText(m))
-	if !strings.Contains(v, "models: 2 available (cached)") {
+	if !strings.Contains(v, "deepseek-v4-flash") {
 		t.Errorf("status missing cached label: %q", v)
 	}
 	if !m.modelsCached {
@@ -344,12 +341,8 @@ func TestModelsCacheRefreshedWhenStale(t *testing.T) {
 	p.run(m.Init())
 	m = p.runStep(m, p.next())
 
-	v := stripANSI(viewText(m))
-	if !strings.Contains(v, "models: 2 available") {
-		t.Errorf("status missing refreshed count: %q", v)
-	}
-	if strings.Contains(v, "(cached)") {
-		t.Errorf("status shows cached label after live refresh: %q", v)
+	if len(m.models) != 2 {
+		t.Errorf("refreshed models = %d, want 2", len(m.models))
 	}
 	if m.modelsCached {
 		t.Error("modelsCached = true, want false after live refresh")
@@ -393,12 +386,8 @@ func TestModelsRefreshKeyReloadsFromAPI(t *testing.T) {
 	p.run(cmd)
 	m = p.runStep(m, p.next())
 
-	v := stripANSI(viewText(m))
-	if !strings.Contains(v, "models: 2 available") {
-		t.Errorf("status missing refreshed count: %q", v)
-	}
-	if strings.Contains(v, "(cached)") {
-		t.Errorf("status shows cached label after manual refresh: %q", v)
+	if len(m.models) != 2 {
+		t.Errorf("refreshed models = %d, want 2", len(m.models))
 	}
 	if m.modelsCached {
 		t.Error("modelsCached = true, want false after manual refresh")

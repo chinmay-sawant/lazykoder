@@ -3,10 +3,12 @@ package chat
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
-	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -18,6 +20,7 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/question"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/confirm"
+	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
 
 const (
@@ -79,23 +82,26 @@ const (
 )
 
 var (
-	errStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
-	busyStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
-	hintStyle      = lipgloss.NewStyle().Faint(true)
-	userStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
-	reasoningStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("5"))
+	errStyle       = lipgloss.NewStyle().Foreground(theme.ColorDanger())
+	busyStyle      = lipgloss.NewStyle().Foreground(theme.ColorAccent())
+	hintStyle      = lipgloss.NewStyle().Foreground(theme.ColorMute())
+	userStyle      = lipgloss.NewStyle().Foreground(theme.ColorAccent())
+	roleStyle      = lipgloss.NewStyle().Foreground(theme.ColorMute()).Bold(true)
+	reasoningStyle = lipgloss.NewStyle().Foreground(theme.ColorMute())
 	toolCardStyle  = lipgloss.NewStyle().
-			Background(lipgloss.Color("#262626")).
+			Background(theme.ColorSurface()).
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("8")).
+			BorderForeground(theme.ColorBorder()).
 			Padding(0, 1)
 	toolOutputStyle = lipgloss.NewStyle().
-			Background(lipgloss.Color("#1c1c1c")).
-			Foreground(lipgloss.Color("#a0a0a0")).
+			Background(theme.ColorBg()).
+			Foreground(theme.ColorMute()).
 			Padding(0, 1)
 	selectionStyle = lipgloss.NewStyle().
-			Background(lipgloss.Color("7")).
-			Foreground(lipgloss.Color("0"))
+			Background(theme.ColorAccent()).
+			Foreground(theme.ColorBg())
+	diffAddStyle = lipgloss.NewStyle().Foreground(theme.ColorGood())
+	diffDelStyle = lipgloss.NewStyle().Foreground(theme.ColorDanger())
 )
 
 // Options configures the chat model.
@@ -120,9 +126,10 @@ type Model struct {
 	width  int
 	height int
 
-	lines               []string
+	items               []transcriptItem
+	selectedItem        int
 	transcript          viewport.Model
-	prompt              textinput.Model
+	prompt              textarea.Model
 	escapePending       bool
 	quitConfirm         bool
 	promptUndo          []promptUndoState
@@ -149,6 +156,17 @@ type Model struct {
 	pendingAsk  *askRequest
 	confirm     confirm.Model
 	confirmMode bool
+	askMode     bool
+	askQuestion question.Question
+	askCursor   int
+
+	helpMode bool
+
+	filePickerMode   bool
+	filePickerItems  []string
+	filePickerCursor int
+	filePickerFilter string
+	filePickerAt     int
 
 	pickerVp        viewport.Model
 	pickerItems     []string
@@ -157,6 +175,12 @@ type Model struct {
 	pickerFiltering bool
 	pickerBuilt     bool
 	pickerMode      bool
+
+	sessionPickerMode bool
+	sessionItems      []db.Session
+	sessionCursor     int
+	sessionVp         viewport.Model
+	sessionBuilt      bool
 
 	slashMode      bool
 	slashCursor    int
@@ -167,6 +191,12 @@ type Model struct {
 
 	dragTarget int // -1 none, 0 transcript, 1 picker
 	dragOn     bool
+
+	turnSeq    int
+	turnCancel context.CancelFunc
+	turnCtx    context.Context
+	eventCh    chan agent.Event
+	errCh      chan error
 }
 
 // slashCmd is one entry of the slash command menu.
@@ -201,6 +231,7 @@ type copyNoticeMsg struct{}
 
 var slashCommands = []slashCmd{
 	{name: "/new", description: "start a new session and clear the transcript"},
+	{name: "/sessions", description: "open a previous session"},
 	{name: "/model", description: "switch the chat model"},
 	{name: "/refresh", description: "reload the model list from the server"},
 	{name: "/help", description: "show the keyboard shortcuts"},
@@ -231,9 +262,14 @@ type askRequestMsg struct {
 	req askRequest
 }
 
-type eventBatchMsg struct {
-	events []agent.Event
-	err    error
+type eventMsg struct {
+	seq int
+	ev  agent.Event
+}
+
+type eventDoneMsg struct {
+	seq int
+	err error
 }
 
 // New returns a chat model for the given options.
@@ -251,23 +287,13 @@ func New(opts Options) Model {
 		askCh:               make(chan askRequest, 1),
 		doneCh:              make(chan struct{}),
 		lastTool:            -1,
+		selectedItem:        -1,
 		historyCursor:       -1,
 		pendingHistoryIndex: -1,
 		cachePath:           opts.CachePath,
 		transcript:          viewport.New(viewport.WithWidth(defaultWidth-1), viewport.WithHeight(defaultHeight-chromeLines)),
-		prompt:              textinput.New(),
+		prompt:              newPromptArea(defaultWidth),
 	}
-	m.prompt.Placeholder = "ask lazykoder... (type / for commands)"
-	m.prompt.Prompt = "▏"
-	m.prompt.SetWidth(m.width)
-	m.prompt.SetStyles(textinput.Styles{
-		Focused: textinput.StyleState{
-			Text:        lipgloss.NewStyle().Foreground(lipgloss.Color("#e6e6e6")),
-			Placeholder: lipgloss.NewStyle().Foreground(lipgloss.Color("#8a8a8a")),
-			Prompt:      lipgloss.NewStyle().Foreground(lipgloss.Color("15")),
-		},
-	})
-	m.prompt.Focus()
 	if m.session != nil && m.store != nil {
 		m.model = m.session.Model
 		m.replay(m.session.ID)
@@ -320,40 +346,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.confirmWatch()
 	case askRequestMsg:
 		m.pendingAsk = &msg.req
-		qualifier := msg.req.q.Header
-		if qualifier == "" {
-			qualifier = "question"
-		}
-		m.confirm = confirm.New(msg.req.q.Question, qualifier)
-		m.confirmMode = true
+		m.askQuestion = msg.req.q
+		m.askCursor = 0
+		m.askMode = true
 		return m, m.askWatch()
-	case eventBatchMsg:
-		for _, ev := range msg.events {
-			switch ev.Kind {
-			case agent.EventMessage:
-				if ev.Role == "user" && m.pendingHistoryIndex >= 0 && m.pendingHistoryIndex < len(m.inputHistory) {
-					m.inputHistory[m.pendingHistoryIndex].messageID = ev.MessageID
-					m.pendingHistoryIndex = -1
-				}
-			case agent.EventPart:
-				m.applyPart(ev.Part)
-			case agent.EventTool:
-				m.applyTool(ev)
-			case agent.EventError:
-				if ev.Err != nil {
-					m.err = ev.Err.Error()
-				}
-			}
+	case eventMsg:
+		if msg.seq != m.turnSeq {
+			return m, nil
 		}
-		if m.err == "" && msg.err != nil {
-			m.err = msg.err.Error()
+		m = m.applyEvent(msg.ev)
+		return m, m.watchEvents(msg.seq)
+	case eventDoneMsg:
+		if msg.seq != m.turnSeq {
+			return m, nil
 		}
-		m.busy = false
-		m.pendingUser = ""
-		m.pending = nil
-		m.pendingAsk = nil
-		m.confirmMode = false
-		return m, nil
+		return m.finishTurn(msg.err), nil
 	case modelsMsg:
 		m.models = msg.list
 		m.modelsCached = msg.fromCache
@@ -375,10 +382,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.transcript.SetWidth(max(minPaneWidth, msg.Width-1))
-		m.transcript.SetHeight(max(minPaneHeight, msg.Height-chromeLines))
+		m.transcript.SetHeight(max(minPaneHeight, msg.Height-m.chromeHeight()))
 		m.prompt.SetWidth(max(minPaneWidth, msg.Width))
+		m.prompt.SetHeight(m.promptHeight())
 		if m.pickerBuilt {
 			m = m.resizePicker()
+		}
+		if m.sessionBuilt {
+			m = m.resizeSessionPicker()
 		}
 		return m, nil
 	case tea.PasteMsg:
@@ -411,14 +422,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		if msg.Mod.Contains(tea.ModCtrl) && msg.Code == 'z' && !m.confirmMode && !m.pickerMode {
+		if msg.Mod.Contains(tea.ModCtrl) && msg.Code == 'z' && !m.confirmMode && !m.pickerMode && !m.sessionPickerMode {
 			return m.undoPrompt(), nil
+		}
+		if msg.Mod.Contains(tea.ModCtrl) && msg.Code == 's' && !m.confirmMode && !m.pickerMode && !m.sessionPickerMode && !m.busy {
+			return m.openSessionPicker(), nil
 		}
 		if m.confirmMode {
 			return m.updateConfirmKey(msg)
 		}
+		if m.askMode {
+			return m.updateAskKey(msg)
+		}
+		if m.helpMode {
+			return m.updateHelpKey(msg)
+		}
+		if m.filePickerMode {
+			return m.updateFilePickerKey(msg)
+		}
 		if m.pickerMode {
 			return m.updatePickerKey(msg)
+		}
+		if m.sessionPickerMode {
+			return m.updateSessionPickerKey(msg)
 		}
 		if m.slashMode {
 			return m.updateSlashKey(msg)
@@ -454,4 +480,175 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(tea.SetClipboard(text), clearCopyNotice())
 	}
 	return m, nil
+}
+
+func (m Model) applyEvent(ev agent.Event) Model {
+	switch ev.Kind {
+	case agent.EventSessionCreated:
+		m = m.adoptSession(ev.SessionID)
+	case agent.EventMessage:
+		if ev.Role == "user" && m.pendingHistoryIndex >= 0 && m.pendingHistoryIndex < len(m.inputHistory) {
+			m.inputHistory[m.pendingHistoryIndex].messageID = ev.MessageID
+			m.pendingHistoryIndex = -1
+		}
+	case agent.EventPart:
+		m.applyPart(ev.Part)
+	case agent.EventTool:
+		m.applyTool(ev)
+	case agent.EventError:
+		if ev.Err != nil && !isCancelErr(ev.Err) {
+			m.err = ev.Err.Error()
+		}
+	}
+	return m
+}
+
+func (m Model) adoptSession(id string) Model {
+	if id == "" || m.store == nil {
+		return m
+	}
+	sess, err := m.store.GetSession(context.Background(), id)
+	if err != nil {
+		m.session = &db.Session{ID: id, Model: m.model, Directory: m.workdir}
+		return m
+	}
+	m.session = &sess
+	return m
+}
+
+func (m Model) finishTurn(err error) Model {
+	if err != nil && m.err == "" && !isCancelErr(err) {
+		m.err = err.Error()
+	}
+	if m.turnCancel != nil {
+		m.turnCancel()
+		m.turnCancel = nil
+	}
+	m.busy = false
+	m.pendingUser = ""
+	m.pending = nil
+	m.pendingAsk = nil
+	m.confirmMode = false
+	m.askMode = false
+	m.eventCh = nil
+	m.errCh = nil
+	return m
+}
+
+func isCancelErr(err error) bool {
+	return err != nil && (errors.Is(err, context.Canceled) || strings.Contains(err.Error(), "context canceled"))
+}
+
+const (
+	promptMaxRows = 6
+	promptMinRows = 1
+)
+
+func newPromptArea(width int) textarea.Model {
+	ta := textarea.New()
+	ta.ShowLineNumbers = false
+	ta.Prompt = ""
+	ta.Placeholder = "ask lazykoder"
+	ta.CharLimit = 0
+	ta.SetWidth(max(minPaneWidth, width))
+	ta.SetHeight(promptMinRows)
+	ta.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("shift+enter"))
+	ta.Focus()
+	return ta
+}
+
+func (m Model) promptHeight() int {
+	n := strings.Count(m.prompt.Value(), "\n") + 1
+	if n < promptMinRows {
+		n = promptMinRows
+	}
+	if n > promptMaxRows {
+		n = promptMaxRows
+	}
+	return n
+}
+
+func (m Model) chromeHeight() int {
+	h := lipgloss.Height(m.headerView()) + 1 + lipgloss.Height(m.statusLine()) + lipgloss.Height(m.promptLine())
+	if m.slashMode {
+		h += 1 + lipgloss.Height(m.slashView())
+	}
+	return max(chromeLines, h)
+}
+
+func (m Model) modelLabel() string {
+	label := m.model
+	if label == "" && m.client != nil {
+		label = m.client.Model()
+	}
+	if label == "" {
+		label = "default"
+	}
+	return label
+}
+
+func (m Model) sessionTitle() string {
+	if m.session != nil && strings.TrimSpace(m.session.Title) != "" {
+		return m.session.Title
+	}
+	return "new session"
+}
+
+func (m Model) updateAskKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
+	if key.Mod.Contains(tea.ModCtrl) && key.Code == 'c' {
+		return m.closeDone(), tea.Quit
+	}
+	opts := m.askQuestion.Options
+	switch key.Code {
+	case tea.KeyEscape, 'q', 'Q':
+		return m.resolveAskIndex(-1), nil
+	case tea.KeyEnter:
+		return m.resolveAskIndex(m.askCursor), nil
+	case 'j', tea.KeyDown:
+		if m.askCursor < len(opts)-1 {
+			m.askCursor++
+		}
+		return m, nil
+	case 'k', tea.KeyUp:
+		if m.askCursor > 0 {
+			m.askCursor--
+		}
+		return m, nil
+	}
+	if key.Text >= "1" && key.Text <= "9" {
+		idx := int(key.Text[0] - '1')
+		if idx >= 0 && idx < len(opts) {
+			return m.resolveAskIndex(idx), nil
+		}
+	}
+	return m, nil
+}
+
+func (m Model) updateHelpKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
+	switch key.Code {
+	case tea.KeyEscape, 'q', 'Q', '?':
+		m.helpMode = false
+	}
+	return m, nil
+}
+
+func (m Model) resolveAskIndex(idx int) Model {
+	if idx < 0 {
+		idx = 0
+		if m.pendingAsk != nil && len(m.askQuestion.Options) > 1 {
+			// deny-equivalent: do not invent an answer; send 0 only if one option
+			// out of range is rejected by the tool, so pick 0 as the first option
+			// when the user cancels? Plan: esc cancels. Agent ask returning error
+			// denies the tool. Use -1 and let askHook map cancel to error.
+		}
+	}
+	if m.pendingAsk != nil {
+		select {
+		case m.pendingAsk.resp <- idx:
+		default:
+		}
+	}
+	m.pendingAsk = nil
+	m.askMode = false
+	return m
 }
