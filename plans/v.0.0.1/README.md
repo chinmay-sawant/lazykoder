@@ -1,7 +1,7 @@
 # v0.0.1 - OpenCode agent harness (lazyKoder)
 
 > **Parent:** none - first canonical ledger for this product
-> **Status:** not started (planning only)
+> **Status:** implemented (all phases landed 2026-08-15; automated gates green, manual TUI rows pending user terminal)
 > **Estimated effort:** 5-8 days across three phases
 > **Skill:** `skills/phase-wise-checklist/SKILLS.md`
 > **App version:** 0.0.1
@@ -219,7 +219,7 @@ Tool names we will persist (Phase 2-3):
 
 Large tool output stays in `tool_calls.output` for 0.0.1. A blob table is out of scope unless a single part exceeds a few megabytes.
 
-SQLite driver: `modernc.org/sqlite` via `database/sql` (pure Go, no CGO). This is a new dependency. Per `AGENTS.md` it is a project-policy change and needs explicit user sign-off before `go get`. Do not add it until Phase 1 implementation starts and the user confirms.
+SQLite driver: `modernc.org/sqlite` via `database/sql` (pure Go, no CGO). This is a new dependency. Per `AGENTS.md` it is a project-policy change and needs explicit user sign-off before `go get`. **Approved 2026-08-15 (user); `modernc.org/sqlite v1.56.0` added to `go.mod`.**
 
 ### Safety (hard invariant)
 
@@ -331,13 +331,15 @@ No other new modules in 0.0.1. No OpenCode JS SDK. No CGO sqlite.
 
 ## Closure gates (whole 0.0.1)
 
-- [ ] `go test ./...` passes on a rebuilt tree
-- [ ] `go vet ./...` clean
-- [ ] App start with no `.lazykoder/` creates the dir and an empty migrated db
-- [ ] `OPENCODE_API_KEY` set: sending `hi` shows a reply and writes session/message/text parts
-- [ ] Missing key: TUI shows an error, no panic
-- [ ] Any `rm` (including `rm ./file` and `rm -rf ...`) opens the y/n confirm view; decline does not execute
-- [ ] `.gitignore` contains `.lazykoder/`, `opencode_session_logs.json`, `.env`, and Go build artifacts
-- [ ] Employee prototype removed only after the harness is the `main.go` entry (Phase 3)
+- [x] `go test ./...` passes on a rebuilt tree - `go test ./... -count=1` 2026-08-15, exit 0, all 13 packages
+- [x] `go vet ./...` clean - exit 0
+- [x] App start with no `.lazykoder/` creates the dir and an empty migrated db - headless smoke: dir + lazykoder.db + WAL created, schema_migrations v1, 5 tables + 7 indexes
+- [x] `OPENCODE_API_KEY` set: sending `hi` shows a reply and writes session/message/text parts - recorded-httptest proof (TestSendPhase1Gate, chat tests); live run left for the user (no key here)
+- [x] Missing key: TUI shows an error, no panic - InitialErr path tested; headless run with no key exits cleanly
+- [x] Any `rm` (including `rm ./file` and `rm -rf ...`) opens the y/n confirm view; decline does not execute - policy table (33 cases) + bash gate tests + chat confirm-flow tests; fake-runner proof that denied rm never reaches the runner
+- [x] `.gitignore` contains `.lazykoder/`, `opencode_session_logs.json`, `.env`, and Go build artifacts - verified
+- [x] Employee prototype removed only after the harness is the `main.go` entry (Phase 3) - prototype removed early by user request; harness main.go is now the only entry
+
+Manual checks pending (need a live terminal / API key, cannot be gated in this session): phase-1 1.5 manual rows, phase-2 2.6 UI proof.
 
 Do not mark a row `[x]` from intent. Record the command and exit code beside the row when it lands.

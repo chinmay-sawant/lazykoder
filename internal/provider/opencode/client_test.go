@@ -1,0 +1,359 @@
+package opencode
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+func TestAPIKeyFromEnvMissing(t *testing.T) {
+	t.Setenv("OPENCODE_API_KEY", "")
+	t.Setenv("OPENCODE_ZEN_API_KEY", "")
+	if _, err := APIKeyFromEnv(); !errors.Is(err, ErrMissingAPIKey) {
+		t.Fatalf("APIKeyFromEnv() error = %v, want ErrMissingAPIKey", err)
+	}
+}
+
+func TestAPIKeyFromEnvPriority(t *testing.T) {
+	t.Setenv("OPENCODE_API_KEY", "  first-key  ")
+	t.Setenv("OPENCODE_ZEN_API_KEY", "zen-key")
+	key, err := APIKeyFromEnv()
+	if err != nil {
+		t.Fatalf("APIKeyFromEnv() error = %v", err)
+	}
+	if key != "first-key" {
+		t.Fatalf("APIKeyFromEnv() = %q, want %q", key, "first-key")
+	}
+	t.Setenv("OPENCODE_API_KEY", "   ")
+	key, err = APIKeyFromEnv()
+	if err != nil {
+		t.Fatalf("APIKeyFromEnv() fallback error = %v", err)
+	}
+	if key != "zen-key" {
+		t.Fatalf("APIKeyFromEnv() fallback = %q, want %q", key, "zen-key")
+	}
+}
+
+func TestChatRequestAndResponse(t *testing.T) {
+	var auth, contentType, path string
+	var body []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth = r.Header.Get("Authorization")
+		contentType = r.Header.Get("Content-Type")
+		path = r.URL.Path
+		body, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"hi back","reasoning":"thinking..","finish_reason":"stop"}}],"usage":{"prompt_tokens":3,"completion_tokens":5,"total_tokens":8,"reasoning_tokens":2,"cache_read_tokens":1,"cache_write_tokens":1,"cost":0.001}}`)
+	}))
+	defer srv.Close()
+
+	c := NewClient("secret-key", WithBaseURL(srv.URL), WithModel("test-model"))
+	resp, err := c.Chat(context.Background(), ChatRequest{
+		Messages: []Message{{Role: "user", Content: "hi"}, {Role: "assistant", Content: "hello"}},
+	})
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	if auth != "Bearer secret-key" {
+		t.Errorf("Authorization = %q, want %q", auth, "Bearer secret-key")
+	}
+	if contentType != "application/json" {
+		t.Errorf("Content-Type = %q, want %q", contentType, "application/json")
+	}
+	if path != "/chat/completions" {
+		t.Errorf("path = %q, want /chat/completions", path)
+	}
+	var req struct {
+		Model    string `json:"model"`
+		Messages []struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"messages"`
+		Tools json.RawMessage `json:"tools"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	if req.Model != "test-model" {
+		t.Errorf("request model = %q, want %q", req.Model, "test-model")
+	}
+	if len(req.Messages) != 2 || req.Messages[0].Role != "user" || req.Messages[0].Content != "hi" ||
+		req.Messages[1].Role != "assistant" || req.Messages[1].Content != "hello" {
+		t.Errorf("request messages = %+v", req.Messages)
+	}
+	if req.Tools != nil {
+		t.Errorf("request tools key present: %s", req.Tools)
+	}
+	if resp.Content != "hi back" {
+		t.Errorf("Content = %q, want %q", resp.Content, "hi back")
+	}
+	if resp.Reasoning != "thinking.." {
+		t.Errorf("Reasoning = %q, want %q", resp.Reasoning, "thinking..")
+	}
+	if resp.FinishReason != "stop" {
+		t.Errorf("FinishReason = %q, want %q", resp.FinishReason, "stop")
+	}
+	if resp.Usage == nil {
+		t.Fatal("Usage = nil, want non-nil")
+	}
+	if resp.Usage.TokensTotal != 8 || resp.Usage.TokensInput != 3 || resp.Usage.TokensOutput != 5 ||
+		resp.Usage.TokensReasoning != 2 || resp.Usage.TokensCacheRead != 1 || resp.Usage.TokensCacheWrite != 1 ||
+		resp.Usage.Cost != 0.001 {
+		t.Errorf("Usage = %+v", resp.Usage)
+	}
+}
+
+func TestChatSendsTools(t *testing.T) {
+	var body []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ = io.ReadAll(r.Body)
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"ok","finish_reason":"stop"}}]}`)
+	}))
+	defer srv.Close()
+
+	c := NewClient("k", WithBaseURL(srv.URL))
+	_, err := c.Chat(context.Background(), ChatRequest{
+		Messages: []Message{{Role: "user", Content: "list"}},
+		Tools: []ToolSpec{{
+			Name:        "bash",
+			Description: "Run a shell command.",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"command": map[string]any{"type": "string", "description": "shell command to run"},
+				},
+				"required": []string{"command"},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	var req struct {
+		Tools []struct {
+			Type     string `json:"type"`
+			Function struct {
+				Name        string         `json:"name"`
+				Description string         `json:"description"`
+				Parameters  map[string]any `json:"parameters"`
+			} `json:"function"`
+		} `json:"tools"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	if len(req.Tools) != 1 {
+		t.Fatalf("tools = %+v, want 1 entry", req.Tools)
+	}
+	tool := req.Tools[0]
+	if tool.Type != "function" || tool.Function.Name != "bash" || tool.Function.Description != "Run a shell command." {
+		t.Errorf("tool = %+v", tool)
+	}
+	if tool.Function.Parameters["type"] != "object" {
+		t.Errorf("parameters type = %v", tool.Function.Parameters["type"])
+	}
+	required, ok := tool.Function.Parameters["required"].([]any)
+	if !ok || len(required) != 1 || required[0] != "command" {
+		t.Errorf("parameters required = %v", tool.Function.Parameters["required"])
+	}
+}
+
+func TestChatToolCalls(t *testing.T) {
+	var lastBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lastBody, _ = io.ReadAll(r.Body)
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"bash","arguments":"{\"command\":\"ls\"}"}}],"finish_reason":"tool-calls"}}],"usage":{"total_tokens":10}}`)
+	}))
+	defer srv.Close()
+
+	c := NewClient("k", WithBaseURL(srv.URL))
+	resp, err := c.Chat(context.Background(), ChatRequest{
+		Messages: []Message{{Role: "user", Content: "run"}},
+	})
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	if len(resp.ToolCalls) != 1 {
+		t.Fatalf("ToolCalls = %+v, want 1 entry", resp.ToolCalls)
+	}
+	tc := resp.ToolCalls[0]
+	if tc.ID != "call_1" || tc.Name != "bash" || tc.Arguments != `{"command":"ls"}` {
+		t.Errorf("ToolCalls[0] = %+v", tc)
+	}
+	if resp.FinishReason != "tool-calls" {
+		t.Errorf("FinishReason = %q, want %q", resp.FinishReason, "tool-calls")
+	}
+	if resp.Usage == nil || resp.Usage.TokensTotal != 10 {
+		t.Errorf("Usage = %+v", resp.Usage)
+	}
+
+	_, err = c.Chat(context.Background(), ChatRequest{
+		Messages: []Message{
+			{Role: "user", Content: "run"},
+			{Role: "assistant", ToolCalls: []ToolCall{{ID: "call_1", Name: "bash", Arguments: `{"command":"ls"}`}}},
+			{Role: "tool", ToolCallID: "call_1", Content: "file.txt"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Chat() round-trip error = %v", err)
+	}
+	var req struct {
+		Messages []struct {
+			Role       string `json:"role"`
+			Content    string `json:"content"`
+			ToolCallID string `json:"tool_call_id"`
+			ToolCalls  []struct {
+				ID       string `json:"id"`
+				Type     string `json:"type"`
+				Function struct {
+					Name      string `json:"name"`
+					Arguments string `json:"arguments"`
+				} `json:"function"`
+			} `json:"tool_calls"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(lastBody, &req); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	if len(req.Messages) != 3 {
+		t.Fatalf("messages = %d, want 3", len(req.Messages))
+	}
+	asst := req.Messages[1]
+	if len(asst.ToolCalls) != 1 || asst.ToolCalls[0].ID != "call_1" || asst.ToolCalls[0].Type != "function" ||
+		asst.ToolCalls[0].Function.Name != "bash" || asst.ToolCalls[0].Function.Arguments != `{"command":"ls"}` {
+		t.Errorf("assistant message = %+v", asst)
+	}
+	toolMsg := req.Messages[2]
+	if toolMsg.Role != "tool" || toolMsg.ToolCallID != "call_1" || toolMsg.Content != "file.txt" {
+		t.Errorf("tool message = %+v", toolMsg)
+	}
+}
+
+func TestChatServerError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprint(w, `{"error":"boom"}`)
+	}))
+	defer srv.Close()
+
+	c := NewClient("k", WithBaseURL(srv.URL))
+	_, err := c.Chat(context.Background(), ChatRequest{Messages: []Message{{Role: "user", Content: "x"}}})
+	if err == nil {
+		t.Fatal("Chat() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "500") || !strings.Contains(err.Error(), "boom") {
+		t.Errorf("Chat() error = %q, want it to contain 500 and boom", err)
+	}
+}
+
+func TestChatServerErrorEmptyBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	c := NewClient("k", WithBaseURL(srv.URL))
+	_, err := c.Chat(context.Background(), ChatRequest{Messages: []Message{{Role: "user", Content: "x"}}})
+	if err == nil {
+		t.Fatal("Chat() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "404") {
+		t.Errorf("Chat() error = %q, want it to contain 404", err)
+	}
+}
+
+func TestChatResponseVariants(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"x","reasoning_content":"hidden","finish_reason":"stop"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"cache_read":7,"cache_write":8,"cost":0.5}}`)
+	}))
+	defer srv.Close()
+
+	c := NewClient("k", WithBaseURL(srv.URL))
+	resp, err := c.Chat(context.Background(), ChatRequest{Messages: []Message{{Role: "user", Content: "x"}}})
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	if resp.Reasoning != "hidden" {
+		t.Errorf("Reasoning = %q, want %q", resp.Reasoning, "hidden")
+	}
+	if resp.Usage == nil || resp.Usage.TokensCacheRead != 7 || resp.Usage.TokensCacheWrite != 8 || resp.Usage.Cost != 0.5 {
+		t.Errorf("Usage = %+v", resp.Usage)
+	}
+}
+
+func TestChatResponseWithoutUsage(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"x","finish_reason":"stop"}}]}`)
+	}))
+	defer srv.Close()
+
+	c := NewClient("k", WithBaseURL(srv.URL))
+	resp, err := c.Chat(context.Background(), ChatRequest{Messages: []Message{{Role: "user", Content: "x"}}})
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	if resp.Usage != nil {
+		t.Errorf("Usage = %+v, want nil", resp.Usage)
+	}
+}
+
+func TestModels(t *testing.T) {
+	var auth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth = r.Header.Get("Authorization")
+		if r.URL.Path != "/models" {
+			t.Errorf("path = %q, want /models", r.URL.Path)
+		}
+		fmt.Fprint(w, `{"data":[{"id":"deepseek-v4-flash"},{"id":"other"}]}`)
+	}))
+	defer srv.Close()
+
+	c := NewClient("k", WithBaseURL(srv.URL))
+	models, err := c.Models(context.Background())
+	if err != nil {
+		t.Fatalf("Models() error = %v", err)
+	}
+	if auth != "Bearer k" {
+		t.Errorf("Authorization = %q, want %q", auth, "Bearer k")
+	}
+	if len(models) != 2 || models[0] != "deepseek-v4-flash" || models[1] != "other" {
+		t.Errorf("Models() = %v", models)
+	}
+}
+
+func TestChatRequestModelOverride(t *testing.T) {
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Model string `json:"model"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("decode: %v", err)
+			return
+		}
+		got = req.Model
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"hi","finish_reason":"stop"}}]}`)
+	}))
+	defer srv.Close()
+
+	c := NewClient("k", WithBaseURL(srv.URL), WithModel("default-model"))
+
+	if _, err := c.Chat(context.Background(), ChatRequest{Messages: []Message{{Role: "user", Content: "x"}}}); err != nil {
+		t.Fatalf("Chat(): %v", err)
+	}
+	if got != "default-model" {
+		t.Errorf("model without override = %q, want default-model", got)
+	}
+	if _, err := c.Chat(context.Background(), ChatRequest{Model: "picked-model", Messages: []Message{{Role: "user", Content: "x"}}}); err != nil {
+		t.Fatalf("Chat(): %v", err)
+	}
+	if got != "picked-model" {
+		t.Errorf("model with override = %q, want picked-model", got)
+	}
+}
