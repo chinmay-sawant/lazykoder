@@ -10,6 +10,9 @@ Plans live under `plans/v0.0.1/` and are live ledgers, not snapshots:
 | `phase-1-foundation.md` | workspace, sqlite, auth, first OpenCode turn, chat TUI, policy stub |
 | `phase-2-safety-bash.md` | confirm view, policy-to-executor seam, bash tool, tool parts |
 | `phase-3-tools-cleanup.md` | remaining tools, part mapping, replay, prototype cleanup, `lk` run entry |
+| `phase-4-tokens-status-todos.md` | streaming tokens/sec, status segments, todowrite |
+| `phase-5-go-pattern-db.md` | Go lint/improvisation pattern database |
+| `findings/` | 2026-08-16 TUI findings: P0 unusable bugs, chat chrome, polish |
 
 Each checklist row is marked `[x]` only when the gate actually passed, with
 the command and exit code recorded beside the row. Rows are never checked
@@ -34,5 +37,6 @@ human runs them.
 - Auto-run of any `rm`, sticky tool permissions
 - Streaming token paint in the TUI
 
-Future work gets its own phase folder (`plans/v.0.0.2/`) rather than a
-second 0.0.1 ledger.
+TUI findings from the 2026-08-16 review live in `plans/v0.0.1/findings/`
+so they stay next to the harness they audit. New product versions still
+get their own folder (`plans/v0.0.2/`), not a second root ledger.

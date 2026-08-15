@@ -26,6 +26,8 @@ Phase files (live ledgers, update `[x]` only after the gate passes):
 | [phase-2-safety-bash.md](phase-2-safety-bash.md) | P0 | `rm` y/n confirm, bash tool, deny-by-default |
 | [phase-3-tools-cleanup.md](phase-3-tools-cleanup.md) | P1 | Remaining tools, replay, prototype cleanup |
 | [phase-4-tokens-status-todos.md](phase-4-tokens-status-todos.md) | P1 | Streaming tokens/sec, status line customizations, tracked todos |
+| [phase-5-go-pattern-db.md](phase-5-go-pattern-db.md) | P1 | Per-language Go lint/improvisation pattern database |
+| [findings/](findings/README.md) | P0/P1 | TUI findings ledger (usable chat, chrome, polish). Not a duplicate of phase 4 or 5 |
 
 ---
 
