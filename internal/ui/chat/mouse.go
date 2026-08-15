@@ -13,18 +13,18 @@ import (
 
 // mousePress starts a scrollbar drag when the click lands on a scrollbar
 // column, and jumps the viewport to the clicked position.
-func (m Model) mousePress(msg tea.MouseClickMsg) Model {
+func (m Model) mousePress(msg tea.MouseClickMsg) (Model, tea.Cmd) {
 	mu := msg.Mouse()
 	m.copyNotice = ""
 	if !m.pickerMode && !m.slashMode {
 		if _, top, right, bottom, ok := m.modelStatusRect(); ok && mu.X < right && mu.Y >= top && mu.Y < bottom {
 			m = m.clearTextSelection()
-			return m.openPicker()
+			return m.openPicker(), nil
 		}
 	}
 	if m.pickerMode {
 		if x, y, ok := m.pickerCloseRect(); ok && mu.X == x && mu.Y == y {
-			return m.closePicker()
+			return m.closePicker(), nil
 		}
 	}
 	for _, target := range []int{0, 1} {
@@ -42,9 +42,25 @@ func (m Model) mousePress(msg tea.MouseClickMsg) Model {
 		m = m.applyJump(target, mu.Y)
 		m.dragTarget = target
 		m.dragOn = true
-		return m
+		return m, nil
+	}
+	if mu.Button == tea.MouseLeft && m.slashMode {
+		if idx, ok := m.slashIndexAtScreenY(mu.Y); ok {
+			return m.activateSlashItem(idx)
+		}
 	}
 	if mu.Button == tea.MouseLeft {
+		if idx, ok := m.itemIndexAtScreenY(mu.Y); ok {
+			kind := m.items[idx].kind
+			if kind == itemTool || kind == itemReasoning {
+				m = m.clearTextSelection()
+				m.selectedItem = idx
+				if kind == itemTool {
+					m.lastTool = idx
+				}
+				return m.toggleSelectedMeta(), nil
+			}
+		}
 		if pos, ok := m.transcriptPosition(mu); ok {
 			m.selection = textSelection{
 				anchor:   pos,
@@ -55,7 +71,21 @@ func (m Model) mousePress(msg tea.MouseClickMsg) Model {
 			m.syncTranscript()
 		}
 	}
-	return m
+	return m, nil
+}
+
+// activateSlashItem runs the slash command at idx, same as pressing enter.
+func (m Model) activateSlashItem(idx int) (Model, tea.Cmd) {
+	if idx < 0 || idx >= len(m.slashItems) {
+		return m, nil
+	}
+	name := m.slashItems[idx].name
+	m.slashMode = false
+	m.slashCursor = 0
+	m.slashFromPaste = false
+	m.prompt.SetValue("")
+	m.promptUndo = nil
+	return m.runSlash(name)
 }
 
 // mouseDrag keeps the viewport following the pointer while a scrollbar
@@ -101,11 +131,15 @@ func (m Model) applyJump(target, y int) Model {
 	return m
 }
 
+func (m Model) transcriptTop() int {
+	return lipgloss.Height(m.headerView()) + 1
+}
+
 func (m Model) transcriptPosition(mu tea.Mouse) (textPosition, bool) {
 	if m.pickerMode || m.slashMode {
 		return textPosition{}, false
 	}
-	top := titleBlockRows
+	top := m.transcriptTop()
 	height := m.transcriptRenderHeight()
 	if mu.Y < top || mu.Y >= top+height || mu.X < 0 || mu.X >= m.transcript.Width() {
 		return textPosition{}, false
@@ -117,6 +151,64 @@ func (m Model) transcriptPosition(mu tea.Mouse) (textPosition, bool) {
 	}
 	col := mu.X + m.transcript.XOffset()
 	return textPosition{row: row, col: min(col, lipgloss.Width(rows[row]))}, true
+}
+
+// itemIndexAtScreenY maps a screen row to a transcript item, walking
+// rendered item heights from the header offset and viewport YOffset.
+func (m Model) itemIndexAtScreenY(y int) (int, bool) {
+	if m.pickerMode || m.slashMode {
+		return -1, false
+	}
+	top := m.transcriptTop()
+	height := m.transcriptRenderHeight()
+	if y < top || y >= top+height {
+		return -1, false
+	}
+	target := y - top + m.transcript.YOffset()
+	if target < 0 {
+		return -1, false
+	}
+	rendered := m.renderedItems()
+	row := 0
+	ri := 0
+	for i, it := range m.items {
+		if i > 0 && (it.kind == itemUser || it.kind == itemAssistant) {
+			if ri < len(rendered) && rendered[ri] == "" {
+				if target == row {
+					return -1, false
+				}
+				row++
+				ri++
+			}
+		}
+		if ri >= len(rendered) {
+			break
+		}
+		h := lipgloss.Height(rendered[ri])
+		if h < 1 {
+			h = 1
+		}
+		if target >= row && target < row+h {
+			return i, true
+		}
+		row += h
+		ri++
+	}
+	return -1, false
+}
+
+// slashIndexAtScreenY maps a screen row to a visible slash command.
+// The menu is full width; only Y is used. The top border is skipped.
+func (m Model) slashIndexAtScreenY(y int) (int, bool) {
+	if !m.slashMode || len(m.slashItems) == 0 {
+		return -1, false
+	}
+	top := m.transcriptTop() + m.transcriptRenderHeight() + 1
+	inner := y - top - 1
+	if inner < 0 || inner >= len(m.slashItems) {
+		return -1, false
+	}
+	return inner, true
 }
 
 func (m Model) updateTextSelection(msg tea.MouseMotionMsg) Model {

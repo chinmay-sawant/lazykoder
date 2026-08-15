@@ -475,7 +475,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.transcript = vp
 		return m, nil
 	case tea.MouseClickMsg:
-		return m.mousePress(msg), nil
+		return m.mousePress(msg)
 	case tea.MouseMotionMsg:
 		if m.selection.dragging {
 			return m.updateTextSelection(msg), nil

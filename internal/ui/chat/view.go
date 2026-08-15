@@ -43,26 +43,10 @@ func (m Model) View() tea.View {
 	if m.filePickerMode {
 		screen = overlayOn(screen, m.width, m.height, m.filePickerOverlay())
 	}
-	if m.busy || m.pulseOn {
-		screen = m.withThinkingFrame(screen)
-	}
 	v := tea.NewView(screen)
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
 	return v
-}
-
-func (m Model) withThinkingFrame(screen string) string {
-	glow := lipgloss.NewStyle().Foreground(theme.PulseAccent(m.pulseT())).Bold(true)
-	w := max(minPaneWidth, m.width)
-	lines := strings.Split(screen, "\n")
-	inner := max(1, w-2)
-	out := make([]string, 0, len(lines))
-	for _, line := range lines {
-		padded := padDisplay(line, inner)
-		out = append(out, glow.Render("[")+padded+glow.Render("]"))
-	}
-	return strings.Join(out, "\n")
 }
 
 func (m Model) chatScreen() string {
@@ -152,13 +136,9 @@ func (m Model) promptLine() string {
 	p.SetHeight(m.promptHeight())
 	p.SetWidth(max(minPaneWidth, innerW-2))
 	body := lipgloss.JoinVertical(lipgloss.Left, p.View(), m.composerFooter(innerW-2))
-	border := theme.ColorBorder()
-	if m.busy || m.pulseOn {
-		border = theme.PulseAccent(m.pulseT())
-	}
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(border).
+		BorderForeground(theme.ColorBorder()).
 		Background(theme.ColorSurface()).
 		Width(max(minPaneWidth, m.width)).
 		Render(body)
@@ -225,16 +205,7 @@ func (m Model) transcriptView() string {
 		vp.GotoBottom()
 	}
 	width := vp.Width()
-	body := withScrollbar(vp.View(), width, h, vp.ScrollPercent(), vp.TotalLineCount() > h)
-	if !m.busy && !m.pulseOn {
-		return body
-	}
-	bar := lipgloss.NewStyle().Foreground(theme.PulseAccent(m.pulseT())).Bold(true).Render("│")
-	rows := strings.Split(body, "\n")
-	for i, row := range rows {
-		rows[i] = bar + row
-	}
-	return strings.Join(rows, "\n")
+	return withScrollbar(vp.View(), width, h, vp.ScrollPercent(), vp.TotalLineCount() > h)
 }
 
 func (m Model) helpOverlay() string {
@@ -395,13 +366,16 @@ func splitPaneWidths(total int) (left, right int) {
 }
 
 func (m Model) modelStatusRect() (left, top, right, bottom int, ok bool) {
-	if m.busy || m.err != "" || m.pickerMode || m.slashMode || m.sessionPickerMode {
+	if m.busy || m.pickerMode || m.sessionPickerMode {
 		return 0, 0, 0, 0, false
 	}
 	label := m.modelLabel()
 	top = lipgloss.Height(m.headerView()) + 1 + m.transcriptRenderHeight() + 1
 	if m.slashMode {
 		top += 1 + lipgloss.Height(m.slashView())
+	}
+	if m.err != "" {
+		top += lipgloss.Height(errStyle.Width(max(minPaneWidth, m.width)).Render(m.err)) + 1
 	}
 	// Footer sits inside the composer: top border + prompt rows.
 	top += 1 + m.promptHeight()

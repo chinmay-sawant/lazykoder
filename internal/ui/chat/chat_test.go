@@ -742,12 +742,37 @@ func TestThinkingFrameUsesBrackets(t *testing.T) {
 	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
 	m.busy = true
 	m.pulseOn = true
-	v := stripANSI(viewText(m))
-	if !strings.Contains(v, "[") || !strings.Contains(v, "]") {
-		t.Fatalf("thinking frame missing brackets: %q", v)
+	m.pulse = pulseSteps / 2
+	title := "echo hello"
+	m.items = append(m.items, transcriptItem{
+		kind:      itemTool,
+		collapsed: true,
+		tool:      db.ToolCall{Tool: "bash", Status: "pending", Title: &title},
+	})
+	m.syncTranscript()
+	raw := viewText(m)
+	v := stripANSI(raw)
+	if !strings.Contains(v, theme.StatusDiamond) {
+		t.Fatalf("in-flight tool card missing status diamond: %q", v)
 	}
-	if !strings.Contains(v, "│") {
-		t.Fatalf("thinking frame missing vertical bar: %q", v)
+	if !strings.Contains(v, "bash") || !strings.Contains(v, "pending") {
+		t.Fatalf("in-flight tool card missing bash pending: %q", v)
+	}
+	if !strings.Contains(v, "╭") {
+		t.Fatalf("in-flight tool card missing glow border: %q", v)
+	}
+	var header string
+	for _, line := range strings.Split(v, "\n") {
+		if strings.Contains(line, "lazykoder") {
+			header = strings.TrimSpace(line)
+			break
+		}
+	}
+	if header == "" {
+		t.Fatal("header missing")
+	}
+	if strings.HasPrefix(header, "[") || strings.HasSuffix(header, "]") {
+		t.Fatalf("header still wrapped in thinking brackets: %q", header)
 	}
 }
 

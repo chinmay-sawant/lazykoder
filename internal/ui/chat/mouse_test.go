@@ -6,6 +6,9 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+
+	"github.com/chinmay-sawant/lazykoder/internal/db"
 )
 
 func TestMouseWheelScrollsTranscript(t *testing.T) {
@@ -39,21 +42,22 @@ func TestTranscriptDragSelectsAndCopiesText(t *testing.T) {
 	)
 	m.syncTranscript()
 
+	top := lipgloss.Height(m.headerView()) + 1
 	mm, _ := m.Update(tea.MouseClickMsg(tea.Mouse{
 		X:      0,
-		Y:      titleBlockRows,
+		Y:      top,
 		Button: tea.MouseLeft,
 	}))
 	m = mm.(Model)
 	mm, _ = m.Update(tea.MouseMotionMsg(tea.Mouse{
 		X:      6,
-		Y:      titleBlockRows + 1,
+		Y:      top + 1,
 		Button: tea.MouseLeft,
 	}))
 	m = mm.(Model)
 	mm, cmd := m.Update(tea.MouseReleaseMsg(tea.Mouse{
 		X:      6,
-		Y:      titleBlockRows + 1,
+		Y:      top + 1,
 		Button: tea.MouseLeft,
 	}))
 	m = mm.(Model)
@@ -124,5 +128,80 @@ func TestScrollbarClickIgnoredWithoutOverflow(t *testing.T) {
 	m = mm.(Model)
 	if m.dragOn {
 		t.Error("drag started without overflow")
+	}
+}
+
+func TestClickTogglesToolCard(t *testing.T) {
+	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
+	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
+	title := "echo hi"
+	m.items = append(m.items, transcriptItem{
+		kind:      itemTool,
+		collapsed: true,
+		tool:      db.ToolCall{Tool: "bash", Status: "completed", Title: &title},
+	})
+	m.syncTranscript()
+	if !m.items[0].collapsed {
+		t.Fatal("tool should start collapsed")
+	}
+
+	top := lipgloss.Height(m.headerView()) + 1
+	y := -1
+	for row := top; row < top+m.transcriptRenderHeight(); row++ {
+		if idx, ok := m.itemIndexAtScreenY(row); ok && idx == 0 {
+			y = row
+			break
+		}
+	}
+	if y < 0 {
+		t.Fatal("could not map a screen row to the tool card")
+	}
+
+	mm, _ := m.Update(tea.MouseClickMsg(tea.Mouse{X: 2, Y: y, Button: tea.MouseLeft}))
+	m = mm.(Model)
+	if m.items[0].collapsed {
+		t.Fatal("click did not expand the tool card")
+	}
+	if m.selection.active {
+		t.Fatal("click started a text selection")
+	}
+	if m.selectedItem != 0 {
+		t.Fatalf("selectedItem = %d, want 0", m.selectedItem)
+	}
+
+	mm, _ = m.Update(tea.MouseClickMsg(tea.Mouse{X: 2, Y: y, Button: tea.MouseLeft}))
+	m = mm.(Model)
+	if !m.items[0].collapsed {
+		t.Fatal("second click did not collapse the tool card")
+	}
+}
+
+func TestClickRunsSlashCommand(t *testing.T) {
+	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
+	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
+	m = typeRune(m, '/')
+	if !m.slashMode {
+		t.Fatal("slash menu did not open")
+	}
+
+	y := -1
+	for row := 0; row < m.height; row++ {
+		idx, ok := m.slashIndexAtScreenY(row)
+		if ok && idx < len(m.slashItems) && m.slashItems[idx].name == "/model" {
+			y = row
+			break
+		}
+	}
+	if y < 0 {
+		t.Fatal("could not map a screen row to /model")
+	}
+
+	mm, _ := m.Update(tea.MouseClickMsg(tea.Mouse{X: 2, Y: y, Button: tea.MouseLeft}))
+	m = mm.(Model)
+	if m.slashMode {
+		t.Fatal("slash menu still open after click")
+	}
+	if !m.pickerMode {
+		t.Fatal("click on /model did not open the picker")
 	}
 }

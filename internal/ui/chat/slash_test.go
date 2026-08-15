@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 func TestSlashMenuOpensAndDivides(t *testing.T) {
@@ -96,6 +97,43 @@ func TestSlashMenuFilterAndRunNew(t *testing.T) {
 	}
 	if m.session != nil {
 		t.Errorf("/new should drop the session for a fresh one")
+	}
+}
+
+func TestSlashMenuFullWidthLeftAligned(t *testing.T) {
+	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
+	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
+	m = typeRune(m, '/')
+	if !m.slashMode {
+		t.Fatal("slash mode not opened on /")
+	}
+
+	var modelLine, newLine string
+	var widest int
+	for _, line := range strings.Split(stripANSI(m.slashView()), "\n") {
+		if w := lipgloss.Width(line); w > widest {
+			widest = w
+		}
+		if strings.Contains(line, "/model") && modelLine == "" {
+			modelLine = line
+		}
+		if strings.Contains(line, "/new") && newLine == "" {
+			newLine = line
+		}
+	}
+	if widest < m.width-4 {
+		t.Errorf("slash card width = %d, want near %d", widest, m.width)
+	}
+	if modelLine == "" {
+		t.Fatal("/model row missing")
+	}
+	nameAt := strings.Index(modelLine, "/model")
+	descAt := strings.Index(modelLine, "switch the chat model")
+	if nameAt < 0 || descAt < 0 || nameAt > descAt {
+		t.Fatalf("/model should sit left of its description on the same line: %q", modelLine)
+	}
+	if !strings.Contains(newLine, "start a new session") {
+		t.Errorf("/new line missing its description: %q", newLine)
 	}
 }
 

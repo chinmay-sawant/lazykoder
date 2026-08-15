@@ -11,12 +11,14 @@ pickers are centered cards.
 - Transcript: user turns labeled `you`, assistant turns labeled `assistant`,
   each with a relative timestamp (`just now`, `2m ago`). Reasoning starts
   collapsed as `▸ thinking`; `t` expands it when the prompt is empty. Tool
-  runs start collapsed (`▸ run  bash  title  ·  just now  ·  completed`);
-  `e` expands the last run.
+  runs are full-width cards that start collapsed
+  (`◆  bash  title  ·  just now  ·  completed`). The diamond stays on the
+  card after the turn ends: white while pending or running, green on
+  success, red on error or deny. `e` expands the last run.
 - Composer: a rounded input box. The footer shows `enter send` on the left
-  and the model on the right (click the model to switch). While a turn is in
-  flight the screen is framed with pulsing `[` `]` brackets and a glowing
-  vertical bar.
+  and the model on the right (click the model to switch). While a command
+  is in flight that tool card's border pulses. Completed and error cards
+  stay static with their status diamond.
 - Session list (`/sessions` or `ctrl+s`) groups runs as `just now`,
   `recently`, and `older`.
 - Session picker: `/sessions` or `ctrl+s` lists sessions for the project
@@ -25,11 +27,14 @@ pickers are centered cards.
 - `/help` or `?` (empty prompt) opens a key overlay. `esc` closes it.
 - `@` in the prompt opens a project file picker. Enter inserts `@path`.
 - Dragging across transcript rows selects and copies the range on mouse
-  release; a temporary `text copied` notice appears above the prompt. Clicks
-  on the model status and scrollbar keep their existing navigation behavior.
+  release; a temporary `text copied` notice appears above the prompt. A
+  click on a tool card or reasoning header expands or collapses that item
+  instead of starting a selection. Clicks on the model status and scrollbar
+  keep their existing navigation behavior. A click on a slash-menu row runs
+  that command.
 - Assistant Markdown formats headings, emphasis, lists, inline code, and fenced
-  code blocks. Fenced blocks use a dark bordered card with an optional language
-  label.
+  code blocks. Fenced blocks use a full-width dark bordered card with an
+  optional language label.
 
 | Key | Action |
 | --- | --- |
@@ -81,9 +86,10 @@ the right pane contains the fetched model list. Navigation: `j`/`k` or arrows;
 `enter` selects, `esc`/`q` cancels. `/` enters model filtering and `r` refreshes
 the model list.
 
-Typing `/` in the chat prompt opens a compact command popover above the
-prompt. One column of matching commands, selected description on the footer
-line. `↑`/`↓` select, `enter` runs, `esc` closes and leaves `/` in the prompt.
+Typing `/` in the chat prompt opens a full-width command popover above the
+prompt. Each row shows the command name on the left and its description after
+it. `↑`/`↓` select, `enter` or a click runs the command, `esc` closes and
+leaves `/` in the prompt.
 
 Selecting a model:
 

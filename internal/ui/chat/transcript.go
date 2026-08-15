@@ -235,7 +235,7 @@ func (m Model) renderItem(it transcriptItem, selected bool) string {
 	case itemUser:
 		return roleLine(roleYou, it.when) + "\n" + userStyle.Render(it.text)
 	case itemAssistant:
-		rendered := markdown.Render(it.text)
+		rendered := markdown.Render(it.text, m.width)
 		return roleLine(roleAssistant, it.when) + "\n" + rendered
 	case itemReasoning:
 		marker := "▸"
@@ -282,14 +282,23 @@ func (m Model) renderTool(ev agent.Event, collapsed bool, when int64) string {
 		title = name
 	}
 	title = truncateRunes(title, maxToolTitle)
-	marker := "▸"
+	chevron := "▸"
 	if !collapsed {
-		marker = "▾"
+		chevron = "▾"
 	}
-	head := marker + " run  " + name + "  " + title + ageSuffix(when) + "  ·  " + status
-	header := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).Render(head)
+	label := name
+	if title != name {
+		label = name + "  " + title
+	}
+	diamond := lipgloss.NewStyle().Foreground(theme.StatusColor(status)).Render(theme.StatusDiamond)
+	rest := chevron + "  " + label + ageSuffix(when) + "  ·  " + status
+	header := diamond + "  " + lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).Render(rest)
+	card := toolCardStyle.Width(m.toolCardWidth())
+	if (status == "pending" || status == "running") && (m.busy || m.pulseOn) {
+		card = card.BorderForeground(theme.PulseAccent(m.pulseT()))
+	}
 	if collapsed {
-		return toolCardStyle.Width(m.toolCardWidth()).Render(header)
+		return card.Render(header)
 	}
 	bodyWidth := max(minPaneWidth, m.toolCardWidth()-cardBorder*2)
 	body := []string{header}
@@ -319,7 +328,7 @@ func (m Model) renderTool(ev agent.Event, collapsed bool, when int64) string {
 			body = append(body, outputLabel, outputBox)
 		}
 	}
-	return toolCardStyle.Width(m.toolCardWidth()).Render(strings.Join(body, "\n"))
+	return card.Render(strings.Join(body, "\n"))
 }
 
 func toolMetadataDiff(tc db.ToolCall) string {
@@ -358,7 +367,7 @@ func renderDiff(diff string, width int) string {
 }
 
 func (m Model) toolCardWidth() int {
-	return max(minPaneWidth, m.width-cardBorder*2)
+	return max(minPaneWidth, m.width)
 }
 
 func toolCommand(tc db.ToolCall) string {

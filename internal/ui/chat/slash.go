@@ -7,39 +7,47 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-const slashCardMaxWidth = 60
-
-// slashView renders a compact command list above the prompt.
+// slashView renders a full-width command list above the prompt. Each row
+// is the command name on the left and its description after it.
 func (m Model) slashView() string {
-	cardW := min(slashCardMaxWidth, max(minPaneWidth, m.width-4))
+	cardW := max(minPaneWidth, m.width-cardBorder)
 	sel := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15"))
 	dim := lipgloss.NewStyle().Faint(true)
-	var body strings.Builder
-	for i, cmd := range m.slashItems {
-		if i > 0 {
-			body.WriteString("\n")
-		}
-		if i == m.slashCursor {
-			body.WriteString(sel.Render("▸ " + cmd.name))
-		} else {
-			body.WriteString(dim.Render("  " + cmd.name))
+	nameW := 0
+	for _, cmd := range m.slashItems {
+		if w := lipgloss.Width(cmd.name); w > nameW {
+			nameW = w
 		}
 	}
+	var body strings.Builder
 	if len(m.slashItems) == 0 {
 		body.WriteString(dim.Render("no matching command"))
+	} else {
+		for i, cmd := range m.slashItems {
+			if i > 0 {
+				body.WriteString("\n")
+			}
+			prefix := "  "
+			if i == m.slashCursor {
+				prefix = "▸ "
+			}
+			gap := max(2, nameW-lipgloss.Width(cmd.name)+2)
+			line := prefix + cmd.name + strings.Repeat(" ", gap) + cmd.description
+			if lipgloss.Width(line) > cardW {
+				line = truncateRunes(line, cardW)
+			}
+			if i == m.slashCursor {
+				body.WriteString(sel.Render(line))
+			} else {
+				body.WriteString(dim.Render(line))
+			}
+		}
 	}
-	detail := "no matching command"
-	if len(m.slashItems) > 0 && m.slashCursor < len(m.slashItems) {
-		detail = m.slashItems[m.slashCursor].description
-	}
-	footer := hintStyle.Width(cardW - cardBorder).Render(detail)
-	content := lipgloss.JoinVertical(lipgloss.Left, body.String(), footer)
-	card := lipgloss.NewStyle().
+	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("8")).
 		Width(cardW).
-		Render(content)
-	return lipgloss.PlaceHorizontal(m.width, lipgloss.Center, card)
+		Render(body.String())
 }
 
 // updateSlash handles keys while the slash menu is open.

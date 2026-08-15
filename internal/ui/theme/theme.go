@@ -30,6 +30,22 @@ func ColorDanger() color.Color  { return lipgloss.Color(Danger) }
 func ColorBorder() color.Color  { return lipgloss.Color(Border) }
 func ColorGood() color.Color    { return lipgloss.Color(Good) }
 
+// StatusDiamond is the persistent status mark on every tool run card.
+const StatusDiamond = "◆"
+
+// StatusColor is the diamond color for a tool-run status. Pending and
+// running stay on the text color; success is green; failures are red.
+func StatusColor(status string) color.Color {
+	switch status {
+	case "completed", "success":
+		return ColorGood()
+	case "error", "denied", "failed", "cancelled":
+		return ColorDanger()
+	default:
+		return ColorText()
+	}
+}
+
 // PulseAccent returns a color between Border and Accent for thinking glow.
 // t is 0..1; values outside are clamped.
 func PulseAccent(t float64) color.Color {

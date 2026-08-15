@@ -46,8 +46,9 @@ var (
 )
 
 // Render formats common assistant Markdown without adding a new renderer
-// dependency. Fenced code blocks receive their own dark bordered card.
-func Render(input string) string {
+// dependency. Fenced code blocks receive a dark bordered card. When width
+// is greater than zero the card spans that many columns (full terminal).
+func Render(input string, width int) string {
 	input = strings.ReplaceAll(input, "\r\n", "\n")
 	source := strings.Split(input, "\n")
 	output := make([]string, 0, len(source))
@@ -55,7 +56,7 @@ func Render(input string) string {
 	language := ""
 	codeLines := []string{}
 	flushCode := func() {
-		output = append(output, renderCodeBlock(language, codeLines))
+		output = append(output, renderCodeBlock(language, codeLines, width))
 		language = ""
 		codeLines = []string{}
 	}
@@ -84,12 +85,16 @@ func Render(input string) string {
 	return strings.Join(output, "\n")
 }
 
-func renderCodeBlock(language string, lines []string) string {
+func renderCodeBlock(language string, lines []string, width int) string {
 	body := strings.Join(lines, "\n")
 	if language != "" {
 		body = codeLanguageStyle.Render(language) + "\n" + body
 	}
-	return codeBlockStyle.Render(body)
+	style := codeBlockStyle
+	if width > 0 {
+		style = style.Width(width)
+	}
+	return style.Render(body)
 }
 
 func renderLine(line string) string {
