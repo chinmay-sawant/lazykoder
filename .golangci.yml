@@ -1,4 +1,4 @@
-# golangci-lint configuration for lazyKoder.
+# golangci-lint configuration for lazykoder.
 # Keep this list deliberately small and high-signal. In particular, do not
 # enable whitespace, blank-line, line-length, naming, or parameter-layout
 # linters as repository gates.

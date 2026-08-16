@@ -206,7 +206,7 @@ func TestPickerDrawerSitsAbovePrompt(t *testing.T) {
 	if !strings.Contains(v, "models  ·") || !strings.Contains(v, "deepseek-v4-flash") {
 		t.Fatalf("drawer labels missing: %q", v)
 	}
-	if !strings.Contains(v, "lazyKoder") || !strings.Contains(v, "enter send") {
+	if !strings.Contains(v, "lazykoder") || !strings.Contains(v, "enter send") {
 		t.Fatalf("chat chrome missing under the drawer: %q", v)
 	}
 	drawer := stripANSI(m.pickerView())
@@ -222,7 +222,7 @@ func TestPickerDrawerSitsAbovePrompt(t *testing.T) {
 		if drawerLine < 0 && strings.Contains(line, "models  ·") {
 			drawerLine = i
 		}
-		if strings.Contains(line, "ask lazyKoder") || strings.Contains(line, "enter send") {
+		if strings.Contains(line, "ask lazykoder") || strings.Contains(line, "enter send") {
 			promptLine = i
 		}
 	}

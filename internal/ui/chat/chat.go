@@ -793,7 +793,7 @@ func newPromptArea(width int) textarea.Model {
 	ta := textarea.New()
 	ta.ShowLineNumbers = false
 	ta.Prompt = ""
-	ta.Placeholder = "ask lazyKoder"
+	ta.Placeholder = "ask lazykoder"
 	ta.CharLimit = 0
 	ta.DynamicHeight = true
 	ta.MinHeight = promptMinRows

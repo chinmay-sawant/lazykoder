@@ -1,4 +1,4 @@
-# AGENTS.md - lazyKoder (OpenCode agent harness)
+# AGENTS.md - lazykoder (OpenCode agent harness)
 
 > This file is the conventions ledger for every coding agent working in this
 > repo (opencode, grok, gemini, codex, antigravity/agy, claude). Read it at

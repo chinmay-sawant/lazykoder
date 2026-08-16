@@ -59,7 +59,7 @@
 
 ## How the harness will track todos (the "which events" answer)
 
-When phase 4.5 lands, lazyKoder tracks model todos through exactly four
+When phase 4.5 lands, lazykoder tracks model todos through exactly four
 events, all persisted (never just in-memory):
 
 1. **Tool call event**: the model calls `todowrite` with the full list

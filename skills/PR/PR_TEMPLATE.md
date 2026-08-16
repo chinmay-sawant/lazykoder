@@ -21,7 +21,7 @@ Use this document as the base when authoring GitHub pull requests for [chinmay-s
 ```sh
 # From the feature branch (already pushed):
 gh pr create \
-  --base main \
+  --base master \
   --head "$(git branch --show-current)" \
   --title "<type>(<scope>): <short imperative description>" \
   --body-file plans/PR/pr-<short-slug>.md \
@@ -36,7 +36,7 @@ gh pr create \
 | `--label …` | **Required.** At least one label. |
 | `--body-file …` | **Required.** Full template body with **Related issues** filled. |
 | `--title` | Must match [PR title](#pr-title) convention. |
-| `--base main` | Default integration branch is **`main`** (not `master`). |
+| `--base master` | Default integration branch is **`master`** (not `master`). |
 
 If the PR already exists without metadata:
 
@@ -49,15 +49,15 @@ gh pr edit <NUMBER> --add-label documentation --add-label enhancement
 
 ## Multi-workstream / epic integration (parallel agents)
 
-When **multiple issue-sized branches** are developed in parallel, also ship a **single integration branch** targeting `main`.
+When **multiple issue-sized branches** are developed in parallel, also ship a **single integration branch** targeting `master`.
 
 ```sh
-git fetch origin main
-git checkout -b chore/epic-N-integration origin/main
-# merge child heads, validate, push, open PR to main
+git fetch origin master
+git checkout -b chore/epic-N-integration origin/master
+# merge child heads, validate, push, open PR to master
 ```
 
-Prefer **merging only the integration PR** into `main` when an epic stack exists.
+Prefer **merging only the integration PR** into `master` when an epic stack exists.
 
 ---
 
@@ -225,7 +225,7 @@ chore: drop tree-sitter CGO dependencies
 
 ```sh
 gh pr create \
-  --base main \
+  --base master \
   --title "feat(engine): replace tree-sitter/CGO with go/ast" \
   --body-file plans/PR/pr-go-ast-no-cgo.md \
   --assignee "@me" \

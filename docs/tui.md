@@ -6,7 +6,7 @@ pickers are centered cards.
 
 ## Chat view
 
-- Header: `lazyKoder`, the session title (or `new session`), and the project
+- Header: `lazykoder`, the session title (or `new session`), and the project
   directory basename.
 - Transcript: user turns labeled `you`, assistant turns labeled `assistant`,
   each with a clock timestamp (`15:32:05`) on the far right of the row.
