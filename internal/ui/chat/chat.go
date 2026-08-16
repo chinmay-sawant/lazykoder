@@ -110,14 +110,14 @@ var (
 	toolOutputStyle = lipgloss.NewStyle().
 			Background(theme.ColorBg()).
 			Foreground(theme.ColorMute())
-	// editCardStyle paints the full-width edit block on a semi-transparent
-	// black panel so diffs read as a distinct surface over the chat bg.
+	// editCardStyle: soft greenish chrome for the edit card header/body shell.
 	editCardStyle = lipgloss.NewStyle().
 			Background(theme.ColorEditPanel()).
 			Foreground(theme.ColorText())
 	selectionStyle = lipgloss.NewStyle().
 			Background(theme.ColorAccent()).
 			Foreground(theme.ColorBg())
+	// Full-width soft tints: light greenish + rows, light reddish - rows.
 	diffAddStyle = lipgloss.NewStyle().
 			Foreground(theme.ColorGood()).
 			Background(theme.ColorEditAddBg())

@@ -51,10 +51,16 @@ func Run(filePath, oldString, newString, rootDir string) (Result, error) {
 	return Result{
 		Output: fmt.Sprintf("edited %s: %s -> %s", abs, truncate(oldString), truncate(newString)),
 		Metadata: map[string]any{
-			"diff":          diffLines(strings.Split(content, "\n"), strings.Split(newContent, "\n")),
+			"diff":          UnifiedDiff(content, newContent),
 			"bytes_changed": len(newContent) - len(content),
 		},
 	}, nil
+}
+
+// UnifiedDiff returns a unified diff of oldContent vs newContent with correct
+// 1-based file line numbers in the @@ hunk headers.
+func UnifiedDiff(oldContent, newContent string) string {
+	return diffLines(strings.Split(oldContent, "\n"), strings.Split(newContent, "\n"))
 }
 
 // resolve returns the absolute cleaned path of filePath inside rootDir, rejecting escapes.
@@ -237,12 +243,22 @@ func formatDiff(ops []diffOp) string {
 	i := 0
 	for i < len(ops) {
 		if ops[i].kind == 'k' {
+			// Unchanged lines outside a hunk still advance file positions so
+			// later @@ headers use real 1-based line numbers, not "1".
+			aPos++
+			bPos++
 			i++
 			continue
 		}
+		// Change at i. Pull a few keep-ops of context before it; those keep
+		// ops were already counted while skipping, so rewind positions first.
 		start := i
 		for start > 0 && ops[start-1].kind == 'k' && i-start < diffContext {
 			start--
+		}
+		if rewind := i - start; rewind > 0 {
+			aPos -= rewind
+			bPos -= rewind
 		}
 		end := i
 		for end < len(ops) {

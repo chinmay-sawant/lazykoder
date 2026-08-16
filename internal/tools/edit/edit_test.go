@@ -1,6 +1,7 @@
 package edit
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,11 +44,58 @@ func TestRunUniqueReplace(t *testing.T) {
 	if !strings.HasPrefix(diff, "@@") {
 		t.Errorf("diff = %q, want it to start with a hunk header", diff)
 	}
+	// "b" is line 2 of a 3-line file; with 3 lines of context the hunk
+	// still starts at line 1 (full file fits in context).
+	if !strings.Contains(diff, "@@ -1,") && !strings.Contains(diff, "@@ -2,") {
+		t.Errorf("diff = %q, want a hunk near line 1-2", diff)
+	}
 	if !strings.Contains(res.Output, "edited") {
 		t.Errorf("Output = %q, want \"edited ...\"", res.Output)
 	}
 	if res.Metadata["bytes_changed"] != 0 {
 		t.Errorf("Metadata[bytes_changed] = %v, want 0", res.Metadata["bytes_changed"])
+	}
+}
+
+func TestDiffLineNumbersDeepInFile(t *testing.T) {
+	// Regression: unchanged lines before a change used to be skipped without
+	// advancing aPos/bPos, so every deep edit was reported as @@ -1,...
+	root := t.TempDir()
+	var b strings.Builder
+	for i := 1; i <= 80; i++ {
+		fmt.Fprintf(&b, "line-%d\n", i)
+	}
+	// line-86 style block near the end (like README License section).
+	b.WriteString("## Project Snapshot\n")
+	b.WriteString("\n")
+	b.WriteString("- Example workspace size: 128\n")
+	b.WriteString("- Review sample: 731\n")
+	b.WriteString("\n")
+	writeFile(t, root, "README.md", b.String())
+
+	old := "- Example workspace size: 128\n- Review sample: 731\n\n"
+	new := "- Example workspace size: 128\n- Review sample: 731\n\n## License\n\nMIT\n"
+	res, err := Run("README.md", old, new, root)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	diff, _ := res.Metadata["diff"].(string)
+	if diff == "" {
+		t.Fatal("empty diff")
+	}
+	// Prefix lines 1..80, then "## Project Snapshot" is 81, blank 82,
+	// example line is 83. Hunk context may start a few lines earlier.
+	if strings.Contains(diff, "@@ -1,") {
+		t.Fatalf("diff still anchors at line 1 (position bug):\n%s", diff)
+	}
+	// Parse the old-side start from the first hunk header.
+	var oldStart int
+	if _, err := fmt.Sscanf(diff, "@@ -%d,", &oldStart); err != nil {
+		t.Fatalf("parse hunk from %q: %v", diff, err)
+	}
+	// Prefix is 80 lines; edit sits around 83 with a few lines of context above.
+	if oldStart < 78 || oldStart > 85 {
+		t.Fatalf("old hunk start = %d, want around 80-83 (edit deep in file):\n%s", oldStart, diff)
 	}
 }
 

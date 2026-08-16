@@ -908,10 +908,8 @@ func (m Model) loadSubagentLogItems(row subagentRow) []transcriptItem {
 				if tool.TimeStart != nil {
 					when = *tool.TimeStart
 				}
-				collapsed := true
-				if tool.Tool == "edit" && toolMetadataDiff(tool) != "" {
-					collapsed = false
-				}
+				// Edit cards stay open so the diff is always visible.
+				collapsed := tool.Tool != "edit"
 				items = append(items, transcriptItem{
 					kind: itemTool, collapsed: collapsed, when: when, tool: tool, part: p,
 				})

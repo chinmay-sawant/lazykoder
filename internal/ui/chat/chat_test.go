@@ -2255,25 +2255,20 @@ func TestEditDiffCard(t *testing.T) {
 		InputJSON:    `{"filePath":"main.go","oldString":"old","newString":"new line"}`,
 		MetadataJSON: &meta,
 	}
-	// Explicit collapsed still hides the body but shows +/− stats.
-	m.items = append(m.items, transcriptItem{kind: itemTool, collapsed: true, tool: tc})
+	// Open by default: full soft-tinted diff panel.
+	m.items = append(m.items, transcriptItem{kind: itemTool, collapsed: false, tool: tc})
 	m.syncTranscript()
 	v := stripANSI(viewText(m))
 	if !strings.Contains(v, "main.go") {
-		t.Fatalf("collapsed edit missing path: %q", v)
+		t.Fatalf("edit missing path: %q", v)
 	}
 	if !strings.Contains(v, "+1") || !strings.Contains(v, "-1") {
-		t.Fatalf("collapsed edit missing diff stats: %q", v)
+		t.Fatalf("edit missing diff stats: %q", v)
 	}
-	if strings.Contains(v, "@@") {
-		t.Fatalf("collapsed edit showed full diff: %q", v)
-	}
-	m = m.toggleLastTool()
-	v = stripANSI(viewText(m))
 	if !strings.Contains(v, "@@") || !strings.Contains(v, "new line") {
-		t.Fatalf("expanded edit missing diff: %q", v)
+		t.Fatalf("open edit missing full diff: %q", v)
 	}
-	// Diff lines paint full card width (panel, not a thin text strip).
+	// Diff lines paint full card width.
 	var diffLine string
 	for _, line := range strings.Split(viewText(m), "\n") {
 		if strings.Contains(stripANSI(line), "+new line") {
@@ -2288,33 +2283,165 @@ func TestEditDiffCard(t *testing.T) {
 	if got := lipgloss.Width(diffLine); got < wantW {
 		t.Fatalf("diff line width %d < tool card width %d", got, wantW)
 	}
+	// Collapsed: header + stats only, no body.
+	m.items[0].collapsed = true
+	m.syncTranscript()
+	v = stripANSI(viewText(m))
+	if strings.Contains(v, "@@") || strings.Contains(v, "new line") {
+		t.Fatalf("collapsed edit still shows body: %q", v)
+	}
+	if !strings.Contains(v, "+1") || !strings.Contains(v, "-1") {
+		t.Fatalf("collapsed edit should keep stats: %q", v)
+	}
 }
 
-func TestEditAutoExpandsWithDiff(t *testing.T) {
+func TestEditOpenByDefaultAndToggle(t *testing.T) {
 	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
 	mm, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 36})
 	m = mm.(Model)
 	path := "main.go"
 	meta := `{"diff":"@@ -1,1 +1,1 @@\n-old\n+new"}`
-	// Pending first, then completed with diff (live tool stream).
 	m.applyTool(agent.Event{Tool: db.ToolCall{
-		Tool: "edit", Status: "pending", Title: &path,
+		Tool: "edit", Status: "pending", Title: &path, PartID: "p1", CallID: "c1",
 		InputJSON: `{"filePath":"main.go","oldString":"old","newString":"new"}`,
 	}})
-	if idx := m.lastTool; idx < 0 || !m.items[idx].collapsed {
-		t.Fatal("pending edit should start collapsed")
+	if idx := m.lastTool; idx < 0 || m.items[idx].collapsed {
+		t.Fatal("pending edit should start open")
 	}
+	// User collapses (e / ctrl+e).
+	m = m.toggleLastTool()
+	if !m.items[m.lastTool].collapsed {
+		t.Fatal("toggle should collapse edit")
+	}
+	// Status update must keep the user's collapsed choice.
 	m.applyTool(agent.Event{Tool: db.ToolCall{
-		Tool: "edit", Status: "completed", Title: &path,
+		Tool: "edit", Status: "completed", Title: &path, PartID: "p1", CallID: "c1",
 		InputJSON:    `{"filePath":"main.go","oldString":"old","newString":"new"}`,
 		MetadataJSON: &meta,
 	}})
+	if !m.items[m.lastTool].collapsed {
+		t.Fatal("completed edit must stay collapsed after user closed it")
+	}
+	// Re-open.
+	m = m.toggleLastTool()
 	if m.items[m.lastTool].collapsed {
-		t.Fatal("completed edit with diff should auto-expand")
+		t.Fatal("toggle should re-open edit")
 	}
 	v := stripANSI(viewText(m))
 	if !strings.Contains(v, "+new") || !strings.Contains(v, "-old") {
-		t.Fatalf("auto-expanded edit missing changes: %q", v)
+		t.Fatalf("re-opened edit missing changes: %q", v)
+	}
+}
+
+func TestEditCtrlEToggles(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = mm.(Model)
+	path := "main.go"
+	meta := `{"diff":"@@ -1,1 +1,1 @@\n-a\n+b"}`
+	m.applyTool(agent.Event{Tool: db.ToolCall{
+		Tool: "edit", Status: "completed", Title: &path, PartID: "p1",
+		InputJSON: `{"filePath":"main.go","oldString":"a","newString":"b"}`, MetadataJSON: &meta,
+	}})
+	if m.items[m.lastTool].collapsed {
+		t.Fatal("edit should start open")
+	}
+	// ctrl+e works even when the prompt has text.
+	m.prompt.SetValue("draft")
+	mm, _ = m.Update(tea.KeyPressMsg{Code: 'e', Mod: tea.ModCtrl})
+	m = mm.(Model)
+	if !m.items[m.lastTool].collapsed {
+		t.Fatal("ctrl+e should collapse the edit card")
+	}
+	mm, _ = m.Update(tea.KeyPressMsg{Code: 'e', Mod: tea.ModCtrl})
+	m = mm.(Model)
+	if m.items[m.lastTool].collapsed {
+		t.Fatal("ctrl+e should re-open the edit card")
+	}
+}
+
+func TestEditFallbackDiffFromArgs(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = mm.(Model)
+	path := "x.go"
+	tc := db.ToolCall{
+		Tool: "edit", Status: "completed", Title: &path,
+		InputJSON: `{"filePath":"x.go","oldString":"aaa","newString":"bbb"}`,
+		// No MetadataJSON: UI should still paint a synthetic diff.
+	}
+	m.items = append(m.items, transcriptItem{kind: itemTool, collapsed: false, tool: tc})
+	m.syncTranscript()
+	v := stripANSI(viewText(m))
+	// Body marker is after the line-number gutter: "… │ -aaa"
+	if !strings.Contains(v, "-aaa") || !strings.Contains(v, "+bbb") {
+		t.Fatalf("synthetic edit diff missing: %q", v)
+	}
+}
+
+func TestEditDiffShowsLineNumbersAndRelPath(t *testing.T) {
+	dir := t.TempDir()
+	// Build a deep file so recompute can prove real line numbers (not 1..n).
+	var body strings.Builder
+	for i := 1; i <= 80; i++ {
+		fmt.Fprintf(&body, "pad-%d\n", i)
+	}
+	body.WriteString("## Project Snapshot\n\n")
+	body.WriteString("- Example workspace size: 128\n")
+	body.WriteString("- Review sample: 731\n\n")
+	body.WriteString("## License\n\n")
+	body.WriteString("MIT, see [LICENSE](LICENSE).\n")
+	rel := "README.md"
+	abs := filepath.Join(dir, rel)
+	if err := os.WriteFile(abs, []byte(body.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: dir})
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 36})
+	m = mm.(Model)
+
+	// Historical row with the OLD bug: stored @@ -1 even though edit is deep.
+	oldS := "- Example workspace size: 128\n- Review sample: 731\n\n"
+	newS := "- Example workspace size: 128\n- Review sample: 731\n\n## License\n\nMIT, see [LICENSE](LICENSE).\n"
+	badMeta := `{"diff":"@@ -1,4 +1,8 @@\n - Example workspace size: 128\n - Review sample: 731\n \n+## License\n \n+MIT, see [LICENSE](LICENSE).\n+\n"}`
+	title := abs
+	tc := db.ToolCall{
+		Tool: "edit", Status: "completed", Title: &title,
+		InputJSON: fmt.Sprintf(
+			`{"filePath":%q,"oldString":%q,"newString":%q}`, abs, oldS, newS,
+		),
+		MetadataJSON: &badMeta,
+	}
+	m.items = append(m.items, transcriptItem{kind: itemTool, collapsed: false, tool: tc})
+	m.syncTranscript()
+	v := stripANSI(viewText(m))
+	if !strings.Contains(v, rel) {
+		t.Fatalf("header missing relative path %q in: %q", rel, v)
+	}
+	if strings.Contains(v, abs) {
+		t.Fatalf("header still shows absolute path: %q", v)
+	}
+	// Must NOT show a deep edit as lines 1-4 only; recompute from disk.
+	if strings.Contains(v, "@@ -1,") {
+		t.Fatalf("still showing bogus @@ -1 hunk after recompute: %q", v)
+	}
+	// Line numbers should be in the 80s.
+	foundDeep := false
+	for _, n := range []string{"80", "81", "82", "83", "84", "85"} {
+		if strings.Contains(v, n+" ") || strings.Contains(v, " "+n) {
+			foundDeep = true
+			break
+		}
+	}
+	if !foundDeep {
+		t.Fatalf("expected deep line numbers (~80+), got: %q", v)
+	}
+	if !strings.Contains(v, "│") {
+		t.Fatalf("diff missing line-number gutter: %q", v)
+	}
+	if !strings.Contains(v, "License") {
+		t.Fatalf("diff body missing: %q", v)
 	}
 }
 

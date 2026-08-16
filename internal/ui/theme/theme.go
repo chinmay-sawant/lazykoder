@@ -19,12 +19,14 @@ const (
 	Accent  = "#d4a0c7"
 	Danger  = "#e06c75"
 	Border  = "#2a2a2a"
-	Good    = "#9ece6a"
-	// Edit panel line tints (solid approximations of semi-transparent
-	// green/red wash over black; the panel itself uses ColorEditPanel).
-	EditAddBg = "#0a1a0c"
-	EditDelBg = "#1a0a0c"
-	EditMeta  = "#6a6660"
+	Good = "#9ece6a"
+	// Edit diff row tints: solid soft washes on black (terminals rarely blend
+	// true alpha). Tuned like Grok Build / GitHub dark: very light greenish
+	// and reddish so the row is tinted, not painted neon.
+	EditPanel = "#0c120e"
+	EditAddBg = "#102418"
+	EditDelBg = "#241014"
+	EditMeta  = "#7a8574"
 )
 
 func ColorBg() color.Color      { return lipgloss.Color(Bg) }
@@ -36,15 +38,17 @@ func ColorDanger() color.Color  { return lipgloss.Color(Danger) }
 func ColorBorder() color.Color  { return lipgloss.Color(Border) }
 func ColorGood() color.Color    { return lipgloss.Color(Good) }
 
-// ColorEditPanel is a semi-transparent black overlay for expanded edit cards.
-// Alpha ~70% so the panel reads as a glass layer on the solid black bg.
-func ColorEditPanel() color.Color {
-	return color.RGBA{R: 0, G: 0, B: 0, A: 0xb3}
-}
+// ColorEditPanel is the soft greenish chrome behind the edit card header /
+// context lines (barely lighter than pure black).
+func ColorEditPanel() color.Color { return lipgloss.Color(EditPanel) }
 
+// ColorEditAddBg is a very light greenish full-row wash for + lines.
 func ColorEditAddBg() color.Color { return lipgloss.Color(EditAddBg) }
+
+// ColorEditDelBg is a very light reddish full-row wash for - lines.
 func ColorEditDelBg() color.Color { return lipgloss.Color(EditDelBg) }
-func ColorEditMeta() color.Color  { return lipgloss.Color(EditMeta) }
+
+func ColorEditMeta() color.Color { return lipgloss.Color(EditMeta) }
 
 // StatusDiamond is the persistent status mark on every tool run card.
 const StatusDiamond = "◆"

@@ -43,6 +43,10 @@ func (m Model) updateKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 			}
 			m.copyNotice = "Text copied"
 			return m, tea.Batch(tea.SetClipboard(m.prompt.Value()), clearCopyNotice())
+		case 'e', 'E':
+			// Toggle last tool card (including edit) even while the prompt has text.
+			m.quitConfirm = false
+			return m.toggleLastTool(), nil
 		}
 		var cmd tea.Cmd
 		m.prompt, cmd = m.prompt.Update(key)
