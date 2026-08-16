@@ -14,41 +14,56 @@ messages, parts and tool runs.
   when parent and sub-agents wrote in parallel. One connection serializes
   all store access safely for concurrent agents.
 - Numbered migrations recorded in `schema_migrations` (version 1 creates the
-  full schema; later versions alter). `Migrate` is idempotent.
+  full schema; later versions alter or rebuild). Current version: **8**.
+  `Migrate` is idempotent.
 
 ## Schema
 
 ```sql
 sessions(id TEXT PK, title, directory, provider, model, variant,
          time_created, time_updated, status,
-         parent_session_id TEXT, kind TEXT NOT NULL DEFAULT 'main')
+         parent_session_id -> sessions ON DELETE CASCADE,
+         kind TEXT NOT NULL DEFAULT 'main')
 messages(id TEXT PK, session_id -> sessions ON DELETE CASCADE,
-         role, agent, provider_id, model_id, variant, time_created, seq)
+         role, agent, provider_id, model_id, variant, time_created, seq,
+         UNIQUE(session_id, seq))
 parts(id TEXT PK, message_id -> messages ON DELETE CASCADE,
       type, time_created, seq, text, time_start, time_end, finish_reason,
       tokens_total, tokens_input, tokens_output, tokens_reasoning,
       tokens_cache_read, tokens_cache_write, cost,
-      tool_name, tool_call_id, tool_status)
+      tool_name, tool_call_id, tool_status,
+      UNIQUE(message_id, seq))
 tool_calls(part_id TEXT PK -> parts ON DELETE CASCADE,
            tool, call_id, status, title, time_start, time_end, exit_code,
            input_json, output, metadata_json)
-subagent_jobs(id TEXT PK, parent_session_id -> sessions ON DELETE CASCADE,
-              parent_part_id, child_session_id, name, role, status,
-              prompt, description, model, variant, max_steps, timeout_ms,
-              summary, error, time_created, time_updated,
-              time_started, time_finished)
+subagent_jobs(id TEXT PK,
+              parent_session_id -> sessions ON DELETE CASCADE,
+              parent_part_id -> parts ON DELETE SET NULL,
+              child_session_id -> sessions ON DELETE SET NULL,
+              name, role, status, prompt, description, model, variant,
+              max_steps, timeout_ms, summary, error,
+              time_created, time_updated, time_started, time_finished)
 ```
 
-Indexes: `messages(session_id, seq)`, `parts(message_id, seq)`,
-`parts(type)`, `parts(tool_name)` (partial), `tool_calls(tool)`,
-`tool_calls(status)`, `sessions(time_updated DESC)`,
-`sessions(parent_session_id)` (partial), `sessions(kind)`,
-`subagent_jobs(parent_session_id)`, `subagent_jobs(status)`.
+Indexes (hot paths first):
+
+- `UNIQUE messages(session_id, seq)`, `UNIQUE parts(message_id, seq)`
+- `sessions(directory, kind, time_updated DESC, …)` - resume list
+- `sessions(parent_session_id, kind, time_updated DESC, …)` - child drawer
+- `sessions(time_updated DESC)`, partial parent, `kind`
+- `parts(type)`, partial `tool_name`; `tool_calls(tool)`, `(status)`
+- `subagent_jobs(parent_session_id)`, `(status)`,
+  `(parent_session_id, time_started, …)`,
+  partial open jobs `WHERE status IN ('queued','running')`
 
 `kind=subagent` sessions are hidden from `ListSessionsByDir` / resume.
-Deleting a parent session also deletes its child sessions and durable
-`subagent_jobs` rows. Child messages set `messages.agent` to the sub-agent
-name.
+Deleting a parent session cascades to child sessions (self-FK), their
+messages/parts/tools, and durable `subagent_jobs`. Deleting only a child
+session nulls `subagent_jobs.child_session_id` but keeps the job summary.
+Child messages set `messages.agent` to the sub-agent name.
+
+Schema version is 8 (`schema_migrations`). Migrations 7-8 rebuild tables
+to add FKs SQLite cannot express with `ALTER TABLE`.
 
 `subagent_jobs` is the durable task registry: spawn/status/finish are
 upserted so `task_list`, `task_status`, and `task_wait` still work after a

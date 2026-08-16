@@ -400,22 +400,12 @@ ORDER BY time_updated DESC, time_created DESC, id DESC`, directory)
 	return out, nil
 }
 
-// DeleteSession removes a session and any child sub-agent sessions; messages
-// and parts cascade via foreign_keys=ON.
+// DeleteSession removes a session. Child sub-agent sessions cascade via
+// sessions.parent_session_id ON DELETE CASCADE; messages/parts/tool_calls and
+// subagent_jobs cascade from their session FKs (foreign_keys=ON).
 func (s *Store) DeleteSession(ctx context.Context, id string) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("db: begin delete session: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE parent_session_id = ?`, id); err != nil {
-		return fmt.Errorf("db: delete child sessions: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE id = ?`, id); err != nil {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE id = ?`, id); err != nil {
 		return fmt.Errorf("db: delete session: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("db: commit delete session: %w", err)
 	}
 	return nil
 }

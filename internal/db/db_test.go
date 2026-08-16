@@ -44,8 +44,8 @@ WHERE type = 'table' AND name IN ('sessions', 'messages', 'parts', 'tool_calls',
 	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&n); err != nil {
 		t.Fatalf("count migrations: %v", err)
 	}
-	if n != 5 {
-		t.Fatalf("got %d schema_migrations rows, want 5", n)
+	if n != schemaVersion {
+		t.Fatalf("got %d schema_migrations rows, want %d", n, schemaVersion)
 	}
 }
 
@@ -744,10 +744,26 @@ func TestSubagentJobRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
+	// Optional FKs require real parent part / child session when set.
+	am, err := s.InsertMessage(ctx, Message{SessionID: parent.ID, Role: "assistant"})
+	if err != nil {
+		t.Fatalf("InsertMessage: %v", err)
+	}
+	part, err := s.InsertPart(ctx, Part{MessageID: am.ID, Type: "tool", ToolName: strPtr("task"), ToolStatus: strPtr("completed")})
+	if err != nil {
+		t.Fatalf("InsertPart: %v", err)
+	}
+	pid := parent.ID
+	child, err := s.CreateSession(ctx, Session{
+		Directory: "/work", Title: "child", ParentSessionID: &pid, Kind: SessionKindSubagent,
+	})
+	if err != nil {
+		t.Fatalf("child session: %v", err)
+	}
 	job := SubagentJob{
 		ID:              "sub_testjob01aabbcc",
 		ParentSessionID: parent.ID,
-		ParentPartID:    "prt_1",
+		ParentPartID:    part.ID,
 		Name:            "layout-audit",
 		Role:            "explore",
 		Status:          "queued",
@@ -768,8 +784,7 @@ func TestSubagentJobRoundTrip(t *testing.T) {
 	}
 	got.Status = "completed"
 	got.Summary = "all good"
-	got.ChildSessionID = "ses_child"
-	// child FK is not enforced; store as plain text id
+	got.ChildSessionID = child.ID
 	if err := s.UpsertSubagentJob(ctx, got); err != nil {
 		t.Fatalf("Upsert completed: %v", err)
 	}
@@ -786,5 +801,189 @@ func TestSubagentJobRoundTrip(t *testing.T) {
 	}
 	if len(open) != 0 {
 		t.Fatalf("open should be empty after completed, got %#v", open)
+	}
+}
+
+func TestForeignKeysEnabled(t *testing.T) {
+	s := openTestStore(t)
+	var on int
+	if err := s.db.QueryRow(`PRAGMA foreign_keys`).Scan(&on); err != nil {
+		t.Fatalf("PRAGMA foreign_keys: %v", err)
+	}
+	if on != 1 {
+		t.Fatalf("foreign_keys = %d, want 1", on)
+	}
+	if err := s.foreignKeyCheck(context.Background()); err != nil {
+		t.Fatalf("foreign_key_check: %v", err)
+	}
+}
+
+func TestParentSessionFKRejectsOrphan(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	missing := "ses_does_not_exist"
+	_, err := s.CreateSession(ctx, Session{
+		Directory:       "/work",
+		ParentSessionID: &missing,
+		Kind:            SessionKindSubagent,
+	})
+	if err == nil {
+		t.Fatal("expected FK failure for missing parent_session_id")
+	}
+}
+
+func TestChildSessionsCascadeOnParentDelete(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	parent, err := s.CreateSession(ctx, Session{Directory: "/work", Title: "main"})
+	if err != nil {
+		t.Fatalf("parent: %v", err)
+	}
+	pid := parent.ID
+	child, err := s.CreateSession(ctx, Session{
+		Directory:       "/work",
+		Title:           "child",
+		ParentSessionID: &pid,
+		Kind:            SessionKindSubagent,
+	})
+	if err != nil {
+		t.Fatalf("child: %v", err)
+	}
+	text := "hi"
+	um, err := s.InsertMessage(ctx, Message{SessionID: child.ID, Role: "user"})
+	if err != nil {
+		t.Fatalf("msg: %v", err)
+	}
+	if _, err := s.InsertPart(ctx, Part{MessageID: um.ID, Type: "text", Text: &text}); err != nil {
+		t.Fatalf("part: %v", err)
+	}
+	if err := s.DeleteSession(ctx, parent.ID); err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	if _, err := s.GetSession(ctx, child.ID); err == nil {
+		t.Fatal("child session should be cascade-deleted")
+	}
+	msgs, err := s.ListMessages(ctx, child.ID)
+	if err != nil {
+		t.Fatalf("ListMessages: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("child messages should cascade, got %d", len(msgs))
+	}
+}
+
+func TestSubagentJobChildFKSetNull(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	parent, err := s.CreateSession(ctx, Session{Directory: "/work", Title: "main"})
+	if err != nil {
+		t.Fatalf("parent: %v", err)
+	}
+	pid := parent.ID
+	child, err := s.CreateSession(ctx, Session{
+		Directory:       "/work",
+		Title:           "agent",
+		ParentSessionID: &pid,
+		Kind:            SessionKindSubagent,
+	})
+	if err != nil {
+		t.Fatalf("child: %v", err)
+	}
+	job := SubagentJob{
+		ID:              "sub_fksetnull01aabb",
+		ParentSessionID: parent.ID,
+		ChildSessionID:  child.ID,
+		Name:            "job",
+		Role:            "explore",
+		Status:          "completed",
+		Prompt:          "p",
+		Summary:         "report body",
+	}
+	if err := s.UpsertSubagentJob(ctx, job); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	// Delete only the child session row (not the parent).
+	if err := s.DeleteSession(ctx, child.ID); err != nil {
+		t.Fatalf("delete child: %v", err)
+	}
+	got, err := s.GetSubagentJob(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("GetSubagentJob: %v", err)
+	}
+	if got.ChildSessionID != "" {
+		t.Fatalf("child_session_id = %q, want empty after SET NULL", got.ChildSessionID)
+	}
+	if got.Summary != "report body" {
+		t.Fatalf("summary lost: %q", got.Summary)
+	}
+}
+
+func TestUniqueMessageSeq(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	sess, err := s.CreateSession(ctx, Session{Directory: "/work"})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	m1, err := s.InsertMessage(ctx, Message{SessionID: sess.ID, Role: "user"})
+	if err != nil {
+		t.Fatalf("InsertMessage: %v", err)
+	}
+	// Force a duplicate seq via raw insert.
+	_, err = s.db.ExecContext(ctx, `INSERT INTO messages (id, session_id, role, time_created, seq, visible)
+VALUES ('msg_dupseq00000001', ?, 'user', 1, ?, 1)`, sess.ID, m1.Seq)
+	if err == nil {
+		t.Fatal("expected unique seq violation")
+	}
+}
+
+func TestSchemaHasIntegrityIndexes(t *testing.T) {
+	s := openTestStore(t)
+	want := []string{
+		"idx_messages_session_seq",
+		"idx_parts_message_seq",
+		"idx_sessions_dir_kind_updated",
+		"idx_sessions_parent_kind_updated",
+		"idx_subagent_jobs_parent_started",
+		"idx_subagent_jobs_open",
+	}
+	for _, name := range want {
+		var n int
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?`, name).Scan(&n); err != nil {
+			t.Fatalf("lookup %s: %v", name, err)
+		}
+		if n != 1 {
+			t.Errorf("index %s missing", name)
+		}
+	}
+	// Unique seq indexes.
+	var sql string
+	if err := s.db.QueryRow(`SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_messages_session_seq'`).Scan(&sql); err != nil {
+		t.Fatalf("index sql: %v", err)
+	}
+	if !strings.Contains(strings.ToUpper(sql), "UNIQUE") {
+		t.Fatalf("idx_messages_session_seq not UNIQUE: %s", sql)
+	}
+}
+
+func TestParentDeleteRemovesSubagentJobs(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	parent, err := s.CreateSession(ctx, Session{Directory: "/work"})
+	if err != nil {
+		t.Fatalf("parent: %v", err)
+	}
+	job := SubagentJob{
+		ID: "sub_parentdel01aabb", ParentSessionID: parent.ID,
+		Name: "j", Role: "explore", Status: "completed", Prompt: "p",
+	}
+	if err := s.UpsertSubagentJob(ctx, job); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	if err := s.DeleteSession(ctx, parent.ID); err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	if _, err := s.GetSubagentJob(ctx, job.ID); err == nil {
+		t.Fatal("job should cascade-delete with parent")
 	}
 }

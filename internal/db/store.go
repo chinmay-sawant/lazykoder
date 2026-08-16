@@ -168,7 +168,26 @@ var schemaMigrations = [][]string{
 		`CREATE INDEX idx_subagent_jobs_parent ON subagent_jobs(parent_session_id)`,
 		`CREATE INDEX idx_subagent_jobs_status ON subagent_jobs(status)`,
 	},
+	{
+		// v0.0.4: unique seq + query-shaped indexes (no table rebuild).
+		// Replace non-unique seq indexes with UNIQUE covering the same paths.
+		`DROP INDEX IF EXISTS idx_messages_session_seq`,
+		`CREATE UNIQUE INDEX idx_messages_session_seq ON messages(session_id, seq)`,
+		`DROP INDEX IF EXISTS idx_parts_message_seq`,
+		`CREATE UNIQUE INDEX idx_parts_message_seq ON parts(message_id, seq)`,
+		// Resume list: filter by project directory first.
+		`CREATE INDEX IF NOT EXISTS idx_sessions_dir_kind_updated ON sessions(directory, kind, time_updated DESC, time_created DESC, id)`,
+		// Child drawer: parent + kind + recency.
+		`CREATE INDEX IF NOT EXISTS idx_sessions_parent_kind_updated ON sessions(parent_session_id, kind, time_updated DESC, time_created DESC)`,
+		// Durable jobs: list by parent and open-job recover.
+		`CREATE INDEX IF NOT EXISTS idx_subagent_jobs_parent_started ON subagent_jobs(parent_session_id, time_started, time_created, id)`,
+		`CREATE INDEX IF NOT EXISTS idx_subagent_jobs_open ON subagent_jobs(status, time_created, id) WHERE status IN ('queued', 'running')`,
+	},
 }
+
+// schemaVersion is the highest applied migration number (includes rebuilds
+// implemented as Go steps rather than pure SQL slices).
+const schemaVersion = 8
 
 // Migrate runs numbered migrations. schema_migrations records the applied
 // versions after first open. Idempotent: a second call is a no-op.
@@ -183,8 +202,20 @@ func (s *Store) Migrate(ctx context.Context) error {
 	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&current); err != nil {
 		return fmt.Errorf("db: read schema version: %w", err)
 	}
-	for i := current + 1; i <= len(schemaMigrations); i++ {
-		if err := s.applyMigration(ctx, i, schemaMigrations[i-1]); err != nil {
+	for i := current + 1; i <= schemaVersion; i++ {
+		var err error
+		switch i {
+		case 7:
+			err = s.migrateV7SessionsParentFK(ctx)
+		case 8:
+			err = s.migrateV8SubagentJobsFK(ctx)
+		default:
+			if i < 1 || i > len(schemaMigrations) {
+				return fmt.Errorf("db: missing migration statements for version %d", i)
+			}
+			err = s.applyMigration(ctx, i, schemaMigrations[i-1])
+		}
+		if err != nil {
 			return err
 		}
 	}

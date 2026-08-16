@@ -733,7 +733,7 @@ func (m *Manager) persistHandle(h *handle) {
 	if store == nil || h == nil {
 		return
 	}
-	_ = store.UpsertSubagentJob(context.Background(), m.rowFromHandle(h))
+	upsertSubagentJobRelaxed(store, m.rowFromHandle(h))
 }
 
 // persistHandleLocked must be called with m.mu held.
@@ -741,7 +741,26 @@ func (m *Manager) persistHandleLocked(h *handle) {
 	if m.store == nil || h == nil {
 		return
 	}
-	_ = m.store.UpsertSubagentJob(context.Background(), m.rowFromHandle(h))
+	upsertSubagentJobRelaxed(m.store, m.rowFromHandle(h))
+}
+
+// upsertSubagentJobRelaxed persists a job even when optional FK targets
+// (parent part / child session) are missing - e.g. tests or stale ids.
+// Required parent_session_id must still exist.
+func upsertSubagentJobRelaxed(store *db.Store, row db.SubagentJob) {
+	if store == nil || row.ID == "" {
+		return
+	}
+	ctx := context.Background()
+	if err := store.UpsertSubagentJob(ctx, row); err == nil {
+		return
+	}
+	row.ParentPartID = ""
+	if err := store.UpsertSubagentJob(ctx, row); err == nil {
+		return
+	}
+	row.ChildSessionID = ""
+	_ = store.UpsertSubagentJob(ctx, row)
 }
 
 func (m *Manager) rowFromHandle(h *handle) db.SubagentJob {
