@@ -86,25 +86,14 @@ func TestLoadLegacyStringArray(t *testing.T) {
 	if len(models) != 2 || models[0].ID != "deepseek-v4-flash" || models[1].ID != "claude-4" {
 		t.Errorf("legacy models = %+v", models)
 	}
-	if models[0].Context != 1000000 || models[0].InputPerM != 0.14 || models[0].OutputPerM != 0.28 {
-		t.Errorf("legacy enrich = %+v, want catalog context and prices", models[0])
+	if models[0].ID != "deepseek-v4-flash" || models[0].Context != 0 {
+		t.Errorf("legacy models = %+v, want ids only", models[0])
 	}
 }
 
-func TestEnrichFillsCatalog(t *testing.T) {
-	got := Enrich(Info{ID: "deepseek-v4-flash"})
-	if got.Context != 1000000 || got.InputPerM != 0.14 || got.OutputPerM != 0.28 {
-		t.Fatalf("Enrich = %+v, want catalog row", got)
-	}
-	kept := Enrich(Info{ID: "deepseek-v4-flash", Context: 128000, InputPerM: 1, OutputPerM: 2})
-	if kept.Context != 128000 || kept.InputPerM != 1 || kept.OutputPerM != 2 {
-		t.Fatalf("Enrich overwrote live values: %+v", kept)
-	}
-}
-
-func TestSaveWritesCatalogPrices(t *testing.T) {
+func TestSaveKeepsProvidedPrices(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "models.json")
-	if err := Save(path, []Info{{ID: "deepseek-v4-flash"}}, time.Now()); err != nil {
+	if err := Save(path, []Info{{ID: "deepseek-v4-flash", Context: 1000000, InputPerM: 0.14, OutputPerM: 0.28, CacheReadPerM: 0.0028, CacheWritePerM: 0}}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(path)
@@ -112,9 +101,28 @@ func TestSaveWritesCatalogPrices(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := string(raw)
-	for _, want := range []string{`"context": 1000000`, `"input_per_million": 0.14`, `"output_per_million": 0.28`} {
+	for _, want := range []string{`"context": 1000000`, `"input_per_million": 0.14`, `"output_per_million": 0.28`, `"cache_read_per_million": 0.0028`, `"cache_write_per_million": 0`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("cache missing %s:\n%s", want, body)
 		}
 	}
+}
+
+func TestCostUSDUsesCacheReadPrice(t *testing.T) {
+	info := Info{InputPerM: 0.14, OutputPerM: 0.28, CacheReadPerM: 0.0028}
+	got := info.CostUSD(1_000_000, 0, 900_000, 0)
+	// 100k uncached at 0.14 + 900k cache read at 0.0028 = 0.014 + 0.00252
+	want := 0.01652
+	if got < want-0.00001 || got > want+0.00001 {
+		t.Fatalf("CostUSD = %v, want %v", got, want)
+	}
+}
+
+func containsID(ids []string, want string) bool {
+	for _, id := range ids {
+		if id == want {
+			return true
+		}
+	}
+	return false
 }

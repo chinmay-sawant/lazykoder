@@ -38,6 +38,9 @@ type Options struct {
 	// Model overrides the provider default for new sessions and every
 	// chat request. When empty the client default applies.
 	Model string
+	// Variant is the selected reasoning effort (low, medium, high).
+	// Empty omits the field so the provider default applies.
+	Variant string
 	// Confirm is invoked when a tool call needs a human decision (policy.ActionAsk).
 	Confirm func(dec policy.Decision, subject string) (bool, error)
 	// Ask is invoked when the model calls the question tool; it must return
@@ -133,9 +136,10 @@ func (a *Agent) Send(ctx context.Context, userText string, events chan<- Event) 
 			return a.fail(events, err)
 		}
 		resp, err := a.client.Chat(ctx, opencode.ChatRequest{
-			Model:    a.opts.Model,
-			Messages: history,
-			Tools:    []opencode.ToolSpec{bashToolSpec},
+			Model:           a.opts.Model,
+			ReasoningEffort: a.opts.Variant,
+			Messages:        history,
+			Tools:           []opencode.ToolSpec{bashToolSpec},
 		})
 		if err != nil {
 			return a.fail(events, fmt.Errorf("agent: provider: %w", err))
@@ -183,6 +187,7 @@ func (a *Agent) ensureSession(ctx context.Context, userText string, events chan<
 		Title:     truncateRunes(strings.TrimSpace(userText), maxSessionTitle),
 		Directory: a.workdir,
 		Model:     a.opts.Model,
+		Variant:   strPtr(a.opts.Variant),
 	})
 	if err != nil {
 		return a.fail(events, fmt.Errorf("agent: create session: %w", err))
@@ -306,7 +311,12 @@ func concatText(parts []db.Part) string {
 }
 
 func (a *Agent) writeResponse(ctx context.Context, events chan<- Event, resp *opencode.ChatResponse) error {
-	m, err := a.store.InsertMessage(ctx, db.Message{SessionID: a.sessionID(), Role: "assistant"})
+	m, err := a.store.InsertMessage(ctx, db.Message{
+		SessionID: a.sessionID(),
+		Role:      "assistant",
+		ModelID:   a.opts.Model,
+		Variant:   strPtr(a.opts.Variant),
+	})
 	if err != nil {
 		return fmt.Errorf("agent: insert assistant message: %w", err)
 	}

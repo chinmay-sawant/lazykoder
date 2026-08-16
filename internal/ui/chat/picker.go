@@ -7,6 +7,8 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+
+	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
 )
 
 func (m Model) pickerVPHeight() int {
@@ -21,26 +23,32 @@ func (m Model) pickerView() string {
 	innerW := max(minPaneWidth, cardW-cardBorder)
 	leftW, rightW := splitPaneWidths(innerW)
 
-	current := m.model
-	if current == "" && m.client != nil {
-		current = m.client.Model()
-	}
-	if current == "" {
-		current = "provider default"
+	current := m.pickerSelectedLabel()
+	kindLabel := "MODEL"
+	rightTitle := "AVAILABLE MODELS"
+	if m.pickerKind == pickerKindVariant {
+		kindLabel = "VARIANT"
+		rightTitle = "AVAILABLE VARIANTS"
 	}
 	left := lipgloss.NewStyle().Width(leftW).Render(strings.Join([]string{
-		lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Render("MODEL"),
+		lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Render(kindLabel),
 		hintStyle.Render("Selected"),
 		current,
 	}, "\n"))
 
 	vpH := m.pickerVPHeight()
-	rightHeader := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Render("AVAILABLE MODELS")
+	rightHeader := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Render(rightTitle)
 	rightBody := ""
 	if m.modelsErr != "" {
 		rightBody = errStyle.Render("models unavailable: " + m.modelsErr)
 	} else if len(m.pickerItems) == 0 {
-		if len(m.models) == 0 {
+		if m.pickerKind == pickerKindVariant {
+			if len(m.pickerSource()) == 0 {
+				rightBody = hintStyle.Render("no variants for this model")
+			} else {
+				rightBody = hintStyle.Render("no variants match \"" + m.pickerFilter + "\"")
+			}
+		} else if len(m.models) == 0 {
 			rightBody = hintStyle.Render("no models loaded")
 		} else {
 			rightBody = hintStyle.Render("no models match \"" + m.pickerFilter + "\"")
@@ -64,7 +72,7 @@ func (m Model) pickerView() string {
 	}
 	footer := hintStyle.Width(innerW).Render(filter)
 	content := lipgloss.JoinVertical(lipgloss.Left,
-		pickerHeader(innerW),
+		pickerHeaderFor(m.pickerKind, innerW),
 		body,
 		footer,
 	)
@@ -76,10 +84,21 @@ func (m Model) pickerView() string {
 		Render(content)
 }
 
-func pickerHeader(width int) string {
+func pickerHeaderFor(kind string, width int) string {
 	title := " SETTINGS  /  MODEL"
+	if kind == pickerKindVariant {
+		title = " SETTINGS  /  VARIANT"
+	}
+	return pickerHeaderTitle(width, title)
+}
+
+func pickerHeaderTitle(width int, title string) string {
 	if lipgloss.Width(title)+1 > width {
-		title = " SETTINGS / MODEL"
+		if strings.Contains(title, "VARIANT") {
+			title = " SETTINGS / VARIANT"
+		} else {
+			title = " SETTINGS / MODEL"
+		}
 	}
 	return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Width(width).Render(
 		title + strings.Repeat(" ", max(0, width-lipgloss.Width(title)-1)) + "X",
@@ -112,9 +131,10 @@ func (m Model) pickerContent(width int) string {
 		if i > 0 {
 			b.WriteString("\n")
 		}
-		line := "  " + id
+		label := m.pickerItemLabel(id)
+		line := "  " + label
 		if i == m.pickerCursor {
-			b.WriteString(sel.Render("▸ " + id))
+			b.WriteString(sel.Render("▸ " + label))
 			continue
 		}
 		b.WriteString(normal.Render(line))
@@ -168,9 +188,19 @@ func (m Model) updatePickerKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyEnter:
 		if m.pickerBuilt && len(m.pickerItems) > 0 && m.pickerCursor < len(m.pickerItems) {
+			if m.pickerKind == pickerKindVariant {
+				m.variant = m.pickerItems[m.pickerCursor]
+				m.syncSessionVariant()
+				m.pickerMode = false
+				return m, m.persistVariant()
+			}
 			m.model = m.pickerItems[m.pickerCursor]
+			if !modelscache.HasVariant(m.modelInfos, m.model, m.variant) {
+				m.variant = ""
+			}
+			m.syncSessionVariant()
 			m.pickerMode = false
-			return m, m.persistModel()
+			return m, m.persistSelection()
 		}
 		return m, nil
 	case 'j', tea.KeyDown:
@@ -198,6 +228,7 @@ func (m Model) updatePickerKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 func (m Model) closePicker() Model {
 	m.pickerMode = false
 	m.pickerFiltering = false
+	m.pickerKind = pickerKindModel
 	m.dragOn = false
 	return m
 }
@@ -215,8 +246,9 @@ func (m Model) refreshPickerCursor() Model {
 func (m *Model) applyFilter() {
 	m.pickerItems = nil
 	needle := strings.ToLower(m.pickerFilter)
-	for _, id := range m.models {
-		if needle == "" || strings.Contains(strings.ToLower(id), needle) {
+	for _, id := range m.pickerSource() {
+		if needle == "" || strings.Contains(strings.ToLower(id), needle) ||
+			(needle == "free" && modelscache.IsFree(modelscache.Info{ID: id})) {
 			m.pickerItems = append(m.pickerItems, id)
 		}
 	}
@@ -233,19 +265,25 @@ func (m *Model) applyFilter() {
 }
 
 func (m Model) openPicker() Model {
+	return m.openKindPicker(pickerKindModel)
+}
+
+func (m Model) openVariantPicker() Model {
+	return m.openKindPicker(pickerKindVariant)
+}
+
+func (m Model) openKindPicker(kind string) Model {
 	if !m.pickerBuilt {
 		m.pickerVp = viewport.New(viewport.WithWidth(pickerVpDefaultW), viewport.WithHeight(pickerVpDefaultH))
 		m.pickerBuilt = true
 		m = m.resizePicker()
 	}
+	m.pickerKind = kind
 	m.pickerFilter = ""
 	m.pickerFiltering = false
 	m.pickerCursor = 0
 	m.applyFilter()
-	current := m.model
-	if current == "" && m.client != nil {
-		current = m.client.Model()
-	}
+	current := m.pickerSelectedValue()
 	for i, id := range m.pickerItems {
 		if id == current {
 			m.pickerCursor = i
@@ -262,13 +300,94 @@ func (m Model) openPicker() Model {
 	return m
 }
 
-func (m Model) persistModel() tea.Cmd {
+func (m Model) pickerSource() []string {
+	if m.pickerKind == pickerKindVariant {
+		info, ok := modelscache.InfoOf(m.modelInfos, m.modelLabel())
+		if !ok {
+			return nil
+		}
+		return info.Variants
+	}
+	return m.models
+}
+
+func (m Model) pickerSelectedValue() string {
+	if m.pickerKind == pickerKindVariant {
+		return m.variant
+	}
+	current := m.model
+	if current == "" && m.client != nil {
+		current = m.client.Model()
+	}
+	return current
+}
+
+func (m Model) pickerSelectedLabel() string {
+	if m.pickerKind == pickerKindVariant {
+		if m.variant != "" {
+			return m.variant
+		}
+		return "provider default"
+	}
+	current := m.model
+	if current == "" && m.client != nil {
+		current = m.client.Model()
+	}
+	if current == "" {
+		return "provider default"
+	}
+	return current
+}
+
+func (m Model) pickerItemLabel(id string) string {
+	if m.pickerKind == pickerKindVariant {
+		return id
+	}
+	info, ok := modelscache.InfoOf(m.modelInfos, id)
+	if ok && modelscache.IsFree(info) {
+		return id + "  free"
+	}
+	if modelscache.IsFree(modelscache.Info{ID: id}) {
+		return id + "  free"
+	}
+	return id
+}
+
+func (m Model) persistSelection() tea.Cmd {
 	if m.session == nil || m.store == nil {
 		return nil
 	}
-	sid, model := m.session.ID, m.model
+	sid, model, variant := m.session.ID, m.model, m.variant
 	return func() tea.Msg {
 		if err := m.store.UpdateSessionModel(context.Background(), sid, model); err != nil {
+			return errMsg{err: err}
+		}
+		if err := m.store.UpdateSessionVariant(context.Background(), sid, variant); err != nil {
+			return errMsg{err: err}
+		}
+		return nil
+	}
+}
+
+func (m *Model) syncSessionVariant() {
+	if m.session == nil {
+		return
+	}
+	if m.variant == "" {
+		m.session.Variant = nil
+		return
+	}
+	v := m.variant
+	m.session.Variant = &v
+}
+
+func (m Model) persistVariant() tea.Cmd {
+	if m.session == nil || m.store == nil {
+		return nil
+	}
+	sid, variant := m.session.ID, m.variant
+	return func() tea.Msg {
+		if err := m.store.UpdateSessionVariant(context.Background(), sid, variant); err != nil {
 			return errMsg{err: err}
 		}
 		return nil

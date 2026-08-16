@@ -44,8 +44,6 @@ func (m Model) slashView() string {
 		}
 	}
 	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("8")).
 		Width(cardW).
 		Render(body.String())
 }
@@ -104,6 +102,8 @@ func (m Model) runSlash(name string) (Model, tea.Cmd) {
 		return m.openSessionPicker(), nil
 	case "/model":
 		return m.openPicker(), nil
+	case "/variant":
+		return m.openVariantPicker(), nil
 	case "/refresh":
 		return m, m.refreshModels
 	case "/help":

@@ -128,15 +128,19 @@ func (m *Model) applyUsage(p db.Part) {
 	if total > m.tokensUsed {
 		m.tokensUsed = total
 	}
-	if in > 0 || out > 0 {
-		m.addCost(in, out)
-	} else if total > 0 {
-		m.addCost(0, total)
-	}
-	var hit int64
+	var hit, written int64
 	if p.TokensCacheRead != nil {
 		hit = *p.TokensCacheRead
 	}
+	if p.TokensCacheWrite != nil {
+		written = *p.TokensCacheWrite
+	}
+	if in > 0 || out > 0 || hit > 0 || written > 0 {
+		m.addCost(in, out, hit, written)
+	} else if total > 0 {
+		m.addCost(0, total, 0, 0)
+	}
+
 	miss := cacheMissTokens(in, hit)
 	if hit > 0 {
 		m.cacheHit += hit
@@ -162,12 +166,12 @@ func (m *Model) bumpTokenFloor() {
 	}
 }
 
-func (m *Model) addCost(inputTokens, outputTokens int64) {
+func (m *Model) addCost(inputTokens, outputTokens, cacheRead, cacheWrite int64) {
 	info, ok := modelscache.InfoOf(m.modelInfos, m.modelLabel())
 	if !ok {
 		return
 	}
-	m.sessionCost += (float64(inputTokens)/1_000_000)*info.InputPerM + (float64(outputTokens)/1_000_000)*info.OutputPerM
+	m.sessionCost += info.CostUSD(inputTokens, outputTokens, cacheRead, cacheWrite)
 }
 
 func cacheMissTokens(input, hit int64) int64 {

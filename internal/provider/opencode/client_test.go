@@ -386,6 +386,65 @@ func TestModelInfosParsesContext(t *testing.T) {
 	}
 }
 
+func TestModelInfosParsesCachePricesAndVariants(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"data":[{"id":"grok-4.5","pricing":{"input":2,"output":6,"cache_read":0.3},"variants":["low","medium","high"]},{"id":"deepseek-v4-flash-free"}]}`)
+	}))
+	defer srv.Close()
+	c := NewClient("k", WithBaseURL(srv.URL))
+	infos, err := c.ModelInfos(context.Background())
+	if err != nil {
+		t.Fatalf("ModelInfos: %v", err)
+	}
+	if len(infos) != 2 {
+		t.Fatalf("len = %d", len(infos))
+	}
+	if infos[0].CacheReadPerM != 0.3 || infos[0].InputPerM != 2 || len(infos[0].Variants) != 3 {
+		t.Fatalf("priced model = %+v", infos[0])
+	}
+	if !infos[1].Free {
+		t.Fatalf("free model not marked: %+v", infos[1])
+	}
+}
+
+func TestFreeModelInfosSkippedOnTestURL(t *testing.T) {
+	c := NewClient("k", WithBaseURL("http://127.0.0.1:1"))
+	infos, err := c.FreeModelInfos(context.Background())
+	if err != nil {
+		t.Fatalf("FreeModelInfos: %v", err)
+	}
+	if infos != nil {
+		t.Fatalf("FreeModelInfos = %v, want nil on non-go base", infos)
+	}
+}
+
+func TestChatRequestSendsReasoningEffort(t *testing.T) {
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ReasoningEffort string `json:"reasoning_effort"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("decode: %v", err)
+			return
+		}
+		got = req.ReasoningEffort
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"hi","finish_reason":"stop"}}]}`)
+	}))
+	defer srv.Close()
+	c := NewClient("k", WithBaseURL(srv.URL))
+	if _, err := c.Chat(context.Background(), ChatRequest{
+		Model:           "grok-4.5",
+		ReasoningEffort: "high",
+		Messages:        []Message{{Role: "user", Content: "x"}},
+	}); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if got != "high" {
+		t.Fatalf("reasoning_effort = %q, want high", got)
+	}
+}
+
 func TestChatRequestModelOverride(t *testing.T) {
 	var got string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

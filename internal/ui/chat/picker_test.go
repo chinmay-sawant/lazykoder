@@ -136,6 +136,30 @@ func TestModelPickerFilter(t *testing.T) {
 	}
 }
 
+func TestModelPickerFilterFree(t *testing.T) {
+	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
+	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
+	m.models = []string{"deepseek-v4-flash", "deepseek-v4-flash-free", "big-pickle"}
+	m.modelInfos = []modelscache.Info{
+		{ID: "deepseek-v4-flash"},
+		{ID: "deepseek-v4-flash-free", Free: true},
+		{ID: "big-pickle", Free: true},
+	}
+
+	m = clickModelStatus(t, m)
+	m = upd(m, tea.KeyPressMsg{Code: '/'})
+	for _, r := range "free" {
+		m = upd(m, tea.KeyPressMsg{Code: r, Text: string(r)})
+	}
+	if !containsModel(m.pickerItems, "deepseek-v4-flash-free") || !containsModel(m.pickerItems, "big-pickle") {
+		t.Fatalf("free filter items = %v", m.pickerItems)
+	}
+	v := stripANSI(viewText(m))
+	if !strings.Contains(v, "big-pickle  free") {
+		t.Fatalf("free label missing: %q", v)
+	}
+}
+
 func typeRune(m Model, r rune) Model {
 	return upd(m, tea.KeyPressMsg{Code: r, Text: string(r)})
 }
@@ -341,8 +365,8 @@ func TestModelsCacheRefreshedWhenStale(t *testing.T) {
 	p.run(m.Init())
 	m = p.runStep(m, p.next())
 
-	if len(m.models) != 2 {
-		t.Errorf("refreshed models = %d, want 2", len(m.models))
+	if !containsModel(m.models, "deepseek-v4-flash") || !containsModel(m.models, "claude-4") {
+		t.Errorf("refreshed models missing API ids: %v", m.models)
 	}
 	if m.modelsCached {
 		t.Error("modelsCached = true, want false after live refresh")
@@ -351,7 +375,7 @@ func TestModelsCacheRefreshedWhenStale(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reload cache: %v", err)
 	}
-	if len(models) != 2 || models[0].ID == "stale-model" {
+	if len(models) < 2 || models[0].ID == "stale-model" {
 		t.Errorf("cache not rewritten: %v", models)
 	}
 	if !fresh {
@@ -386,10 +410,19 @@ func TestModelsRefreshKeyReloadsFromAPI(t *testing.T) {
 	p.run(cmd)
 	m = p.runStep(m, p.next())
 
-	if len(m.models) != 2 {
-		t.Errorf("refreshed models = %d, want 2", len(m.models))
+	if !containsModel(m.models, "deepseek-v4-flash") || !containsModel(m.models, "claude-4") {
+		t.Errorf("refreshed models missing API ids: %v", m.models)
 	}
 	if m.modelsCached {
 		t.Error("modelsCached = true, want false after manual refresh")
 	}
+}
+
+func containsModel(ids []string, want string) bool {
+	for _, id := range ids {
+		if id == want {
+			return true
+		}
+	}
+	return false
 }

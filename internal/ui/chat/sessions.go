@@ -263,6 +263,10 @@ func (m Model) loadSession(sess *db.Session) Model {
 	m.session = sess
 	if sess != nil {
 		m.model = sess.Model
+		m.variant = ""
+		if sess.Variant != nil {
+			m.variant = *sess.Variant
+		}
 		if m.store != nil {
 			m.replay(sess.ID)
 		}

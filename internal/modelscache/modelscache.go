@@ -9,6 +9,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -19,12 +20,17 @@ const DefaultTTL = 15 * time.Minute
 // responses, so it is not world-readable.
 const cacheMode = 0o600
 
-// Info is one cached model: context window and USD per million tokens.
+// Info is one cached model: context window, USD per million tokens, and
+// selectable reasoning variants.
 type Info struct {
-	ID         string  `json:"id"`
-	Context    int     `json:"context,omitempty"`
-	InputPerM  float64 `json:"input_per_million,omitempty"`
-	OutputPerM float64 `json:"output_per_million,omitempty"`
+	ID             string   `json:"id"`
+	Context        int      `json:"context,omitempty"`
+	InputPerM      float64  `json:"input_per_million"`
+	OutputPerM     float64  `json:"output_per_million"`
+	CacheReadPerM  float64  `json:"cache_read_per_million"`
+	CacheWritePerM float64  `json:"cache_write_per_million"`
+	Variants       []string `json:"variants,omitempty"`
+	Free           bool     `json:"free,omitempty"`
 }
 
 // file is the on-disk cache shape.
@@ -62,22 +68,83 @@ func ContextOf(infos []Info, id string) int {
 	if info, ok := InfoOf(infos, id); ok {
 		return info.Context
 	}
-	return Lookup(id).Context
+	return 0
 }
 
 // InfoOf returns the cached row for id.
 func InfoOf(infos []Info, id string) (Info, bool) {
 	for _, m := range infos {
 		if m.ID == id {
-			return Enrich(m), true
+			return markFree(m), true
 		}
 	}
-	fb := Lookup(id)
-	if fb.Context > 0 || fb.InputPerM > 0 {
-		fb.ID = id
-		return fb, true
-	}
 	return Info{}, false
+}
+
+func markFree(info Info) Info {
+	if isFreeID(info.ID) {
+		info.Free = true
+	}
+	return info
+}
+
+// IsFree reports whether the model is a free OpenCode model.
+func IsFree(info Info) bool {
+	return info.Free || isFreeID(info.ID)
+}
+
+func isFreeID(id string) bool {
+	return strings.HasSuffix(id, "-free") || id == "big-pickle"
+}
+
+// HasVariant reports whether id lists variant as a selectable option.
+func HasVariant(infos []Info, id, variant string) bool {
+	info, ok := InfoOf(infos, id)
+	if !ok || variant == "" {
+		return false
+	}
+	for _, name := range info.Variants {
+		if name == variant {
+			return true
+		}
+	}
+	return false
+}
+
+// MergeByID appends extras whose ids are not already in base.
+func MergeByID(base, extra []Info) []Info {
+	seen := make(map[string]struct{}, len(base))
+	for _, m := range base {
+		seen[m.ID] = struct{}{}
+	}
+	out := append([]Info(nil), base...)
+	for _, m := range extra {
+		if _, ok := seen[m.ID]; ok {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+// CostUSD estimates USD for a step from token counts and list prices.
+// Cache hits use cache_read_per_million when known, otherwise input price.
+func (info Info) CostUSD(input, output, cacheRead, cacheWrite int64) float64 {
+	miss := input
+	if cacheRead > 0 && input > cacheRead {
+		miss = input - cacheRead
+	} else if cacheRead > 0 && input == 0 {
+		miss = 0
+	}
+	readPrice := info.CacheReadPerM
+	if readPrice <= 0 {
+		readPrice = info.InputPerM
+	}
+	const perMillion = 1_000_000
+	return (float64(miss)/perMillion)*info.InputPerM +
+		(float64(cacheRead)/perMillion)*readPrice +
+		(float64(cacheWrite)/perMillion)*info.CacheWritePerM +
+		(float64(output)/perMillion)*info.OutputPerM
 }
 
 // Load returns the cached model list. fresh is true when the cache is younger
@@ -100,7 +167,7 @@ func Load(path string, now time.Time, ttl time.Duration) (models []Info, fresh b
 		return nil, false, nil
 	}
 	for i := range f.Models {
-		f.Models[i] = Enrich(f.Models[i])
+		f.Models[i] = markFree(f.Models[i])
 	}
 	return f.Models, now.Sub(time.UnixMilli(f.FetchedAt)) < ttl, nil
 }
@@ -128,18 +195,18 @@ func unmarshalCache(raw []byte, f *file) error {
 	}
 	f.Models = make([]Info, 0, len(ids))
 	for _, id := range ids {
-		f.Models = append(f.Models, Enrich(Info{ID: id}))
+		f.Models = append(f.Models, markFree(Info{ID: id}))
 	}
 	return nil
 }
 
 // Save writes the model list and fetch time to the cache file.
 func Save(path string, models []Info, now time.Time) error {
-	enriched := make([]Info, len(models))
+	saved := make([]Info, len(models))
 	for i, m := range models {
-		enriched[i] = Enrich(m)
+		saved[i] = markFree(m)
 	}
-	raw, err := json.MarshalIndent(file{FetchedAt: now.UnixMilli(), Models: enriched}, "", "  ")
+	raw, err := json.MarshalIndent(file{FetchedAt: now.UnixMilli(), Models: saved}, "", "  ")
 	if err != nil {
 		return err
 	}

@@ -6,6 +6,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+
+	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
 )
 
 func TestSlashMenuOpensAndDivides(t *testing.T) {
@@ -19,7 +21,7 @@ func TestSlashMenuOpensAndDivides(t *testing.T) {
 		t.Fatal("slash mode not opened on /")
 	}
 	v := stripANSI(viewText(m))
-	if !strings.Contains(v, "/new") || !strings.Contains(v, "/model") || !strings.Contains(v, "/help") || !strings.Contains(v, "/sessions") {
+	if !strings.Contains(v, "/new") || !strings.Contains(v, "/model") || !strings.Contains(v, "/variant") || !strings.Contains(v, "/help") || !strings.Contains(v, "/sessions") {
 		t.Errorf("slash menu missing commands: %q", v)
 	}
 	if !strings.Contains(v, "start a new session") {
@@ -33,21 +35,28 @@ func TestSlashMenuAnchorsAbovePrompt(t *testing.T) {
 	m = typeRune(m, '/')
 
 	lines := strings.Split(stripANSI(viewText(m)), "\n")
-	top := -1
-	bottom := -1
+	cmdRow := -1
+	promptRow := -1
 	for i, line := range lines {
-		if strings.Contains(line, "╭") && top == -1 {
-			top = i
+		if cmdRow < 0 && strings.Contains(line, "/new") {
+			cmdRow = i
+			continue
 		}
-		if strings.Contains(line, "╰") {
-			bottom = i
+		if cmdRow >= 0 && promptRow < 0 && strings.Contains(line, "╭") {
+			promptRow = i
 		}
 	}
-	if top < 0 || bottom < 0 {
-		t.Fatalf("slash card missing: %q", lines)
+	if cmdRow < 0 {
+		t.Fatalf("slash commands missing: %q", lines)
 	}
-	if !strings.Contains(stripANSI(viewText(m)), "/new") {
-		t.Errorf("slash commands missing: %q", lines)
+	if promptRow < 0 {
+		t.Fatalf("prompt row missing: %q", lines)
+	}
+	if cmdRow >= promptRow {
+		t.Errorf("slash list row %d is not above prompt row %d: %q", cmdRow, promptRow, lines)
+	}
+	if strings.Contains(stripANSI(m.slashView()), "╭") || strings.Contains(stripANSI(m.slashView()), "╰") {
+		t.Errorf("slash list should not have a border: %q", stripANSI(m.slashView()))
 	}
 	if got := m.prompt.Value(); got != "/" {
 		t.Errorf("prompt = %q, want /", got)
@@ -148,5 +157,30 @@ func TestSlashMenuEscapeLeavesSlash(t *testing.T) {
 	}
 	if got := m.prompt.Value(); got != "/" {
 		t.Errorf("prompt after esc = %q, want /", got)
+	}
+}
+
+func TestSlashVariantOpensPicker(t *testing.T) {
+	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
+	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
+	m.model = "deepseek-v4-flash"
+	m.modelInfos = []modelscache.Info{{ID: "deepseek-v4-flash", Variants: []string{"low", "medium", "high"}}}
+	m = typeRune(m, '/')
+	m = typeRune(m, 'v')
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !m.pickerMode || m.pickerKind != pickerKindVariant {
+		t.Fatalf("pickerMode=%v kind=%q, want variant picker", m.pickerMode, m.pickerKind)
+	}
+	v := stripANSI(m.pickerView())
+	if !strings.Contains(v, "low") || !strings.Contains(v, "medium") || !strings.Contains(v, "high") {
+		t.Fatalf("variant picker missing options: %q", v)
+	}
+	m.pickerCursor = 2
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.pickerMode {
+		t.Fatal("picker still open after select")
+	}
+	if m.variant != "high" {
+		t.Fatalf("variant = %q, want high", m.variant)
 	}
 }

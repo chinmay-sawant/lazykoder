@@ -31,6 +31,7 @@ type fakeProvider struct {
 	responses []string
 	requests  [][]wireMessage
 	models    []string
+	variants  []string
 	srv       *httptest.Server
 }
 
@@ -44,8 +45,9 @@ func newFakeProvider(t *testing.T, responses ...string) *fakeProvider {
 			return
 		}
 		var req struct {
-			Model    string        `json:"model"`
-			Messages []wireMessage `json:"messages"`
+			Model           string        `json:"model"`
+			ReasoningEffort string        `json:"reasoning_effort"`
+			Messages        []wireMessage `json:"messages"`
 		}
 		if err := json.Unmarshal(raw, &req); err != nil {
 			t.Errorf("decode request: %v", err)
@@ -55,6 +57,7 @@ func newFakeProvider(t *testing.T, responses ...string) *fakeProvider {
 		idx := len(f.requests)
 		f.requests = append(f.requests, req.Messages)
 		f.models = append(f.models, req.Model)
+		f.variants = append(f.variants, req.ReasoningEffort)
 		resp := f.responses[len(f.responses)-1]
 		if idx < len(f.responses) {
 			resp = f.responses[idx]
@@ -75,6 +78,15 @@ func (f *fakeProvider) requestModels(idx int) string {
 		return ""
 	}
 	return f.models[idx]
+}
+
+func (f *fakeProvider) requestVariants(idx int) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if idx < 0 || idx >= len(f.variants) {
+		return ""
+	}
+	return f.variants[idx]
 }
 
 func (f *fakeProvider) requestMessages(idx int) []wireMessage {
@@ -790,5 +802,28 @@ func TestSendModelOption(t *testing.T) {
 	}
 	if model != "picked-model" {
 		t.Errorf("session model = %q, want picked-model", model)
+	}
+}
+
+func TestSendVariantOption(t *testing.T) {
+	fake := newFakeProvider(t, respBody("hello", "", "stop", nil, nil))
+	st, path := newTestEnv(t)
+	a := New(st, newClient(t, fake.srv), t.TempDir(), Options{Model: "grok-4.5", Variant: "high"})
+
+	events, err := sendAndCollect(t, a, "hi")
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	sid := sessionIDFromEvents(t, events)
+
+	if got := fake.requestVariants(0); got != "high" {
+		t.Errorf("wire reasoning_effort = %q, want high", got)
+	}
+	var variant sql.NullString
+	if err := openRaw(t, path).QueryRow(`SELECT variant FROM sessions WHERE id = ?`, sid).Scan(&variant); err != nil {
+		t.Fatalf("read session variant: %v", err)
+	}
+	if !variant.Valid || variant.String != "high" {
+		t.Errorf("session variant = %v, want high", variant)
 	}
 }

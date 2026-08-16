@@ -79,7 +79,9 @@ const (
 	paneCount = 3
 	// pickerFixedRows are the card rows outside the list (borders, header,
 	// footer) that reduce the available list height.
-	pickerFixedRows = 7
+	pickerFixedRows   = 7
+	pickerKindModel   = "model"
+	pickerKindVariant = "variant"
 	// pulseInterval and pulseSteps drive the thinking glow.
 	pulseInterval = 90 * time.Millisecond
 	pulseSteps    = 100
@@ -144,6 +146,7 @@ type Model struct {
 	lastTool            int
 
 	model         string // current model; "" = provider default
+	variant       string // current reasoning variant; "" = provider default
 	models        []string
 	modelInfos    []modelscache.Info
 	modelsErr     string
@@ -189,6 +192,7 @@ type Model struct {
 	pickerFiltering bool
 	pickerBuilt     bool
 	pickerMode      bool
+	pickerKind      string
 
 	sessionPickerMode bool
 	sessionItems      []db.Session
@@ -247,6 +251,7 @@ var slashCommands = []slashCmd{
 	{name: "/new", description: "start a new session and clear the transcript"},
 	{name: "/sessions", description: "open a previous session"},
 	{name: "/model", description: "switch the chat model"},
+	{name: "/variant", description: "switch the model variant (low, medium, high)"},
 	{name: "/refresh", description: "reload the model list from the server"},
 	{name: "/help", description: "show the keyboard shortcuts"},
 }
@@ -314,6 +319,9 @@ func New(opts Options) Model {
 	}
 	if m.session != nil && m.store != nil {
 		m.model = m.session.Model
+		if m.session.Variant != nil {
+			m.variant = *m.session.Variant
+		}
 		m.replay(m.session.ID)
 	}
 	return m
@@ -340,6 +348,12 @@ func (m Model) refreshModels() tea.Msg {
 	defer cancel()
 	infos, err := m.client.ModelInfos(ctx)
 	cached := toCacheInfos(infos)
+	if extras, xerr := m.client.FreeModelInfos(ctx); xerr == nil && len(extras) > 0 {
+		cached = modelscache.MergeByID(cached, toCacheInfos(extras))
+	}
+	if live, lerr := m.fetchLiveCatalog(ctx); lerr == nil {
+		cached = modelscache.ApplyLive(cached, live)
+	}
 	list := modelscache.IDs(cached)
 	if err == nil {
 		if m.cachePath != "" {
@@ -357,15 +371,30 @@ func (m Model) refreshModels() tea.Msg {
 	return modelsMsg{list: list, infos: cached, err: err}
 }
 
+func (m Model) fetchLiveCatalog(ctx context.Context) (map[string]modelscache.Info, error) {
+	if m.client == nil || !strings.Contains(m.client.BaseURL(), "opencode.ai") {
+		return nil, nil
+	}
+	return modelscache.Fetch(ctx, m.client.HTTP())
+}
+
 func toCacheInfos(infos []opencode.ModelInfo) []modelscache.Info {
 	out := make([]modelscache.Info, 0, len(infos))
 	for _, info := range infos {
-		out = append(out, modelscache.Enrich(modelscache.Info{
-			ID:         info.ID,
-			Context:    info.Context,
-			InputPerM:  info.InputPerM,
-			OutputPerM: info.OutputPerM,
-		}))
+		row := modelscache.Info{
+			ID:             info.ID,
+			Context:        info.Context,
+			InputPerM:      info.InputPerM,
+			OutputPerM:     info.OutputPerM,
+			CacheReadPerM:  info.CacheReadPerM,
+			CacheWritePerM: info.CacheWritePerM,
+			Variants:       append([]string(nil), info.Variants...),
+			Free:           info.Free,
+		}
+		if modelscache.IsFree(row) {
+			row.Free = true
+		}
+		out = append(out, row)
 	}
 	return out
 }
@@ -761,6 +790,14 @@ func (m Model) modelLabel() string {
 	}
 	if label == "" {
 		label = "default"
+	}
+	return label
+}
+
+func (m Model) modelDisplayLabel() string {
+	label := m.modelLabel()
+	if m.variant != "" {
+		return label + "  " + m.variant
 	}
 	return label
 }

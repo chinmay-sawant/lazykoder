@@ -28,12 +28,18 @@ pickers are centered cards.
   (output, or reasoning if output is missing) divided by turn wall time.
   It is never the session total.
   Context
-  windows and list prices come from GET /models, filled from the OpenCode
-  Go catalog when the API omits them, and are stored in
-  `.lazykoder/models.json`. Reopening a session restores used tokens from
-  stored step-finish usage, or estimates them from the transcript. Session
-  token totals never drop when a later step reports smaller usage. `/refresh`
-  always rewrites that cache. Live text is painted instantly.
+  windows, list prices, cache read/write prices, and reasoning variants
+  come from GET /models plus the live models.dev OpenCode catalog, then
+  are stored in `.lazykoder/models.json`. That file is the source of
+  truth for the picker. `/variant` shows whatever variants are stored
+  for the current model, including `max` when the catalog lists it.
+  Every model row keeps `cache_write_per_million` (0 when the provider
+  has no write price). Free OpenCode models come from the Zen models
+  list on `/refresh`. Reopening a session restores used tokens from
+  stored step-finish usage, or estimates them from the transcript.
+  Session token totals never drop when a later step reports smaller
+  usage. `/refresh` always rewrites that cache. Live text is painted
+  instantly.
 - Session list (`/sessions` or `ctrl+s`) groups runs as `just now`,
   `recently`, and `older`.
 - Session picker: `/sessions` or `ctrl+s` lists sessions for the project
@@ -98,9 +104,13 @@ enter selects, `esc` cancels.
 
 `m` or `/model` opens a centered settings card sized to about 80% of the
 terminal width. The left rail labels the setting and shows the selected model;
-the right pane contains the fetched model list. Navigation: `j`/`k` or arrows;
-`enter` selects, `esc`/`q` cancels. `/` enters model filtering and `r` refreshes
-the model list.
+the right pane contains the fetched model list, including free OpenCode
+models. Navigation: `j`/`k` or arrows; `enter` selects, `esc`/`q` cancels.
+`/` enters model filtering and `r` refreshes the model list.
+
+`/variant` opens the same card for the current model's reasoning variants
+from `models.json`. The choice is stored in `sessions.variant` and sent
+as `reasoning_effort` on later turns.
 
 Typing `/` in the chat prompt opens a full-width command popover above the
 prompt. Each row shows the command name on the left and its description after

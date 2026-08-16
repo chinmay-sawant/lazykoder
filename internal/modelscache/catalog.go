@@ -1,41 +1,147 @@
 package modelscache
 
-// Official OpenCode Go list prices (USD per 1M tokens) and typical
-// context windows. Used when GET /models omits those fields.
-// Source: https://opencode.ai/docs/go/ (usage limits / prices table).
-var catalog = map[string]Info{
-	"grok-4.5":          {Context: 500000, InputPerM: 2.00, OutputPerM: 6.00},
-	"gpt-5.6-luna":      {Context: 1050000, InputPerM: 0.20, OutputPerM: 1.20},
-	"glm-5.3":           {Context: 200000, InputPerM: 1.40, OutputPerM: 4.40},
-	"glm-5.2":           {Context: 200000, InputPerM: 1.40, OutputPerM: 4.40},
-	"glm-5.1":           {Context: 200000, InputPerM: 1.40, OutputPerM: 4.40},
-	"glm-5":             {Context: 200000, InputPerM: 1.40, OutputPerM: 4.40},
-	"kimi-k3":           {Context: 256000, InputPerM: 3.00, OutputPerM: 15.00},
-	"kimi-k2.7-code":    {Context: 256000, InputPerM: 0.95, OutputPerM: 4.00},
-	"kimi-k2.6":         {Context: 256000, InputPerM: 0.95, OutputPerM: 4.00},
-	"kimi-k2.5":         {Context: 256000, InputPerM: 0.95, OutputPerM: 4.00},
-	"mimo-v2.5":         {Context: 1000000, InputPerM: 0.14, OutputPerM: 0.28},
-	"mimo-v2.5-pro":     {Context: 1000000, InputPerM: 0.435, OutputPerM: 0.87},
-	"mimo-v2-pro":       {Context: 256000, InputPerM: 0.435, OutputPerM: 0.87},
-	"mimo-v2-omni":      {Context: 256000, InputPerM: 0.435, OutputPerM: 0.87},
-	"minimax-m3":        {Context: 1000000, InputPerM: 0.30, OutputPerM: 1.20},
-	"minimax-m2.7":      {Context: 1000000, InputPerM: 0.30, OutputPerM: 1.20},
-	"minimax-m2.5":      {Context: 1000000, InputPerM: 0.30, OutputPerM: 1.20},
-	"qwen3.8-max":       {Context: 256000, InputPerM: 2.00, OutputPerM: 6.00},
-	"qwen3.7-max":       {Context: 256000, InputPerM: 2.50, OutputPerM: 7.50},
-	"qwen3.7-plus":      {Context: 256000, InputPerM: 0.40, OutputPerM: 1.60},
-	"qwen3.6-plus":      {Context: 256000, InputPerM: 0.50, OutputPerM: 3.00},
-	"qwen3.5-plus":      {Context: 256000, InputPerM: 0.50, OutputPerM: 3.00},
-	"deepseek-v4-pro":   {Context: 1000000, InputPerM: 0.435, OutputPerM: 0.87},
-	"deepseek-v4-flash": {Context: 1000000, InputPerM: 0.14, OutputPerM: 0.28},
-	"hy3":               {Context: 256000, InputPerM: 0.14, OutputPerM: 0.58},
-	"hy3-preview":       {Context: 256000, InputPerM: 0.14, OutputPerM: 0.58},
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+)
+
+// modelsDevURL is the live OpenCode catalog used to fill prices, cache
+// rates, context windows, and reasoning variants. models.json is the
+// source of truth after a refresh; this fetch only supplies missing
+// fields from the provider catalog.
+const modelsDevURL = "https://models.dev/api.json"
+
+// maxCatalogBytes caps the models.dev payload.
+const maxCatalogBytes = 16 << 20
+
+// Fetch loads live model metadata from models.dev. Tests should call
+// ParseModelsDev with a fixture instead of hitting the network.
+func Fetch(ctx context.Context, hc *http.Client) (map[string]Info, error) {
+	if hc == nil {
+		hc = http.DefaultClient
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, modelsDevURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("modelscache: build catalog request: %w", err)
+	}
+	req.Header.Set("User-Agent", "lazykoder")
+	resp, err := hc.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("modelscache: catalog request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("modelscache: catalog request failed: status %d", resp.StatusCode)
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxCatalogBytes))
+	if err != nil {
+		return nil, fmt.Errorf("modelscache: read catalog: %w", err)
+	}
+	return ParseModelsDev(raw)
 }
 
-// Enrich fills missing context and per-million prices from the catalog.
-func Enrich(info Info) Info {
-	fb, ok := catalog[info.ID]
+type liveProvider struct {
+	Models map[string]liveModel `json:"models"`
+}
+
+type liveModel struct {
+	ID               string             `json:"id"`
+	Limit            liveLimit          `json:"limit"`
+	Cost             *liveCost          `json:"cost"`
+	ReasoningOptions []liveReasonOption `json:"reasoning_options"`
+}
+
+type liveLimit struct {
+	Context int `json:"context"`
+}
+
+type liveCost struct {
+	Input      float64 `json:"input"`
+	Output     float64 `json:"output"`
+	CacheRead  float64 `json:"cache_read"`
+	CacheWrite float64 `json:"cache_write"`
+}
+
+type liveReasonOption struct {
+	Type   string   `json:"type"`
+	Values []string `json:"values"`
+}
+
+// ParseModelsDev extracts OpenCode Go and Zen model rows from a models.dev
+// api.json payload. Go rows win when both providers list the same id.
+func ParseModelsDev(raw []byte) (map[string]Info, error) {
+	var wire map[string]liveProvider
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		return nil, fmt.Errorf("modelscache: decode catalog: %w", err)
+	}
+	out := make(map[string]Info)
+	for _, key := range []string{"opencode", "opencode-go"} {
+		p, ok := wire[key]
+		if !ok {
+			continue
+		}
+		for id, m := range p.Models {
+			if id == "" {
+				id = m.ID
+			}
+			if id == "" {
+				continue
+			}
+			out[id] = liveInfo(id, m)
+		}
+	}
+	return out, nil
+}
+
+func liveInfo(id string, m liveModel) Info {
+	info := Info{ID: id, Context: m.Limit.Context, Variants: effortVariants(m.ReasoningOptions)}
+	if m.Cost != nil {
+		info.InputPerM = m.Cost.Input
+		info.OutputPerM = m.Cost.Output
+		info.CacheReadPerM = m.Cost.CacheRead
+		info.CacheWritePerM = m.Cost.CacheWrite
+		if m.Cost.Input == 0 && m.Cost.Output == 0 && m.Cost.CacheRead == 0 && m.Cost.CacheWrite == 0 {
+			info.Free = true
+		}
+	}
+	if isFreeID(id) {
+		info.Free = true
+	}
+	return info
+}
+
+func effortVariants(opts []liveReasonOption) []string {
+	var out []string
+	seen := map[string]struct{}{}
+	for _, opt := range opts {
+		if opt.Type != "effort" {
+			continue
+		}
+		for _, name := range opt.Values {
+			if name == "" {
+				continue
+			}
+			if _, ok := seen[name]; ok {
+				continue
+			}
+			seen[name] = struct{}{}
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// MergeLive copies missing context, prices, and variants from the live
+// catalog row. Existing non-zero API values are kept.
+func MergeLive(info Info, live map[string]Info) Info {
+	fb, ok := live[info.ID]
 	if !ok {
+		if isFreeID(info.ID) {
+			info.Free = true
+		}
 		return info
 	}
 	if info.Context <= 0 {
@@ -47,10 +153,29 @@ func Enrich(info Info) Info {
 	if info.OutputPerM <= 0 {
 		info.OutputPerM = fb.OutputPerM
 	}
+	if info.CacheReadPerM <= 0 {
+		info.CacheReadPerM = fb.CacheReadPerM
+	}
+	if info.CacheWritePerM <= 0 {
+		info.CacheWritePerM = fb.CacheWritePerM
+	}
+	if len(info.Variants) == 0 && len(fb.Variants) > 0 {
+		info.Variants = append([]string(nil), fb.Variants...)
+	}
+	if fb.Free || isFreeID(info.ID) {
+		info.Free = true
+	}
 	return info
 }
 
-// Lookup returns the catalog row for id, or a zero Info.
-func Lookup(id string) Info {
-	return catalog[id]
+// ApplyLive merges live catalog rows into each cached model.
+func ApplyLive(infos []Info, live map[string]Info) []Info {
+	if len(live) == 0 {
+		return infos
+	}
+	out := make([]Info, len(infos))
+	for i, info := range infos {
+		out[i] = MergeLive(info, live)
+	}
+	return out
 }

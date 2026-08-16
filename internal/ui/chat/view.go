@@ -165,8 +165,8 @@ func (m Model) composerFooter(width int) string {
 }
 
 func (m Model) modelContextLabel() string {
-	label := m.modelLabel()
-	window := modelscache.ContextOf(m.modelInfos, label)
+	label := m.modelDisplayLabel()
+	window := modelscache.ContextOf(m.modelInfos, m.modelLabel())
 	if m.tokensUsed > 0 && window > 0 {
 		label = label + "  " + formatTokens(m.tokensUsed) + "/" + formatTokens(int64(window))
 	} else if m.tokensUsed > 0 {
@@ -263,6 +263,7 @@ func (m Model) helpOverlay() string {
 		lipgloss.NewStyle().Bold(true).Render("keys"),
 		"enter send  •  shift+enter newline",
 		"/ commands  •  /sessions or ctrl+s",
+		"/model  •  /variant  low medium high",
 		"@ mention a project file",
 		"click model to switch",
 		"t thinking  •  e expand last tool",

@@ -811,9 +811,15 @@ func TestRefreshWritesModelsCache(t *testing.T) {
 	if len(infos) < 1 {
 		t.Fatalf("cache not written: %+v", infos)
 	}
-	flash, ok := modelscache.InfoOf(infos, "deepseek-v4-flash")
-	if !ok || flash.Context <= 0 || flash.InputPerM <= 0 || flash.OutputPerM <= 0 {
-		t.Fatalf("cache missing context/prices: %+v", infos)
+	if _, ok := modelscache.InfoOf(infos, "deepseek-v4-flash"); !ok {
+		t.Fatalf("cache missing deepseek-v4-flash: %+v", infos)
+	}
+	raw, err := os.ReadFile(cachePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"cache_write_per_million"`) {
+		t.Fatalf("cache missing cache_write_per_million:\n%s", raw)
 	}
 }
 

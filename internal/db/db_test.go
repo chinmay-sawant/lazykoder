@@ -457,6 +457,35 @@ func TestUpdateSessionModel(t *testing.T) {
 	}
 }
 
+func TestUpdateSessionVariant(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	sess, err := s.CreateSession(ctx, Session{Directory: "/a"})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if err := s.UpdateSessionVariant(ctx, sess.ID, "high"); err != nil {
+		t.Fatalf("UpdateSessionVariant: %v", err)
+	}
+	got, err := s.GetSession(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if got.Variant == nil || *got.Variant != "high" {
+		t.Fatalf("variant = %v, want high", got.Variant)
+	}
+	if err := s.UpdateSessionVariant(ctx, sess.ID, ""); err != nil {
+		t.Fatalf("clear variant: %v", err)
+	}
+	got, err = s.GetSession(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("GetSession after clear: %v", err)
+	}
+	if got.Variant != nil {
+		t.Fatalf("variant = %v, want nil", got.Variant)
+	}
+}
+
 func TestCreateSessionListedByProjectRoot(t *testing.T) {
 	ctx := context.Background()
 	s := openTestStore(t)

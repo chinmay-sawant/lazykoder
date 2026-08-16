@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 )
 
@@ -81,6 +82,19 @@ func (c *Client) Model() string {
 	return c.model
 }
 
+// BaseURL returns the API base URL.
+func (c *Client) BaseURL() string {
+	return c.baseURL
+}
+
+// HTTP returns the HTTP client used for API calls.
+func (c *Client) HTTP() *http.Client {
+	if c.httpClient != nil {
+		return c.httpClient
+	}
+	return http.DefaultClient
+}
+
 // ToolCall is a tool invocation requested by the model.
 type ToolCall struct {
 	ID        string // call id, echoed back by tool messages
@@ -144,9 +158,12 @@ type ToolSpec struct {
 // ChatRequest is a single chat-completions request.
 type ChatRequest struct {
 	// Model overrides the client default model id when non-empty.
-	Model    string
-	Messages []Message
-	Tools    []ToolSpec // nil/empty = no tools advertised; the tools key is omitted
+	Model string
+	// ReasoningEffort is the selected model variant (low, medium, high).
+	// Empty omits the field so the provider default applies.
+	ReasoningEffort string
+	Messages        []Message
+	Tools           []ToolSpec // nil/empty = no tools advertised; the tools key is omitted
 }
 
 // Usage reports token counts and cost from the API.
@@ -170,9 +187,10 @@ type ChatResponse struct {
 }
 
 type wireRequest struct {
-	Model    string         `json:"model"`
-	Messages []Message      `json:"messages"`
-	Tools    []wireToolSpec `json:"tools,omitempty"`
+	Model           string         `json:"model"`
+	ReasoningEffort string         `json:"reasoning_effort,omitempty"`
+	Messages        []Message      `json:"messages"`
+	Tools           []wireToolSpec `json:"tools,omitempty"`
 }
 
 type wireToolSpec struct {
@@ -240,7 +258,7 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, erro
 	if req.Model != "" {
 		model = req.Model
 	}
-	payload := wireRequest{Model: model, Messages: req.Messages}
+	payload := wireRequest{Model: model, ReasoningEffort: req.ReasoningEffort, Messages: req.Messages}
 	for _, t := range req.Tools {
 		payload.Tools = append(payload.Tools, wireToolSpec{
 			Type:     "function",
@@ -310,10 +328,14 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, erro
 
 // ModelInfo is one entry from GET /models.
 type ModelInfo struct {
-	ID         string
-	Context    int
-	InputPerM  float64
-	OutputPerM float64
+	ID             string
+	Context        int
+	InputPerM      float64
+	OutputPerM     float64
+	CacheReadPerM  float64
+	CacheWritePerM float64
+	Variants       []string
+	Free           bool
 }
 
 // Models GETs <base>/models and returns the model ids.
@@ -356,23 +378,62 @@ func (c *Client) ModelInfos(ctx context.Context) ([]ModelInfo, error) {
 		if m.ID == "" {
 			continue
 		}
-		out = append(out, ModelInfo{
-			ID:         m.ID,
-			Context:    m.contextWindow(),
-			InputPerM:  m.inputPrice(),
-			OutputPerM: m.outputPrice(),
-		})
+		out = append(out, m.info())
 	}
 	return out, nil
 }
 
+// FreeModelInfos GETs the Zen models list (sibling of the Go endpoint) and
+// returns only the free models. A non-Go base URL returns nil without error.
+func (c *Client) FreeModelInfos(ctx context.Context) ([]ModelInfo, error) {
+	url, ok := zenModelsURL(c.baseURL)
+	if !ok {
+		return nil, nil
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("opencode: build free models request: %w", err)
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("opencode: free models request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, statusError("free models request", resp.StatusCode, resp.Body)
+	}
+	var wire struct {
+		Data []wireModel `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&wire); err != nil {
+		return nil, fmt.Errorf("opencode: decode free models response: %w", err)
+	}
+	out := make([]ModelInfo, 0)
+	for _, m := range wire.Data {
+		if m.ID == "" || !m.isFree() {
+			continue
+		}
+		out = append(out, m.info())
+	}
+	return out, nil
+}
+
+func zenModelsURL(base string) (string, bool) {
+	if !strings.Contains(base, "/zen/go/") {
+		return "", false
+	}
+	return strings.Replace(base, "/zen/go/", "/zen/", 1) + "/models", true
+}
+
 type wireModel struct {
-	ID             string `json:"id"`
-	ContextWindow  int    `json:"context_window"`
-	ContextLength  int    `json:"context_length"`
-	MaxContext     int    `json:"max_context"`
-	MaxInputTokens int    `json:"max_input_tokens"`
-	Context        int    `json:"context"`
+	ID             string          `json:"id"`
+	ContextWindow  int             `json:"context_window"`
+	ContextLength  int             `json:"context_length"`
+	MaxContext     int             `json:"max_context"`
+	MaxInputTokens int             `json:"max_input_tokens"`
+	Context        int             `json:"context"`
+	Variants       json.RawMessage `json:"variants"`
 	Limit          struct {
 		Context int     `json:"context"`
 		Input   float64 `json:"input"`
@@ -382,15 +443,38 @@ type wireModel struct {
 		Context int `json:"context"`
 	} `json:"info"`
 	Pricing *struct {
-		Input      float64 `json:"input"`
-		Prompt     float64 `json:"prompt"`
-		Output     float64 `json:"output"`
-		Completion float64 `json:"completion"`
+		Input       float64 `json:"input"`
+		Prompt      float64 `json:"prompt"`
+		Output      float64 `json:"output"`
+		Completion  float64 `json:"completion"`
+		CacheRead   float64 `json:"cache_read"`
+		CachedRead  float64 `json:"cached_read"`
+		CacheWrite  float64 `json:"cache_write"`
+		CachedWrite float64 `json:"cached_write"`
 	} `json:"pricing"`
 	Cost *struct {
-		Input  float64 `json:"input"`
-		Output float64 `json:"output"`
+		Input      float64 `json:"input"`
+		Output     float64 `json:"output"`
+		CacheRead  float64 `json:"cache_read"`
+		CacheWrite float64 `json:"cache_write"`
 	} `json:"cost"`
+}
+
+func (m wireModel) info() ModelInfo {
+	return ModelInfo{
+		ID:             m.ID,
+		Context:        m.contextWindow(),
+		InputPerM:      m.inputPrice(),
+		OutputPerM:     m.outputPrice(),
+		CacheReadPerM:  m.cacheReadPrice(),
+		CacheWritePerM: m.cacheWritePrice(),
+		Variants:       m.variants(),
+		Free:           m.isFree(),
+	}
+}
+
+func (m wireModel) isFree() bool {
+	return strings.HasSuffix(m.ID, "-free") || m.ID == "big-pickle"
 }
 
 func (m wireModel) contextWindow() int {
@@ -436,6 +520,68 @@ func (m wireModel) outputPrice() float64 {
 		return m.Limit.Output
 	}
 	return 0
+}
+
+func (m wireModel) cacheReadPrice() float64 {
+	if m.Pricing != nil {
+		if m.Pricing.CacheRead > 0 {
+			return m.Pricing.CacheRead
+		}
+		if m.Pricing.CachedRead > 0 {
+			return m.Pricing.CachedRead
+		}
+	}
+	if m.Cost != nil && m.Cost.CacheRead > 0 {
+		return m.Cost.CacheRead
+	}
+	return 0
+}
+
+func (m wireModel) cacheWritePrice() float64 {
+	if m.Pricing != nil {
+		if m.Pricing.CacheWrite > 0 {
+			return m.Pricing.CacheWrite
+		}
+		if m.Pricing.CachedWrite > 0 {
+			return m.Pricing.CachedWrite
+		}
+	}
+	if m.Cost != nil && m.Cost.CacheWrite > 0 {
+		return m.Cost.CacheWrite
+	}
+	return 0
+}
+
+func (m wireModel) variants() []string {
+	if len(m.Variants) == 0 {
+		return nil
+	}
+	var names []string
+	if err := json.Unmarshal(m.Variants, &names); err == nil && len(names) > 0 {
+		return names
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(m.Variants, &obj); err == nil && len(obj) > 0 {
+		for k := range obj {
+			names = append(names, k)
+		}
+		sort.Strings(names)
+		return names
+	}
+	var items []struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(m.Variants, &items); err == nil {
+		for _, it := range items {
+			if it.ID != "" {
+				names = append(names, it.ID)
+			} else if it.Name != "" {
+				names = append(names, it.Name)
+			}
+		}
+	}
+	return names
 }
 
 func statusError(kind string, status int, body io.Reader) error {

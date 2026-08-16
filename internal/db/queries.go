@@ -233,6 +233,20 @@ func (s *Store) UpdateSessionModel(ctx context.Context, sessionID, model string)
 	return nil
 }
 
+// UpdateSessionVariant sets the reasoning variant of a session and bumps
+// time_updated. An empty variant clears the column.
+func (s *Store) UpdateSessionVariant(ctx context.Context, sessionID, variant string) error {
+	var value any
+	if variant != "" {
+		value = variant
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE sessions SET variant = ?, time_updated = ? WHERE id = ?`,
+		value, time.Now().UnixMilli(), sessionID); err != nil {
+		return fmt.Errorf("db: update session variant: %w", err)
+	}
+	return nil
+}
+
 // lazykoderDirSuffix is the workspace folder incorrectly stored as
 // sessions.directory before findings 1.2.
 const lazykoderDirSuffix = "/.lazykoder"
