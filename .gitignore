@@ -41,7 +41,7 @@ go.work.sum
 .DS_Store
 Thumbs.db
 
-# lazyKoder workspace (created at app start)
+# lazykoder workspace (created at app start)
 .lazykoder/
 
 # Provided OpenCode session export (local context only)

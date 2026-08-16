@@ -2,7 +2,7 @@
 
 ## Overview
 
-lazyKoder is a Bubble Tea TUI agent harness for the OpenCode Go API. v0.0.1
+lazykoder is a Bubble Tea TUI agent harness for the OpenCode Go API. v0.0.1
 supports one provider (OpenCode Go) and one model family (default
 `deepseek-v4-flash`). The app keeps its own project-local session store and
 owns the tool loop: it is not a wrapper around the OpenCode CLI or its global

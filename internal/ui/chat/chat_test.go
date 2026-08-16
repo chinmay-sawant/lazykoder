@@ -616,7 +616,7 @@ func TestAlertRowQuitWarning(t *testing.T) {
 		t.Fatal("first ctrl+c did not arm the quit confirmation")
 	}
 	v := viewText(m)
-	if strings.Contains(stripANSI(v), "close lazyKoder") {
+	if strings.Contains(stripANSI(v), "close lazykoder") {
 		t.Fatalf("full-screen quit card still rendered: %q", v)
 	}
 	if !strings.Contains(stripANSI(v), "ctrl+c again to quit") {
@@ -803,7 +803,7 @@ func TestTitleStatic(t *testing.T) {
 	}
 	m := New(Options{Store: st, Client: deadClient(), Workdir: t.TempDir(), Session: &sess})
 	v := stripANSI(viewText(m))
-	if !strings.Contains(v, "lazyKoder") || !strings.Contains(v, "hello world go") {
+	if !strings.Contains(v, "lazykoder") || !strings.Contains(v, "hello world go") {
 		t.Fatalf("header missing brand or session title: %q", v)
 	}
 	mm, _ := m.Update(tea.KeyPressMsg{Code: 'j'})
@@ -1591,7 +1591,7 @@ func TestLiveActivitySitsAbovePrompt(t *testing.T) {
 		if thinkAt < 0 && strings.Contains(line, "thinking") && !strings.Contains(line, "enter") {
 			thinkAt = i
 		}
-		if strings.Contains(line, "ask lazyKoder") || strings.Contains(line, "╭") && promptAt < 0 && i > 2 {
+		if strings.Contains(line, "ask lazykoder") || strings.Contains(line, "╭") && promptAt < 0 && i > 2 {
 			if strings.Contains(line, "╭") {
 				promptAt = i
 			}
@@ -1968,7 +1968,7 @@ func TestThinkingFrameUsesBrackets(t *testing.T) {
 	}
 	var header string
 	for _, line := range strings.Split(v, "\n") {
-		if strings.Contains(line, "lazyKoder") {
+		if strings.Contains(line, "lazykoder") {
 			header = strings.TrimSpace(line)
 			break
 		}
@@ -2016,7 +2016,7 @@ func TestHeaderFitsAt80(t *testing.T) {
 	if lipgloss.Height(header) > 2 {
 		t.Fatalf("header is %d rows at width 80: %q", lipgloss.Height(header), header)
 	}
-	if !strings.Contains(stripANSI(viewText(m)), "ask lazyKoder") {
+	if !strings.Contains(stripANSI(viewText(m)), "ask lazykoder") {
 		t.Fatalf("prompt missing at width 80: %q", viewText(m))
 	}
 }
@@ -2187,7 +2187,7 @@ func TestHelpOverlayBordersAlign(t *testing.T) {
 			t.Fatalf("help left border columns = %v\n%s", lefts, v)
 		}
 	}
-	if strings.Contains(strings.Join(lines[start:end+1], "\n"), "ask lazyKoder") {
+	if strings.Contains(strings.Join(lines[start:end+1], "\n"), "ask lazykoder") {
 		t.Fatalf("help card overlaps the prompt: %q", v)
 	}
 	if !strings.Contains(v, "switch model") || !strings.Contains(v, "ctrl+c") {

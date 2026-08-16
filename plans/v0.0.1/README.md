@@ -1,4 +1,4 @@
-# v0.0.1 - OpenCode agent harness (lazyKoder)
+# v0.0.1 - OpenCode agent harness (lazykoder)
 
 > **Parent:** none - first canonical ledger for this product
 > **Status:** implemented (all phases landed 2026-08-15; automated gates green, manual TUI rows pending user terminal)
@@ -14,7 +14,7 @@
 
 ## Overview
 
-lazyKoder is a Bubble Tea TUI agent harness. v0.0.1 supports one provider: OpenCode Go. The first shippable loop is: read `OPENCODE_API_KEY` from the environment, send a `hi` message, show the reply, and persist the conversation in a project-local SQLite database.
+lazykoder is a Bubble Tea TUI agent harness. v0.0.1 supports one provider: OpenCode Go. The first shippable loop is: read `OPENCODE_API_KEY` from the environment, send a `hi` message, show the reply, and persist the conversation in a project-local SQLite database.
 
 This is not a wrapper around the OpenCode CLI or its global `~/.local/share/opencode/opencode.db`. We call the OpenCode Go HTTP API ourselves, keep our own session store, and own the tool loop. Tools are designed now and wired later so the safety contract exists before any bash command can run.
 

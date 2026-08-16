@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="screenshots/logo.png" alt="lazyKoder" width="280">
+  <img src="screenshots/logo.png" alt="lazykoder" width="280">
 </p>
 
 <p align="center">

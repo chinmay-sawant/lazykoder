@@ -20,7 +20,7 @@ command -v go
 
 Use a unique, dedicated session name. Do not use `tmux kill-server`, attach to a user's existing session, or run the TUI through a pipe, redirect, `head`, or `timeout`.
 
-For lazyKoder, launch from the repository root with a writable task cache:
+For lazykoder, launch from the repository root with a writable task cache:
 
 ```sh
 tmux new-session -d -s lazykoder-ui-qa -x 120 -y 36 'GOCACHE=/tmp/lazykoder-go-cache go run .'
@@ -60,7 +60,7 @@ tmux send-keys -t lazykoder-ui-qa:0.0 m Enter
 tmux capture-pane -p -t lazykoder-ui-qa:0.0 -S -
 ```
 
-In the current lazyKoder chat model, Escape closes the slash popover but intentionally leaves `/` in the prompt. Do not interpret a resulting `//` as an application layout bug; reset to a clean state or remove the retained slash before testing another path.
+In the current lazykoder chat model, Escape closes the slash popover but intentionally leaves `/` in the prompt. Do not interpret a resulting `//` as an application layout bug; reset to a clean state or remove the retained slash before testing another path.
 
 ### 4. Test responsive geometry
 

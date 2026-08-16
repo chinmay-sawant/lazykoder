@@ -27,7 +27,7 @@ func Fetch(ctx context.Context, hc *http.Client) (map[string]Info, error) {
 	if err != nil {
 		return nil, fmt.Errorf("modelscache: build catalog request: %w", err)
 	}
-	req.Header.Set("User-Agent", "lazyKoder")
+	req.Header.Set("User-Agent", "lazykoder")
 	resp, err := hc.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("modelscache: catalog request failed: %w", err)
