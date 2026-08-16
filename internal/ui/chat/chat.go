@@ -143,17 +143,19 @@ type Model struct {
 	pendingUser         string
 	lastTool            int
 
-	model        string // current model; "" = provider default
-	models       []string
-	modelInfos   []modelscache.Info
-	modelsErr    string
-	modelsCached bool // models came from the cache, not a live fetch
-	cachePath    string
-	activity     string
-	tokensUsed   int64
-	sessionCost  float64
-	tokensPerSec float64
-	turnStarted  time.Time
+	model         string // current model; "" = provider default
+	models        []string
+	modelInfos    []modelscache.Info
+	modelsErr     string
+	modelsCached  bool // models came from the cache, not a live fetch
+	cachePath     string
+	activity      string
+	tokensUsed    int64
+	sessionCost   float64
+	tokensPerSec  float64
+	turnStarted   time.Time
+	turnGenTokens int64
+	turnItemFrom  int
 
 	confirmCh   chan confirmRequest
 	askCh       chan askRequest
@@ -432,8 +434,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.transcript.SetWidth(max(minPaneWidth, msg.Width-1))
 		m.prompt.SetWidth(max(minPaneWidth, msg.Width))
 		m.prompt.SetHeight(m.promptHeight())
+		m.transcript.SetHeight(max(minPaneHeight, m.transcriptRenderHeight()))
 		m.syncTranscript()
-		m.transcript.SetHeight(max(minPaneHeight, msg.Height-m.chromeHeight()))
 		if m.pickerBuilt {
 			m = m.resizePicker()
 		}
@@ -586,13 +588,28 @@ func (m Model) finishTurn(err error) Model {
 	m.pulseOn = false
 	m.activity = ""
 	if !m.turnStarted.IsZero() {
-		elapsed := time.Since(m.turnStarted).Seconds()
-		if elapsed > 0 && m.tokensUsed > 0 {
-			m.tokensPerSec = float64(m.tokensUsed) / elapsed
-		}
+		m.tokensPerSec = tokensPerSec(m.generatedThisTurn(), time.Since(m.turnStarted))
 	}
 	m.bumpTokenFloor()
 	return m
+}
+
+func tokensPerSec(generated int64, elapsed time.Duration) float64 {
+	sec := elapsed.Seconds()
+	if generated <= 0 || sec < 0.05 {
+		return 0
+	}
+	return float64(generated) / sec
+}
+
+func (m Model) generatedThisTurn() int64 {
+	if m.turnGenTokens > 0 {
+		return m.turnGenTokens
+	}
+	if m.turnItemFrom >= 0 && m.turnItemFrom < len(m.items) {
+		return estimateTokens(m.items[m.turnItemFrom:])
+	}
+	return 0
 }
 
 func (m Model) noteActivityFromPart(p db.Part) Model {

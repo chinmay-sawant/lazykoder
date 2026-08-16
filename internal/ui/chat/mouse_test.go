@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -194,6 +195,90 @@ func TestClickTogglesThinkingHeader(t *testing.T) {
 	}
 	if !strings.Contains(stripANSI(viewText(m)), "secret thought") {
 		t.Fatal("expanded thinking missing from view")
+	}
+}
+
+func TestReopenClickTogglesCollapsedAtBottom(t *testing.T) {
+	st := newTestStore(t)
+	dir := t.TempDir()
+	sess, err := st.CreateSession(context.Background(), db.Session{Title: "reopen", Directory: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 25; i++ {
+		um, err := st.InsertMessage(context.Background(), db.Message{SessionID: sess.ID, Role: "user"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ut := fmt.Sprintf("user-line-%02d", i)
+		if _, err := st.InsertPart(context.Background(), db.Part{MessageID: um.ID, Type: "text", Text: &ut}); err != nil {
+			t.Fatal(err)
+		}
+		am, err := st.InsertMessage(context.Background(), db.Message{SessionID: sess.ID, Role: "assistant"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		at := fmt.Sprintf("assistant-line-%02d", i)
+		if _, err := st.InsertPart(context.Background(), db.Part{MessageID: am.ID, Type: "text", Text: &at}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	am, err := st.InsertMessage(context.Background(), db.Message{SessionID: sess.ID, Role: "assistant"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	thought := "secret-reopen-thought"
+	if _, err := st.InsertPart(context.Background(), db.Part{MessageID: am.ID, Type: "reasoning", Text: &thought}); err != nil {
+		t.Fatal(err)
+	}
+	name := "bash"
+	status := "completed"
+	callID := "call-reopen"
+	toolPart, err := st.InsertPart(context.Background(), db.Part{
+		MessageID: am.ID, Type: "tool", ToolName: &name, ToolCallID: &callID, ToolStatus: &status,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	title := "echo reopen"
+	if err := st.InsertToolCall(context.Background(), db.ToolCall{
+		PartID: toolPart.ID, Tool: name, CallID: callID, Status: status, Title: &title,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	m := New(Options{Store: st, Client: deadClient(), Workdir: dir, Session: &sess})
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 36})
+	m = mm.(Model)
+
+	yThink := lastViewLineIndex(m, thinkingLabel)
+	yBash := lastViewLineIndex(m, "bash")
+	if yThink < 0 || yBash < 0 {
+		t.Fatalf("reopened view missing thinking/bash: %q", viewText(m))
+	}
+	if idx, ok := m.itemIndexAtScreenY(yThink); !ok || m.items[idx].kind != itemReasoning {
+		t.Fatalf("thinking row %d maps to idx=%d ok=%v (offset=%d)", yThink, idx, ok, m.transcript.YOffset())
+	}
+	if idx, ok := m.itemIndexAtScreenY(yBash); !ok || m.items[idx].kind != itemTool {
+		t.Fatalf("bash row %d maps to idx=%d ok=%v (offset=%d)", yBash, idx, ok, m.transcript.YOffset())
+	}
+
+	mm, _ = m.Update(tea.MouseClickMsg(tea.Mouse{X: 2, Y: yThink, Button: tea.MouseLeft}))
+	m = mm.(Model)
+	if !strings.Contains(stripANSI(viewText(m)), thought) {
+		t.Fatalf("click on reopened thinking did not expand: %q", viewText(m))
+	}
+	mm, _ = m.Update(tea.MouseClickMsg(tea.Mouse{X: 2, Y: lastViewLineIndex(m, "bash"), Button: tea.MouseLeft}))
+	m = mm.(Model)
+	found := false
+	for _, it := range m.items {
+		if it.kind == itemTool && !it.collapsed {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("click on reopened bash did not expand: %q", viewText(m))
 	}
 }
 

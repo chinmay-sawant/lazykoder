@@ -259,6 +259,16 @@ func viewLineIndex(m Model, needle string) int {
 	return -1
 }
 
+func lastViewLineIndex(m Model, needle string) int {
+	found := -1
+	for i, line := range strings.Split(stripANSI(viewText(m)), "\n") {
+		if strings.Contains(line, needle) {
+			found = i
+		}
+	}
+	return found
+}
+
 func stampOnRight(view, left, stamp string) bool {
 	for _, line := range strings.Split(view, "\n") {
 		if !strings.Contains(line, left) || !strings.Contains(line, stamp) {

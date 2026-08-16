@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
@@ -177,7 +178,7 @@ func (m Model) modelContextLabel() string {
 		label = label + "  " + formatCost(m.sessionCost)
 	}
 	if m.tokensPerSec > 0 {
-		label = label + "  " + fmt.Sprintf("%.1f tps", m.tokensPerSec)
+		label = label + "  " + formatTPS(m.tokensPerSec)
 	}
 	return label
 }
@@ -187,6 +188,13 @@ func formatCost(usd float64) string {
 		return fmt.Sprintf("$%.4f", usd)
 	}
 	return fmt.Sprintf("$%.3f", usd)
+}
+
+func formatTPS(n float64) string {
+	if n >= 10 {
+		return fmt.Sprintf("%.0f tps", n)
+	}
+	return fmt.Sprintf("%.1f tps", n)
 }
 
 func (m Model) composerLeft() string {
@@ -212,6 +220,22 @@ func (m Model) transcriptRenderHeight() int {
 	return max(minPaneHeight, m.height-fixedRows)
 }
 
+// paintedTranscript is the viewport the user sees: current width/height and
+// pinned to the bottom when the model thinks it is at the bottom. Click
+// mapping must use this offset, not the stale model YOffset from the
+// default 80x24 size used at replay.
+func (m Model) paintedTranscript() viewport.Model {
+	h := m.transcriptRenderHeight()
+	atBottom := m.transcript.AtBottom()
+	vp := m.transcript
+	vp.SetWidth(max(minPaneWidth, m.width-1))
+	vp.SetHeight(h)
+	if atBottom {
+		vp.GotoBottom()
+	}
+	return vp
+}
+
 // transcriptView renders the transcript viewport with a right-edge scrollbar.
 func (m Model) transcriptView() string {
 	h := m.transcriptRenderHeight()
@@ -223,14 +247,8 @@ func (m Model) transcriptView() string {
 		}, "\n")
 		return lipgloss.NewStyle().Width(max(minPaneWidth, m.width)).Height(h).Render(empty)
 	}
-	atBottom := m.transcript.AtBottom()
-	vp := m.transcript
-	vp.SetHeight(h)
-	if atBottom {
-		vp.GotoBottom()
-	}
-	width := vp.Width()
-	return withScrollbar(vp.View(), width, h, vp.ScrollPercent(), vp.TotalLineCount() > h)
+	vp := m.paintedTranscript()
+	return withScrollbar(vp.View(), vp.Width(), h, vp.ScrollPercent(), vp.TotalLineCount() > h)
 }
 
 func (m Model) helpOverlay() string {

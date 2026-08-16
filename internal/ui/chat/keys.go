@@ -172,6 +172,9 @@ func (m Model) submit(text string) (Model, tea.Cmd) {
 	m.pendingHistoryIndex = len(m.inputHistory)
 	m.inputHistory = append(m.inputHistory, inputHistoryItem{text: text})
 	m.items = append(m.items, transcriptItem{kind: itemUser, text: text, when: time.Now().UnixMilli()})
+	m.turnItemFrom = len(m.items)
+	m.turnGenTokens = 0
+	m.tokensPerSec = 0
 	m.syncTranscript()
 	m.turnSeq++
 	seq := m.turnSeq

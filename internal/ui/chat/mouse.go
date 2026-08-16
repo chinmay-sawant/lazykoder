@@ -147,7 +147,8 @@ func (m Model) transcriptPosition(mu tea.Mouse) (textPosition, bool) {
 		return textPosition{}, false
 	}
 	rows := m.plainTranscriptRows()
-	row := mu.Y - top + m.transcript.YOffset()
+	vp := m.paintedTranscript()
+	row := mu.Y - top + vp.YOffset()
 	if row < 0 || row >= len(rows) {
 		return textPosition{}, false
 	}
@@ -166,7 +167,8 @@ func (m Model) itemIndexAtScreenY(y int) (int, bool) {
 	if y < top || y >= top+height {
 		return -1, false
 	}
-	target := y - top + m.transcript.YOffset()
+	vp := m.paintedTranscript()
+	target := y - top + vp.YOffset()
 	if target < 0 {
 		return -1, false
 	}

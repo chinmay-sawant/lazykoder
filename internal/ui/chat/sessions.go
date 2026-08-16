@@ -254,6 +254,9 @@ func (m Model) loadSession(sess *db.Session) Model {
 	m.tokensUsed = 0
 	m.sessionCost = 0
 	m.tokensPerSec = 0
+	m.turnGenTokens = 0
+	m.turnItemFrom = 0
+	m.turnStarted = time.Time{}
 	m.prompt.SetValue("")
 	m.session = sess
 	if sess != nil {

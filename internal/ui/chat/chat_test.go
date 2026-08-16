@@ -827,6 +827,41 @@ func TestComposerShowsCost(t *testing.T) {
 
 func ptrInt64(n int64) *int64 { return &n }
 
+func TestTokensPerSecUsesGeneratedNotSessionTotal(t *testing.T) {
+	if got := tokensPerSec(80, time.Second); got != 80 {
+		t.Fatalf("tokensPerSec(80, 1s) = %v, want 80", got)
+	}
+	if got := tokensPerSec(16000, 8*time.Second); got != 2000 {
+		t.Fatalf("sanity: 16000/8s = %v, want 2000 (this must not be used for the footer)", got)
+	}
+	if got := tokensPerSec(80, 20*time.Millisecond); got != 0 {
+		t.Fatalf("sub-50ms elapsed should not invent tps, got %v", got)
+	}
+	if got := tokensPerSec(0, time.Second); got != 0 {
+		t.Fatalf("zero generated tokens should not invent tps, got %v", got)
+	}
+
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	m.busy = true
+	m.turnStarted = time.Now().Add(-time.Second)
+	m.tokensUsed = 16000
+	out := int64(80)
+	m.applyPart(db.Part{Type: "step-finish", TokensOutput: &out, TokensTotal: ptrInt64(16000)})
+	if m.turnGenTokens != 80 {
+		t.Fatalf("turnGenTokens = %d, want 80", m.turnGenTokens)
+	}
+	m = m.finishTurn(nil)
+	if m.tokensPerSec < 70 || m.tokensPerSec > 90 {
+		t.Fatalf("tps = %v, want ~80 from 80 output tokens in 1s, not session 16000", m.tokensPerSec)
+	}
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
+	m = mm.(Model)
+	v := stripANSI(viewText(m))
+	if !strings.Contains(v, "80 tps") && !strings.Contains(v, "79 tps") && !strings.Contains(v, "81 tps") {
+		t.Fatalf("footer missing turn tps: %q", v)
+	}
+}
+
 func TestComposerShowsContext(t *testing.T) {
 	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
 	m.model = "deepseek-v4-flash"

@@ -133,6 +133,16 @@ func (m *Model) applyUsage(p db.Part) {
 	} else if total > 0 {
 		m.addCost(0, total)
 	}
+	if !m.busy {
+		return
+	}
+	gen := out
+	if gen == 0 && p.TokensReasoning != nil {
+		gen = *p.TokensReasoning
+	}
+	if gen > 0 {
+		m.turnGenTokens += gen
+	}
 }
 
 func (m *Model) bumpTokenFloor() {
@@ -164,6 +174,8 @@ func estimateTokens(items []transcriptItem) int64 {
 }
 
 func (m *Model) syncTranscript() {
+	m.transcript.SetWidth(max(minPaneWidth, m.width-1))
+	m.transcript.SetHeight(max(minPaneHeight, m.transcriptRenderHeight()))
 	atBottom := m.transcript.AtBottom()
 	yOffset := m.transcript.YOffset()
 	m.transcript.SetContent(m.transcriptContent())
