@@ -20,6 +20,11 @@ const (
 	Danger  = "#e06c75"
 	Border  = "#2a2a2a"
 	Good    = "#9ece6a"
+	// Edit panel line tints (solid approximations of semi-transparent
+	// green/red wash over black; the panel itself uses ColorEditPanel).
+	EditAddBg = "#0a1a0c"
+	EditDelBg = "#1a0a0c"
+	EditMeta  = "#6a6660"
 )
 
 func ColorBg() color.Color      { return lipgloss.Color(Bg) }
@@ -30,6 +35,16 @@ func ColorAccent() color.Color  { return lipgloss.Color(Accent) }
 func ColorDanger() color.Color  { return lipgloss.Color(Danger) }
 func ColorBorder() color.Color  { return lipgloss.Color(Border) }
 func ColorGood() color.Color    { return lipgloss.Color(Good) }
+
+// ColorEditPanel is a semi-transparent black overlay for expanded edit cards.
+// Alpha ~70% so the panel reads as a glass layer on the solid black bg.
+func ColorEditPanel() color.Color {
+	return color.RGBA{R: 0, G: 0, B: 0, A: 0xb3}
+}
+
+func ColorEditAddBg() color.Color { return lipgloss.Color(EditAddBg) }
+func ColorEditDelBg() color.Color { return lipgloss.Color(EditDelBg) }
+func ColorEditMeta() color.Color  { return lipgloss.Color(EditMeta) }
 
 // StatusDiamond is the persistent status mark on every tool run card.
 const StatusDiamond = "◆"

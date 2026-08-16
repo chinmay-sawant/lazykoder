@@ -110,11 +110,26 @@ var (
 	toolOutputStyle = lipgloss.NewStyle().
 			Background(theme.ColorBg()).
 			Foreground(theme.ColorMute())
+	// editCardStyle paints the full-width edit block on a semi-transparent
+	// black panel so diffs read as a distinct surface over the chat bg.
+	editCardStyle = lipgloss.NewStyle().
+			Background(theme.ColorEditPanel()).
+			Foreground(theme.ColorText())
 	selectionStyle = lipgloss.NewStyle().
 			Background(theme.ColorAccent()).
 			Foreground(theme.ColorBg())
-	diffAddStyle = lipgloss.NewStyle().Foreground(theme.ColorGood())
-	diffDelStyle = lipgloss.NewStyle().Foreground(theme.ColorDanger())
+	diffAddStyle = lipgloss.NewStyle().
+			Foreground(theme.ColorGood()).
+			Background(theme.ColorEditAddBg())
+	diffDelStyle = lipgloss.NewStyle().
+			Foreground(theme.ColorDanger()).
+			Background(theme.ColorEditDelBg())
+	diffMetaStyle = lipgloss.NewStyle().
+			Foreground(theme.ColorEditMeta()).
+			Background(theme.ColorEditPanel())
+	diffCtxStyle = lipgloss.NewStyle().
+			Foreground(theme.ColorMute()).
+			Background(theme.ColorEditPanel())
 )
 
 // Options configures the chat model.
@@ -534,8 +549,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.pulse = (m.pulse + 1) % pulseSteps
 		m.pulseOn = true
-		if m.subagentPickerMode && !m.subagentLogMode {
-			// Update status/activity in place only; never rebuild/reorder the list.
+		// Refresh live status for footer chips even when the drawer is closed;
+		// when open, update activity in place without reordering.
+		if !m.subagentLogMode && (m.subagentPickerMode || m.hasLiveSubagents() || len(m.subagentItems) > 0) {
 			m = m.refreshSubagentDrawerLive()
 		}
 		return m, pulseTick()
@@ -733,9 +749,9 @@ func (m Model) applyEvent(ev agent.Event) Model {
 	case agent.EventTool:
 		m.applyTool(ev)
 		m.activity = toolActivity(ev.Tool)
-		// Open/refresh the sub-agent drawer when task tools fire.
+		// On task tool events: open drawer only when a new job appears.
 		if ev.Tool.Tool == "task" || strings.HasPrefix(ev.Tool.Tool, "task_") {
-			m = m.syncSubagentDrawer()
+			m = m.openSubagentDrawerIfNew()
 			m.pulseOn = m.busy || m.hasLiveSubagents()
 		}
 	case agent.EventError:
@@ -760,7 +776,7 @@ func (m Model) adoptSession(id string) Model {
 		return m
 	}
 	m.session = &sess
-	// Restore sub-agent drawer for sessions that already have children.
+	// Load child rows for the footer chip; do not force-open the drawer.
 	return m.syncSubagentDrawer()
 }
 
@@ -790,7 +806,8 @@ func (m Model) finishTurn(err error) Model {
 	m.errCh = nil
 	m.activity = ""
 	m.collapseLiveReasoning()
-	// Keep the sub-agent drawer open with history after the turn ends.
+	// Refresh sub-agent rows after the turn; drawer stays as the user left it
+	// (only a new spawn re-opens it via openSubagentDrawerIfNew).
 	m = m.syncSubagentDrawer()
 	if m.hasLiveSubagents() {
 		m.pulseOn = true

@@ -14,6 +14,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/chinmay-sawant/lazykoder/internal/agent"
 	"github.com/chinmay-sawant/lazykoder/internal/db"
 	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
@@ -2245,29 +2246,75 @@ func TestSpliceDisplayUsesCellsNotRunes(t *testing.T) {
 
 func TestEditDiffCard(t *testing.T) {
 	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
-	diff := "@@ -1,1 +1,1 @@\n-old\n+new line"
-	meta := `{"diff":` + "`" + diff + "`" + `}`
-	// valid JSON
-	meta = `{"diff":"@@ -1,1 +1,1 @@\n-old\n+new line"}`
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 36})
+	m = mm.(Model)
+	meta := `{"diff":"@@ -1,1 +1,1 @@\n-old\n+new line"}`
 	path := "main.go"
 	tc := db.ToolCall{
 		Tool: "edit", Status: "completed", Title: &path,
 		InputJSON:    `{"filePath":"main.go","oldString":"old","newString":"new line"}`,
 		MetadataJSON: &meta,
 	}
+	// Explicit collapsed still hides the body but shows +/− stats.
 	m.items = append(m.items, transcriptItem{kind: itemTool, collapsed: true, tool: tc})
 	m.syncTranscript()
 	v := stripANSI(viewText(m))
 	if !strings.Contains(v, "main.go") {
 		t.Fatalf("collapsed edit missing path: %q", v)
 	}
+	if !strings.Contains(v, "+1") || !strings.Contains(v, "-1") {
+		t.Fatalf("collapsed edit missing diff stats: %q", v)
+	}
 	if strings.Contains(v, "@@") {
-		t.Fatalf("collapsed edit showed diff: %q", v)
+		t.Fatalf("collapsed edit showed full diff: %q", v)
 	}
 	m = m.toggleLastTool()
 	v = stripANSI(viewText(m))
 	if !strings.Contains(v, "@@") || !strings.Contains(v, "new line") {
 		t.Fatalf("expanded edit missing diff: %q", v)
+	}
+	// Diff lines paint full card width (panel, not a thin text strip).
+	var diffLine string
+	for _, line := range strings.Split(viewText(m), "\n") {
+		if strings.Contains(stripANSI(line), "+new line") {
+			diffLine = line
+			break
+		}
+	}
+	if diffLine == "" {
+		t.Fatal("missing +new line row")
+	}
+	wantW := m.toolCardWidth()
+	if got := lipgloss.Width(diffLine); got < wantW {
+		t.Fatalf("diff line width %d < tool card width %d", got, wantW)
+	}
+}
+
+func TestEditAutoExpandsWithDiff(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 36})
+	m = mm.(Model)
+	path := "main.go"
+	meta := `{"diff":"@@ -1,1 +1,1 @@\n-old\n+new"}`
+	// Pending first, then completed with diff (live tool stream).
+	m.applyTool(agent.Event{Tool: db.ToolCall{
+		Tool: "edit", Status: "pending", Title: &path,
+		InputJSON: `{"filePath":"main.go","oldString":"old","newString":"new"}`,
+	}})
+	if idx := m.lastTool; idx < 0 || !m.items[idx].collapsed {
+		t.Fatal("pending edit should start collapsed")
+	}
+	m.applyTool(agent.Event{Tool: db.ToolCall{
+		Tool: "edit", Status: "completed", Title: &path,
+		InputJSON:    `{"filePath":"main.go","oldString":"old","newString":"new"}`,
+		MetadataJSON: &meta,
+	}})
+	if m.items[m.lastTool].collapsed {
+		t.Fatal("completed edit with diff should auto-expand")
+	}
+	v := stripANSI(viewText(m))
+	if !strings.Contains(v, "+new") || !strings.Contains(v, "-old") {
+		t.Fatalf("auto-expanded edit missing changes: %q", v)
 	}
 }
 

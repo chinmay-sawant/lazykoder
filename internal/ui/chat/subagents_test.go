@@ -334,3 +334,81 @@ func TestSubagentDrawerKeepsComposerVisible(t *testing.T) {
 		t.Fatalf("view height %d > terminal %d (composer pushed off)", len(lines), m.height)
 	}
 }
+
+func TestSyncSubagentDrawerDoesNotForceOpen(t *testing.T) {
+	st := newTestStore(t)
+	workdir := t.TempDir()
+	parent, err := st.CreateSession(context.Background(), db.Session{Directory: workdir, Title: "main"})
+	if err != nil {
+		t.Fatalf("parent: %v", err)
+	}
+	pid := parent.ID
+	if _, err := st.CreateSession(context.Background(), db.Session{
+		Directory: workdir, Title: "child-a", ParentSessionID: &pid, Kind: db.SessionKindSubagent,
+	}); err != nil {
+		t.Fatalf("child: %v", err)
+	}
+
+	m := New(Options{Store: st, Workdir: workdir, Session: &parent})
+	m = m.syncSubagentDrawer()
+	if m.subagentPickerMode {
+		t.Fatal("syncSubagentDrawer must not force-open the drawer for existing children")
+	}
+	if len(m.subagentItems) != 1 {
+		t.Fatalf("rows = %d, want 1 for footer chip", len(m.subagentItems))
+	}
+	if got := m.subsStatusLabel(); got != "subs:1" {
+		t.Fatalf("footer label = %q, want subs:1", got)
+	}
+}
+
+func TestCloseDrawerStaysClosedUntilNewSpawn(t *testing.T) {
+	st := newTestStore(t)
+	workdir := t.TempDir()
+	parent, err := st.CreateSession(context.Background(), db.Session{Directory: workdir, Title: "main"})
+	if err != nil {
+		t.Fatalf("parent: %v", err)
+	}
+	pid := parent.ID
+	if _, err := st.CreateSession(context.Background(), db.Session{
+		Directory: workdir, Title: "child-a", ParentSessionID: &pid, Kind: db.SessionKindSubagent,
+	}); err != nil {
+		t.Fatalf("child: %v", err)
+	}
+
+	m := New(Options{Store: st, Workdir: workdir, Session: &parent})
+	m = m.openSubagentPicker()
+	if !m.subagentPickerMode {
+		t.Fatal("expected open")
+	}
+	m = m.closeSubagentPicker()
+	if m.subagentPickerMode {
+		t.Fatal("expected closed")
+	}
+
+	// finishTurn / sync after a plain user command must not re-open.
+	m = m.syncSubagentDrawer()
+	if m.subagentPickerMode {
+		t.Fatal("drawer re-opened after close on sync (plain command path)")
+	}
+
+	// Same job set via openSubagentDrawerIfNew (task_wait-style) stays closed.
+	m = m.openSubagentDrawerIfNew()
+	if m.subagentPickerMode {
+		t.Fatal("drawer re-opened when no new job ids")
+	}
+
+	// A brand-new child (spawn) should open the drawer again.
+	if _, err := st.CreateSession(context.Background(), db.Session{
+		Directory: workdir, Title: "child-b", ParentSessionID: &pid, Kind: db.SessionKindSubagent,
+	}); err != nil {
+		t.Fatalf("child-b: %v", err)
+	}
+	m = m.openSubagentDrawerIfNew()
+	if !m.subagentPickerMode {
+		t.Fatal("drawer should open when a new sub-agent appears")
+	}
+	if len(m.subagentItems) != 2 {
+		t.Fatalf("rows = %d, want 2", len(m.subagentItems))
+	}
+}

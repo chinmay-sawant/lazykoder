@@ -84,17 +84,44 @@ func (m Model) ensureSubagentBuilt() Model {
 	return m
 }
 
-// syncSubagentDrawer reloads rows and auto-opens the drawer when this
-// session has sub-agents (live or historical).
+// syncSubagentDrawer reloads sub-agent rows for the footer chip and drawer
+// without forcing the drawer open. Closing sticks until a new spawn (see
+// openSubagentDrawerIfNew) or the user reopens via /agents or the subs:N chip.
 func (m Model) syncSubagentDrawer() Model {
 	m = m.ensureSubagentBuilt()
 	m = m.reloadSubagentRows()
 	if len(m.subagentItems) == 0 {
 		return m
 	}
-	// Keep the drawer visible whenever there is something to show.
-	m.subagentPickerMode = true
-	return m.resizeSubagentDrawer()
+	if m.subagentPickerMode {
+		return m.resizeSubagentDrawer()
+	}
+	return m
+}
+
+// openSubagentDrawerIfNew reloads rows and opens the drawer only when at
+// least one job id was not already listed (true spawn). Safe to call on
+// every task* tool event; task_wait / status updates do not re-open.
+func (m Model) openSubagentDrawerIfNew() Model {
+	m = m.ensureSubagentBuilt()
+	prevIDs := make(map[string]struct{}, len(m.subagentItems))
+	for _, r := range m.subagentItems {
+		prevIDs[r.ID] = struct{}{}
+	}
+	m = m.reloadSubagentRows()
+	if len(m.subagentItems) == 0 {
+		return m
+	}
+	for _, r := range m.subagentItems {
+		if _, known := prevIDs[r.ID]; !known {
+			m.subagentPickerMode = true
+			break
+		}
+	}
+	if m.subagentPickerMode {
+		return m.resizeSubagentDrawer()
+	}
+	return m
 }
 
 func (m Model) reloadSubagentRows() Model {
@@ -881,8 +908,12 @@ func (m Model) loadSubagentLogItems(row subagentRow) []transcriptItem {
 				if tool.TimeStart != nil {
 					when = *tool.TimeStart
 				}
+				collapsed := true
+				if tool.Tool == "edit" && toolMetadataDiff(tool) != "" {
+					collapsed = false
+				}
 				items = append(items, transcriptItem{
-					kind: itemTool, collapsed: true, when: when, tool: tool, part: p,
+					kind: itemTool, collapsed: collapsed, when: when, tool: tool, part: p,
 				})
 			}
 		}

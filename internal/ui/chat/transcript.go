@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"time"
 
@@ -104,7 +105,12 @@ func (m *Model) replay(sessionID string) {
 				if tool.TimeStart != nil {
 					when = *tool.TimeStart
 				}
-				m.items = append(m.items, transcriptItem{kind: itemTool, collapsed: true, when: when, tool: tool, part: p})
+				collapsed := true
+				// History: show completed edit diffs expanded by default.
+				if tool.Tool == "edit" && toolMetadataDiff(tool) != "" {
+					collapsed = false
+				}
+				m.items = append(m.items, transcriptItem{kind: itemTool, collapsed: collapsed, when: when, tool: tool, part: p})
 			case "step-finish":
 				m.applyUsage(p)
 			}
@@ -609,9 +615,20 @@ func (m *Model) applyTool(ev agent.Event) {
 		return
 	}
 	if m.lastTool >= 0 && m.lastTool < len(m.items) && m.items[m.lastTool].kind == itemTool {
-		item.collapsed = m.items[m.lastTool].collapsed
+		prev := m.items[m.lastTool]
+		item.collapsed = prev.collapsed
+		// First time an edit lands with a diff: open the card so changes show.
+		if ev.Tool.Tool == "edit" && toolMetadataDiff(ev.Tool) != "" {
+			prevSt := prev.tool.Status
+			if prevSt == "" || prevSt == "pending" || prevSt == "running" {
+				item.collapsed = false
+			}
+		}
 		m.items[m.lastTool] = item
 	} else {
+		if ev.Tool.Tool == "edit" && toolMetadataDiff(ev.Tool) != "" {
+			item.collapsed = false
+		}
 		m.items = append(m.items, item)
 		m.lastTool = len(m.items) - 1
 	}
@@ -675,27 +692,33 @@ func (m Model) renderTool(ev agent.Event, collapsed bool, when int64) string {
 	if title != name {
 		label = name + "  " + title
 	}
+	// Collapsed edit still hints at change volume so the row is not empty chrome.
+	if collapsed && name == "edit" {
+		if add, del := diffStat(toolMetadataDiff(ev.Tool)); add+del > 0 {
+			label += "  " + formatDiffStat(add, del)
+		}
+	}
 	diamondColor := theme.StatusColor(status)
 	diamond := lipgloss.NewStyle().Foreground(diamondColor).Render(theme.StatusDiamond)
 	left := diamond + "  " + lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).Render(chevron+"  "+label)
 	header := m.alignMeta(left, formatClock(when))
-	card := toolCardStyle.Width(m.toolCardWidth()).Background(theme.ColorBg())
+	bodyWidth := max(minPaneWidth, m.toolCardWidth())
+
+	// Edit tools get a full-width semi-transparent panel that shows the diff.
+	if name == "edit" {
+		return m.renderEditTool(header, ev, collapsed, bodyWidth)
+	}
+
+	card := toolCardStyle.Width(bodyWidth).Background(theme.ColorBg())
 	if collapsed {
 		return card.Render(header)
 	}
-	bodyWidth := max(minPaneWidth, m.toolCardWidth())
 	body := []string{header}
 	switch ev.Tool.Tool {
-	case "edit":
-		if diff := toolMetadataDiff(ev.Tool); diff != "" {
-			body = append(body, renderDiff(diff, bodyWidth))
-			break
-		}
-		fallthrough
 	case "write":
 		if ev.Tool.Output != nil && *ev.Tool.Output != "" {
 			preview := *ev.Tool.Output
-			if ev.Tool.Tool == "write" && len([]rune(preview)) > 400 {
+			if len([]rune(preview)) > 400 {
 				preview = string([]rune(preview)[:400]) + "…"
 			}
 			body = append(body, toolOutputStyle.Width(bodyWidth).Render(strings.TrimSuffix(preview, "\n")))
@@ -712,6 +735,26 @@ func (m Model) renderTool(ev agent.Event, collapsed bool, when int64) string {
 		}
 	}
 	return card.Render(strings.Join(body, "\n"))
+}
+
+// renderEditTool draws the edit tool as a full-width card on a semi-transparent
+// black panel. Expanded state shows the unified diff with tinted add/del lines.
+func (m Model) renderEditTool(header string, ev agent.Event, collapsed bool, width int) string {
+	width = max(minPaneWidth, width)
+	panel := editCardStyle.Width(width)
+	head := panel.Render(header)
+	if collapsed {
+		return head
+	}
+	diff := toolMetadataDiff(ev.Tool)
+	if diff == "" {
+		if ev.Tool.Output != nil && *ev.Tool.Output != "" {
+			out := panel.Foreground(theme.ColorMute()).Render(strings.TrimSuffix(*ev.Tool.Output, "\n"))
+			return head + "\n" + out
+		}
+		return head
+	}
+	return head + "\n" + renderDiff(diff, width)
 }
 
 func toolMetadataDiff(tc db.ToolCall) string {
@@ -731,25 +774,64 @@ func toolMetadataDiff(tc db.ToolCall) string {
 	return meta.FileDiff
 }
 
-func renderDiff(diff string, width int) string {
-	var b strings.Builder
-	for i, line := range strings.Split(diff, "\n") {
-		if i > 0 {
-			b.WriteString("\n")
-		}
+func diffStat(diff string) (add, del int) {
+	if diff == "" {
+		return 0, 0
+	}
+	for _, line := range strings.Split(diff, "\n") {
 		switch {
-		case strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++"):
-			b.WriteString(diffAddStyle.Render(line))
-		case strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---"):
-			b.WriteString(diffDelStyle.Render(line))
-		default:
-			b.WriteString(hintStyle.Render(line))
+		case strings.HasPrefix(line, "+++") || strings.HasPrefix(line, "---"):
+			continue
+		case strings.HasPrefix(line, "+"):
+			add++
+		case strings.HasPrefix(line, "-"):
+			del++
 		}
 	}
-	return toolOutputStyle.Width(width).Render(b.String())
+	return add, del
+}
+
+func formatDiffStat(add, del int) string {
+	parts := make([]string, 0, 2)
+	if add > 0 {
+		parts = append(parts, "+"+strconv.Itoa(add))
+	}
+	if del > 0 {
+		parts = append(parts, "-"+strconv.Itoa(del))
+	}
+	return strings.Join(parts, " ")
+}
+
+// renderDiff paints a unified diff at full card width. Each line fills the
+// panel so the semi-transparent black surface is continuous.
+func renderDiff(diff string, width int) string {
+	width = max(minPaneWidth, width)
+	lines := strings.Split(strings.TrimRight(diff, "\n"), "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		// Keep visual prefix; truncate ultra-long lines so the panel stays aligned.
+		display := line
+		if lipgloss.Width(display) > width {
+			display = ansi.Cut(display, 0, max(1, width-1)) + "…"
+		}
+		switch {
+		case strings.HasPrefix(line, "@@"):
+			out = append(out, diffMetaStyle.Width(width).Render(display))
+		case strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++"):
+			out = append(out, diffAddStyle.Width(width).Render(display))
+		case strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---"):
+			out = append(out, diffDelStyle.Width(width).Render(display))
+		case strings.HasPrefix(line, "+++") || strings.HasPrefix(line, "---"):
+			out = append(out, diffMetaStyle.Width(width).Render(display))
+		default:
+			out = append(out, diffCtxStyle.Width(width).Render(display))
+		}
+	}
+	return strings.Join(out, "\n")
 }
 
 func (m Model) toolCardWidth() int {
+	// Full transcript pane width (after work-rail inset when present).
 	return m.metaWidth()
 }
 
