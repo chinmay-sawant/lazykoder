@@ -939,16 +939,35 @@ func TestLiveTextPaintsInstantly(t *testing.T) {
 	}
 }
 
-func TestComposerHidesLiveActivity(t *testing.T) {
+func TestLiveActivitySitsAbovePrompt(t *testing.T) {
 	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
 	m.busy = true
-	m.activity = "bash  echo hello"
+	m.activity = "thinking"
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = mm.(Model)
 	v := stripANSI(viewText(m))
-	if strings.Contains(v, "bash  echo hello") {
-		t.Fatalf("footer still shows live activity: %q", v)
+	if !strings.Contains(v, "thinking") {
+		t.Fatalf("live thinking missing above the prompt: %q", v)
 	}
 	if !strings.Contains(v, "enter send") {
 		t.Fatalf("idle hint missing while busy: %q", v)
+	}
+	thinkAt, promptAt := -1, -1
+	for i, line := range strings.Split(v, "\n") {
+		if thinkAt < 0 && strings.Contains(line, "thinking") && !strings.Contains(line, "enter") {
+			thinkAt = i
+		}
+		if strings.Contains(line, "ask lazykoder") || strings.Contains(line, "╭") && promptAt < 0 && i > 2 {
+			if strings.Contains(line, "╭") {
+				promptAt = i
+			}
+		}
+	}
+	if thinkAt < 0 || promptAt < 0 || thinkAt >= promptAt {
+		t.Fatalf("thinking should sit above the input box: think=%d prompt=%d\n%s", thinkAt, promptAt, v)
+	}
+	if promptAt-thinkAt < 2 {
+		t.Fatalf("need a blank row between thinking and the input box: think=%d prompt=%d\n%s", thinkAt, promptAt, v)
 	}
 }
 

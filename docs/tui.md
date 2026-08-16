@@ -17,10 +17,15 @@ pickers are centered cards.
   while pending or running, green on success, red on error or deny. `e`
   expands the last run. Clicks on a
   thinking or tool header toggle that item.
-- Composer: a rounded input box on the solid black layer. Typed text uses
+- Composer: a rounded input box on the solid black layer. Long prompts
+  grow up to six rows and scroll inside the box. Up/down move the
+  cursor through that text first; at the top of a multi-line draft, up
+  stays there instead of jumping to a previous message. After browsing
+  history, down restores the draft you were typing. While a turn is
+  running, a thinking/loading line sits just above the box with a blank
+  row on each side. Typed text uses
   the same black background as the rest of the screen (no cursor-line
-  highlight). The footer left side stays idle (`enter send`). Live thinking
-  and commands stay in the transcript. The right side shows
+  highlight). The footer left side stays idle (`enter send`). The right side shows
   `model  used/window  hit/miss  $cost  tps` (click the model to switch).
   hit is cached input tokens (`cache_read` / `prompt_cache_hit`); miss is
   uncached input (`prompt - hit`, or the full prompt when the API reports

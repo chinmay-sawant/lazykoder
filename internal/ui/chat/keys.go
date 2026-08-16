@@ -101,13 +101,28 @@ func (m Model) updateKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 			return m.deleteSelectedHistory()
 		}
 	case tea.KeyUp:
-		if len(m.inputHistory) > 0 {
-			return m.navigateHistory(-1), nil
+		if m.promptCanMoveUp() {
+			var cmd tea.Cmd
+			m.prompt, cmd = m.prompt.Update(key)
+			return m, cmd
+		}
+		if m.historyCursor >= 0 || !m.promptHasMultipleLines() {
+			if len(m.inputHistory) > 0 {
+				return m.navigateHistory(-1), nil
+			}
+		}
+		if m.promptHasMultipleLines() {
+			return m, nil
 		}
 		m.transcript.ScrollUp(1)
 		return m, nil
 	case tea.KeyDown:
-		if len(m.inputHistory) > 0 {
+		if m.promptCanMoveDown() {
+			var cmd tea.Cmd
+			m.prompt, cmd = m.prompt.Update(key)
+			return m, cmd
+		}
+		if m.historyCursor >= 0 {
 			return m.navigateHistory(1), nil
 		}
 		m.transcript.ScrollDown(1)
@@ -288,12 +303,14 @@ func (m Model) navigateHistory(delta int) Model {
 		if next >= len(m.inputHistory) {
 			m.historyCursor = -1
 			m.prompt.SetValue(m.historyDraft)
+			m.prompt.SetHeight(m.promptHeight())
 			m.historyDraft = ""
 			return m
 		}
 		m.historyCursor = next
 	}
 	m.prompt.SetValue(m.inputHistory[m.historyCursor].text)
+	m.prompt.SetHeight(m.promptHeight())
 	m.escapePending = false
 	m.promptUndo = nil
 	m.slashFromPaste = false

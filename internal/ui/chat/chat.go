@@ -745,6 +745,9 @@ func newPromptArea(width int) textarea.Model {
 	ta.Prompt = ""
 	ta.Placeholder = "ask lazykoder"
 	ta.CharLimit = 0
+	ta.DynamicHeight = true
+	ta.MinHeight = promptMinRows
+	ta.MaxHeight = promptMaxRows
 	ta.SetWidth(max(minPaneWidth, width))
 	ta.SetHeight(promptMinRows)
 	ta.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("shift+enter"))
@@ -774,7 +777,7 @@ func newPromptArea(width int) textarea.Model {
 }
 
 func (m Model) promptHeight() int {
-	n := strings.Count(m.prompt.Value(), "\n") + 1
+	n := m.visualPromptLines()
 	if n < promptMinRows {
 		n = promptMinRows
 	}
@@ -784,8 +787,54 @@ func (m Model) promptHeight() int {
 	return n
 }
 
+func (m Model) visualPromptLines() int {
+	w := m.prompt.Width()
+	if w < 1 {
+		w = max(minPaneWidth, m.width-4)
+	}
+	if w < 1 {
+		w = 40
+	}
+	n := 0
+	for _, line := range strings.Split(m.prompt.Value(), "\n") {
+		lw := lipgloss.Width(line)
+		if lw == 0 {
+			n++
+			continue
+		}
+		n += (lw + w - 1) / w
+	}
+	if n < 1 {
+		return 1
+	}
+	return n
+}
+
+func (m Model) promptCanMoveUp() bool {
+	return m.prompt.Line() > 0 || m.prompt.LineInfo().RowOffset > 0
+}
+
+func (m Model) promptCanMoveDown() bool {
+	last := m.prompt.LineCount() - 1
+	if last < 0 {
+		last = 0
+	}
+	if m.prompt.Line() < last {
+		return true
+	}
+	li := m.prompt.LineInfo()
+	return li.Height > 0 && li.RowOffset+1 < li.Height
+}
+
+func (m Model) promptHasMultipleLines() bool {
+	if m.prompt.LineCount() > 1 {
+		return true
+	}
+	return m.prompt.LineInfo().Height > 1
+}
+
 func (m Model) chromeHeight() int {
-	h := lipgloss.Height(m.headerView()) + 1 + lipgloss.Height(m.promptLine())
+	h := lipgloss.Height(m.headerView()) + 1 + lipgloss.Height(m.composerBlock())
 	if m.slashMode {
 		h += 1 + lipgloss.Height(m.slashView())
 	}

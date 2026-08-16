@@ -24,7 +24,7 @@ func (m Model) View() tea.View {
 	}
 	screen := m.chatScreen()
 	overlayH := m.height
-	if ph := lipgloss.Height(m.promptLine()); ph > 0 && overlayH > ph {
+	if ph := lipgloss.Height(m.composerBlock()); ph > 0 && overlayH > ph {
 		overlayH -= ph
 	}
 	if m.confirmMode {
@@ -75,7 +75,7 @@ func (m Model) chatScreen() string {
 		b.WriteString(errStyle.Width(max(minPaneWidth, m.width)).Render(m.err))
 		b.WriteString("\n")
 	}
-	b.WriteString(m.promptLine())
+	b.WriteString(m.composerBlock())
 	return b.String()
 }
 
@@ -151,12 +151,40 @@ func (m Model) quitScreen() string {
 // promptLine renders the prompt inside a subtle translucent-looking panel:
 // a dark background with bright text so the input stays clearly readable.
 // A bottom margin lifts it one row above the bottom edge.
+func (m Model) showLiveStatus() bool {
+	return m.busy || strings.TrimSpace(m.activity) != ""
+}
+
+func (m Model) liveStatusView() string {
+	label := strings.TrimSpace(m.activity)
+	if label == "" {
+		label = thinkingLabel
+	}
+	style := reasoningStyle
+	if m.busy {
+		style = lipgloss.NewStyle().Foreground(theme.PulseAccent(m.pulseT()))
+	}
+	return lipgloss.NewStyle().Width(max(minPaneWidth, m.width)).Render(style.Render("◆  " + label))
+}
+
+func (m Model) composerBlock() string {
+	if m.showLiveStatus() {
+		return m.liveStatusView() + "\n\n" + m.promptLine()
+	}
+	return m.promptLine()
+}
+
 func (m Model) promptLine() string {
 	innerW := max(minPaneWidth, m.width-2)
 	p := m.prompt
-	p.SetHeight(m.promptHeight())
+	h := m.promptHeight()
+	p.SetHeight(h)
 	p.SetWidth(max(minPaneWidth, innerW-2))
-	body := lipgloss.JoinVertical(lipgloss.Left, p.View(), m.composerFooter(innerW-2))
+	text := p.View()
+	if m.visualPromptLines() > h {
+		text = withScrollbar(text, p.Width(), h, p.ScrollPercent(), true)
+	}
+	body := lipgloss.JoinVertical(lipgloss.Left, text, m.composerFooter(innerW-2))
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(theme.ColorBorder()).
@@ -235,7 +263,7 @@ func (m Model) composerLeft() string {
 }
 
 func (m Model) transcriptRenderHeight() int {
-	fixedRows := lipgloss.Height(m.headerView()) + 1 + lipgloss.Height(m.promptLine())
+	fixedRows := lipgloss.Height(m.headerView()) + 1 + 1 + lipgloss.Height(m.composerBlock())
 	if m.slashMode {
 		fixedRows += 1 + lipgloss.Height(m.slashView())
 	}
@@ -474,6 +502,9 @@ func (m Model) modelStatusRect() (left, top, right, bottom int, ok bool) {
 	}
 	if m.err != "" {
 		top += lipgloss.Height(errStyle.Width(max(minPaneWidth, m.width)).Render(m.err)) + 1
+	}
+	if m.showLiveStatus() {
+		top += 2
 	}
 	// Footer sits inside the composer: top border + prompt rows.
 	top += 1 + m.promptHeight()

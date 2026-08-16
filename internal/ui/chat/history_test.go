@@ -141,3 +141,43 @@ func TestInputHistoryCopyDeleteAndVisibility(t *testing.T) {
 		t.Fatal("soft-deleted user message returned in the UI replay")
 	}
 }
+
+func TestHistoryDownRestoresCurrentDraft(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	m.inputHistory = []inputHistoryItem{{text: "older"}, {text: "newer"}}
+	m.prompt.SetValue("draft I am typing")
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyUp})
+	if got := m.prompt.Value(); got != "newer" {
+		t.Fatalf("up = %q, want newer", got)
+	}
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyDown})
+	if got := m.prompt.Value(); got != "draft I am typing" {
+		t.Fatalf("down should restore the current draft, got %q", got)
+	}
+	if m.historyCursor != -1 {
+		t.Fatalf("historyCursor = %d, want -1 after restoring draft", m.historyCursor)
+	}
+}
+
+func TestUpStaysInMultilinePrompt(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	m.inputHistory = []inputHistoryItem{{text: "previous message"}}
+	m.prompt.SetValue("line one\nline two\nline three\nline four")
+	m.prompt.SetHeight(m.promptHeight())
+	if !m.promptHasMultipleLines() {
+		t.Fatal("precondition: prompt should be multi-line")
+	}
+	start := m.prompt.Line()
+	if start < 1 {
+		t.Fatalf("precondition: cursor should start on a lower line, line=%d", start)
+	}
+	for i := 0; i < start+3; i++ {
+		m = upd(m, tea.KeyPressMsg{Code: tea.KeyUp})
+	}
+	if got := m.prompt.Value(); got != "line one\nline two\nline three\nline four" {
+		t.Fatalf("up from the first line jumped to history: %q", got)
+	}
+	if m.historyCursor != -1 {
+		t.Fatalf("historyCursor = %d, want -1", m.historyCursor)
+	}
+}
