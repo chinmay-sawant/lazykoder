@@ -27,6 +27,12 @@ func (m Model) mousePress(msg tea.MouseClickMsg) (Model, tea.Cmd) {
 			return next, cmd
 		}
 	}
+	// Full-screen sub-agent log card: [x] closes back to the drawer list.
+	if m.subagentLogMode {
+		if next, cmd, hit := m.subagentLogHit(mu.X, mu.Y, mu.Button); hit {
+			return next, cmd
+		}
+	}
 	if mu.Button == tea.MouseLeft && m.jumpBarVisible() && mu.Y == m.jumpBarRow() {
 		m = m.clearTextSelection()
 		m.transcript.GotoBottom()
@@ -40,7 +46,17 @@ func (m Model) mousePress(msg tea.MouseClickMsg) (Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	if !m.pickerMode && !m.slashMode {
+	if mu.Button == tea.MouseLeft && m.subagentPickerMode && !m.subagentLogMode {
+		if idx, ok := m.subagentIndexAtScreenY(mu.Y); ok {
+			m.subagentCursor = idx
+			return m.openSelectedSubagentLog()
+		}
+	}
+	if !m.pickerMode && !m.slashMode && !m.subagentPickerMode {
+		if left, top, right, bottom, ok := m.subsStatusRect(); ok && mu.X >= left && mu.X < right && mu.Y >= top && mu.Y < bottom {
+			m = m.clearTextSelection()
+			return m.openSubagentPicker(), nil
+		}
 		if _, top, right, bottom, ok := m.modelStatusRect(); ok && mu.X < right && mu.Y >= top && mu.Y < bottom {
 			m = m.clearTextSelection()
 			return m.openPicker(), nil

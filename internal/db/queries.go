@@ -296,6 +296,35 @@ func (s *Store) GetSession(ctx context.Context, id string) (Session, error) {
 	return sess, nil
 }
 
+// ListChildSessions returns sub-agent sessions spawned under parentID,
+// newest first. Used by the TUI sub-agent picker/log view.
+func (s *Store) ListChildSessions(ctx context.Context, parentID string) ([]Session, error) {
+	if parentID == "" {
+		return nil, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT `+sessionColumns+` FROM sessions
+WHERE parent_session_id = ? AND kind = 'subagent'
+ORDER BY time_created DESC`, parentID)
+	if err != nil {
+		return nil, fmt.Errorf("db: list child sessions: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []Session
+	for rows.Next() {
+		var sess Session
+		if err := rows.Scan(&sess.ID, &sess.Title, &sess.Directory, &sess.Provider, &sess.Model,
+			&sess.Variant, &sess.TimeCreated, &sess.TimeUpdated, &sess.Status,
+			&sess.ParentSessionID, &sess.Kind); err != nil {
+			return nil, fmt.Errorf("db: scan child session: %w", err)
+		}
+		out = append(out, sess)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("db: list child sessions: %w", err)
+	}
+	return out, nil
+}
+
 // ListSessionsByDir returns main sessions of a directory ordered by
 // time_updated DESC. Sub-agent child sessions are omitted from resume lists.
 func (s *Store) ListSessionsByDir(ctx context.Context, directory string) ([]Session, error) {

@@ -20,6 +20,10 @@ func (m Model) View() tea.View {
 	if m.sessionPickerMode {
 		return m.newView(m.sessionPickerScreen())
 	}
+	// Full-screen log card only; the list is a model-style drawer in chatScreen.
+	if m.subagentLogMode {
+		return m.newView(m.subagentLogScreen())
+	}
 	if m.settingsMode {
 		return m.newView(m.settingsScreen())
 	}
@@ -69,6 +73,11 @@ func (m Model) chatScreen() string {
 	}
 	if m.pickerMode {
 		b.WriteString(m.pickerView())
+		b.WriteString("\n")
+	}
+	// Sub-agent drawer sits above the prompt like the /model list.
+	if m.subagentPickerMode && !m.subagentLogMode {
+		b.WriteString(m.subagentDrawerView())
 		b.WriteString("\n")
 	}
 	if m.err != "" {
@@ -160,7 +169,7 @@ func (m Model) liveStatusView() string {
 // Scrolling up keeps the view pinned until the user clicks the icon, so new
 // output never yanks the view to the bottom.
 func (m Model) jumpBarVisible() bool {
-	if m.pickerMode || m.slashMode || m.confirmMode || m.askMode || m.helpMode || m.settingsMode || m.filePickerMode || m.sessionPickerMode {
+	if m.pickerMode || m.slashMode || m.confirmMode || m.askMode || m.helpMode || m.settingsMode || m.filePickerMode || m.sessionPickerMode || m.subagentPickerMode {
 		return false
 	}
 	return !m.transcript.AtBottom()
@@ -214,6 +223,9 @@ func (m Model) composerTop() int {
 	}
 	if m.pickerMode {
 		top += 1 + lipgloss.Height(m.pickerView())
+	}
+	if m.subagentPickerMode && !m.subagentLogMode {
+		top += 1 + lipgloss.Height(m.subagentDrawerView())
 	}
 	if m.err != "" {
 		top += 1 + lipgloss.Height(errStyle.Width(max(minPaneWidth, m.width)).Render(m.err))
@@ -307,21 +319,26 @@ func (m Model) footerStatParts() []string {
 	return parts
 }
 
-// subsStatusLabel is "subs:N/M" when the subagent manager has active jobs.
+// subsStatusLabel is a persistent footer chip for this session's sub-agents.
+// Shows live/total when any exist (including completed children from the store).
 func (m Model) subsStatusLabel() string {
-	if m.subMgr == nil {
+	if m.session == nil {
 		return ""
 	}
-	active := m.subMgr.Active()
-	if active <= 0 {
+	live, total := m.subagentCounts()
+	if total <= 0 {
 		return ""
 	}
-	return fmt.Sprintf("subs:%d/%d", active, m.subMgr.MaxConcurrent())
+	if live > 0 {
+		return fmt.Sprintf("subs:%d/%d", live, total)
+	}
+	return fmt.Sprintf("subs:%d", total)
 }
 
 func (m Model) fitFooterRight(budget int) string {
 	model := m.modelDisplayLabel()
 	tokens, cache, cost, tps := m.footerPieces()
+	subs := m.subsStatusLabel()
 	try := func(includeModel bool, bits ...string) string {
 		parts := make([]string, 0, len(bits))
 		for _, b := range bits {
@@ -348,16 +365,19 @@ func (m Model) fitFooterRight(budget int) string {
 		}
 		return ""
 	}
-	if s := try(true, tokens, cache, cost, tps); s != "" {
+	if s := try(true, tokens, cache, cost, tps, subs); s != "" {
 		return s
 	}
-	if s := try(true, tokens, cache, cost); s != "" {
+	if s := try(true, tokens, cache, cost, subs); s != "" {
 		return s
 	}
-	if s := try(true, tokens, cache); s != "" {
+	if s := try(true, tokens, cache, subs); s != "" {
 		return s
 	}
-	if s := try(true, cache); s != "" {
+	if s := try(true, cache, subs); s != "" {
+		return s
+	}
+	if s := try(true, subs); s != "" {
 		return s
 	}
 	if s := try(false, tokens, cache, cost, tps); s != "" {
@@ -452,12 +472,17 @@ func (m Model) composerLeft() string {
 }
 
 func (m Model) transcriptRenderHeight() int {
+	// Reserve every row that sits outside the transcript so the composer
+	// never gets pushed off-screen by drawers (model, sub-agents, slash).
 	fixedRows := lipgloss.Height(m.headerView()) + 1 + 1 + 1 + lipgloss.Height(m.composerBlock())
 	if m.slashMode {
 		fixedRows += 1 + lipgloss.Height(m.slashView())
 	}
 	if m.pickerMode {
 		fixedRows += 1 + lipgloss.Height(m.pickerView())
+	}
+	if m.subagentPickerMode && !m.subagentLogMode {
+		fixedRows += 1 + lipgloss.Height(m.subagentDrawerView())
 	}
 	if m.err != "" {
 		fixedRows += lipgloss.Height(errStyle.Width(max(minPaneWidth, m.width)).Render(m.err))
@@ -508,6 +533,7 @@ func (m Model) helpOverlay() string {
 		{"ctrl+s", "resume"},
 		{"/model", "switch model"},
 		{"/variant", "reasoning effort"},
+		{"/agents", "sub-agents + logs"},
 		{"@", "mention a file"},
 		{"click model", "switch"},
 		{"t / e", "thinking / expand tool"},
@@ -689,12 +715,20 @@ func splitPaneWidths(total int) (left, right int) {
 }
 
 func (m Model) modelStatusRect() (left, top, right, bottom int, ok bool) {
-	if m.busy || m.pickerMode || m.sessionPickerMode || m.settingsMode {
+	if m.busy || m.pickerMode || m.sessionPickerMode || m.subagentPickerMode || m.settingsMode {
 		return 0, 0, 0, 0, false
 	}
 	leftW := lipgloss.Width(m.composerLeft())
 	label := m.fitFooterRight(max(4, max(minPaneWidth, m.width)-2-leftW-1))
-	top = lipgloss.Height(m.headerView()) + 1 + m.transcriptRenderHeight() + 1 + 1
+	top = m.composerFooterTop()
+	right = m.width - 1
+	left = max(0, right-lipgloss.Width(label))
+	return left, top, right, top + 1, true
+}
+
+// composerFooterTop is the screen Y of the composer footer row (model/subs chips).
+func (m Model) composerFooterTop() int {
+	top := lipgloss.Height(m.headerView()) + 1 + m.transcriptRenderHeight() + 1 + 1
 	if m.slashMode {
 		top += 1 + lipgloss.Height(m.slashView())
 	}
@@ -706,7 +740,35 @@ func (m Model) modelStatusRect() (left, top, right, bottom int, ok bool) {
 	}
 	// Footer sits inside the composer: top border + prompt rows.
 	top += 1 + m.promptHeight()
-	right = m.width - 1
-	left = max(0, right-lipgloss.Width(label))
+	return top
+}
+
+// subsStatusRect is the click target for the persistent "subs:N" footer chip.
+func (m Model) subsStatusRect() (left, top, right, bottom int, ok bool) {
+	if m.busy || m.pickerMode || m.sessionPickerMode || m.subagentPickerMode || m.settingsMode {
+		return 0, 0, 0, 0, false
+	}
+	subs := m.subsStatusLabel()
+	if subs == "" {
+		return 0, 0, 0, 0, false
+	}
+	leftW := lipgloss.Width(m.composerLeft())
+	budget := max(4, max(minPaneWidth, m.width)-2-leftW-1)
+	footer := m.fitFooterRight(budget)
+	if !strings.Contains(footer, "subs:") {
+		return 0, 0, 0, 0, false
+	}
+	// Approximate: chip sits at the right edge of the footer block.
+	top = m.composerFooterTop()
+	footerLeft := max(0, m.width-1-lipgloss.Width(footer))
+	// Find "subs:" within the footer string (plain width approximation).
+	idx := strings.Index(footer, "subs:")
+	if idx < 0 {
+		return 0, 0, 0, 0, false
+	}
+	prefixW := lipgloss.Width(footer[:idx])
+	chipW := lipgloss.Width(subs)
+	left = footerLeft + prefixW
+	right = left + chipW
 	return left, top, right, top + 1, true
 }

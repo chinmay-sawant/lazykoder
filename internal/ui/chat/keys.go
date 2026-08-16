@@ -393,7 +393,7 @@ func (m Model) undoPrompt() Model {
 }
 
 func (m Model) promptEditing() bool {
-	return !m.confirmMode && !m.askMode && !m.helpMode && !m.settingsMode && !m.filePickerMode && !m.pickerMode && !m.sessionPickerMode && !m.slashMode
+	return !m.confirmMode && !m.askMode && !m.helpMode && !m.settingsMode && !m.filePickerMode && !m.pickerMode && !m.sessionPickerMode && !m.subagentPickerMode && !m.slashMode
 }
 
 func (m Model) selectedHistoryItem() (inputHistoryItem, bool) {

@@ -90,7 +90,39 @@ pickers are centered cards.
 | `ctrl+s` | open the session picker (idle only) |
 | `/resume` | same as `ctrl+s` |
 | click model | open the model picker |
+| `/agents` | open the sub-agent list and logs (aliases `/subs`) |
+| click `subs:N` | same as `/agents` when sub-agents exist for this session |
 | `ctrl+c` | two-step quit (press twice) |
+
+## Sub-agent drawer and logs
+
+After the parent spawns sub-agents (`task` tools), a **drawer above the
+prompt** opens (same layout family as `/model`): one row per sub-agent.
+
+| Diamond | Meaning |
+| --- | --- |
+| Throbbing `◆` | running / queued (pulses with the work rail) |
+| Green `◆` | completed |
+| Red `◆` | failed, cancelled, or timed out |
+
+The right side of each row is a one-liner for the latest tool activity
+(for example `bash  go test ./...` or `read  path.go`). Past sub-agents
+for the session stay in the list after they finish.
+
+- `/agents` (aliases `/subs`) focuses the drawer; it also opens when a
+  `task` tool runs.
+- Footer chip `subs:live/total` (or `subs:total`) stays next to the model
+  stats; click it to open the drawer.
+- `j`/`k` or click a row, then **enter**: full-screen (100% terminal) log
+  for that child, using the same design as the main chat: `you` / `assistant`
+  roles, collapsible **thinking** (expanded by default), tool cards with
+  status diamonds, and the vertical work rail (`│`).
+- In the log view: `t` toggles thinking, `e` toggles the last tool, `enter`
+  toggles the selected block; `esc` / `[x]` returns to the drawer; `d` closes.
+- `d` on a live drawer row cancels it; `esc` closes the drawer.
+
+Child sessions stay in SQLite (`kind=subagent`) so completed agents still
+appear after the turn ends.
 
 Busy turns, provider errors and the missing-key message render as red status
 text; the user text stays in the transcript.

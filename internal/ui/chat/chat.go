@@ -222,6 +222,21 @@ type Model struct {
 	sessionVp         viewport.Model
 	sessionBuilt      bool
 
+	// Sub-agent picker (list) + log viewer for child sessions.
+	subagentPickerMode bool
+	subagentLogMode    bool
+	subagentItems      []subagentRow
+	subagentCursor     int
+	subagentHover      int
+	subagentVp         viewport.Model
+	subagentLogVp      viewport.Model
+	subagentBuilt      bool
+	subagentSelected   subagentRow
+	// subagentLogItems is the child transcript rendered with main chat styles
+	// (thinking, tools, work rails). Reasoning starts expanded.
+	subagentLogItems    []transcriptItem
+	subagentLogSelected int
+
 	slashMode       bool
 	slashCursor     int
 	slashItems      []slashCmd
@@ -283,6 +298,7 @@ var slashCommands = []slashCmd{
 	{name: "/resume", description: "resume a previous session", aliases: []string{"sessions"}},
 	{name: "/model", description: "search and switch the chat model"},
 	{name: "/variant", description: "switch the model variant (low, medium, high)"},
+	{name: "/agents", description: "list sub-agents and view their logs", aliases: []string{"subs", "subagents"}},
 	{name: "/refresh", description: "reload the model list from the server"},
 	{name: "/settings", description: "project settings (model, steps)", aliases: []string{"slot"}},
 	{name: "/continue", description: "continue after a step limit or keep going"},
@@ -493,13 +509,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.seq != m.turnSeq {
 			return m, nil
 		}
-		return m.finishTurn(msg.err), nil
+		m = m.finishTurn(msg.err)
+		// Continue diamond throb while background sub-agents are still live.
+		if m.hasLiveSubagents() {
+			return m, pulseTick()
+		}
+		return m, nil
 	case pulseMsg:
-		if !m.busy {
+		// Keep throbbing for live sub-agents even after the parent turn ends.
+		if !m.busy && !m.hasLiveSubagents() {
 			m.pulseOn = false
 			return m, nil
 		}
 		m.pulse = (m.pulse + 1) % pulseSteps
+		m.pulseOn = true
+		if m.subagentPickerMode && !m.subagentLogMode {
+			// Update status/activity in place only; never rebuild/reorder the list.
+			m = m.refreshSubagentDrawerLive()
+		}
 		return m, pulseTick()
 	case tipsTickMsg:
 		m.tipsIndex++
@@ -543,9 +570,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.sessionBuilt {
 			m = m.resizeSessionPicker()
 		}
+		if m.subagentBuilt {
+			if m.subagentLogMode {
+				m = m.resizeSubagentLogCard()
+			} else if m.subagentPickerMode {
+				m = m.resizeSubagentDrawer()
+			}
+		}
 		return m, nil
 	case tea.PasteMsg:
-		if m.confirmMode || m.pickerMode {
+		if m.confirmMode || m.pickerMode || m.subagentPickerMode {
 			return m, nil
 		}
 		m.escapePending = false
@@ -578,10 +612,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		if msg.Mod.Contains(tea.ModCtrl) && msg.Code == 'z' && !m.confirmMode && !m.pickerMode && !m.sessionPickerMode {
+		if msg.Mod.Contains(tea.ModCtrl) && msg.Code == 'z' && !m.confirmMode && !m.pickerMode && !m.sessionPickerMode && !m.subagentPickerMode {
 			return m.undoPrompt(), nil
 		}
-		if msg.Mod.Contains(tea.ModCtrl) && msg.Code == 's' && !m.confirmMode && !m.pickerMode && !m.sessionPickerMode && !m.busy {
+		if msg.Mod.Contains(tea.ModCtrl) && msg.Code == 's' && !m.confirmMode && !m.pickerMode && !m.sessionPickerMode && !m.subagentPickerMode && !m.busy {
 			return m.openSessionPicker(), nil
 		}
 		if m.confirmMode {
@@ -605,6 +639,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.sessionPickerMode {
 			return m.updateSessionPickerKey(msg)
 		}
+		if m.subagentPickerMode {
+			return m.updateSubagentPickerKey(msg)
+		}
 		if m.slashMode {
 			return m.updateSlashKey(msg)
 		}
@@ -613,6 +650,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.sessionPickerMode {
 			vp, _ := m.sessionVp.Update(msg)
 			m.sessionVp = vp
+			return m, nil
+		}
+		if m.subagentLogMode {
+			vp, _ := m.subagentLogVp.Update(msg)
+			m.subagentLogVp = vp
+			return m, nil
+		}
+		if m.subagentPickerMode {
+			vp, _ := m.subagentVp.Update(msg)
+			m.subagentVp = vp
 			return m, nil
 		}
 		if m.pickerMode {
@@ -632,6 +679,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.sessionHover = idx
 			}
 			return m.refreshSessionHover(), nil
+		}
+		if m.subagentPickerMode && !m.subagentLogMode {
+			m.subagentHover = -1
+			if idx, ok := m.subagentIndexAtScreenY(msg.Mouse().Y); ok {
+				m.subagentHover = idx
+			}
+			return m.resizeSubagentDrawer(), nil
 		}
 		if m.selection.dragging {
 			return m.updateTextSelection(msg), nil
@@ -668,6 +722,11 @@ func (m Model) applyEvent(ev agent.Event) Model {
 	case agent.EventTool:
 		m.applyTool(ev)
 		m.activity = toolActivity(ev.Tool)
+		// Open/refresh the sub-agent drawer when task tools fire.
+		if ev.Tool.Tool == "task" || strings.HasPrefix(ev.Tool.Tool, "task_") {
+			m = m.syncSubagentDrawer()
+			m.pulseOn = m.busy || m.hasLiveSubagents()
+		}
 	case agent.EventError:
 		if ev.Err != nil && !isCancelErr(ev.Err) {
 			m.err = ev.Err.Error()
@@ -690,7 +749,8 @@ func (m Model) adoptSession(id string) Model {
 		return m
 	}
 	m.session = &sess
-	return m
+	// Restore sub-agent drawer for sessions that already have children.
+	return m.syncSubagentDrawer()
 }
 
 func (m Model) finishTurn(err error) Model {
@@ -717,9 +777,15 @@ func (m Model) finishTurn(err error) Model {
 	m.askMode = false
 	m.eventCh = nil
 	m.errCh = nil
-	m.pulseOn = false
 	m.activity = ""
 	m.collapseLiveReasoning()
+	// Keep the sub-agent drawer open with history after the turn ends.
+	m = m.syncSubagentDrawer()
+	if m.hasLiveSubagents() {
+		m.pulseOn = true
+	} else {
+		m.pulseOn = false
+	}
 	m.syncTranscript()
 	if !m.turnStarted.IsZero() {
 		m.tokensPerSec = tokensPerSec(m.generatedThisTurn(), time.Since(m.turnStarted))
@@ -951,6 +1017,9 @@ func (m Model) chromeHeight() int {
 	}
 	if m.pickerMode {
 		h += 1 + lipgloss.Height(m.pickerView())
+	}
+	if m.subagentPickerMode && !m.subagentLogMode {
+		h += 1 + lipgloss.Height(m.subagentDrawerView())
 	}
 	if m.err != "" {
 		h += lipgloss.Height(errStyle.Width(max(minPaneWidth, m.width)).Render(m.err))

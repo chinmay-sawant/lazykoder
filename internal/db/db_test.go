@@ -642,3 +642,36 @@ func TestConcurrentWritersNoBusy(t *testing.T) {
 		}
 	}
 }
+
+func TestListChildSessionsHiddenFromMain(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	parent, err := s.CreateSession(ctx, Session{Directory: "/work", Title: "parent"})
+	if err != nil {
+		t.Fatalf("parent: %v", err)
+	}
+	pid := parent.ID
+	child, err := s.CreateSession(ctx, Session{
+		Directory:       "/work",
+		Title:           "agent_alpha",
+		ParentSessionID: &pid,
+		Kind:            SessionKindSubagent,
+	})
+	if err != nil {
+		t.Fatalf("child: %v", err)
+	}
+	main, err := s.ListSessionsByDir(ctx, "/work")
+	if err != nil {
+		t.Fatalf("ListSessionsByDir: %v", err)
+	}
+	if len(main) != 1 || main[0].ID != parent.ID {
+		t.Fatalf("main list = %+v", main)
+	}
+	kids, err := s.ListChildSessions(ctx, parent.ID)
+	if err != nil {
+		t.Fatalf("ListChildSessions: %v", err)
+	}
+	if len(kids) != 1 || kids[0].ID != child.ID {
+		t.Fatalf("kids = %+v", kids)
+	}
+}

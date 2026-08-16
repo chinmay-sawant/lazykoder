@@ -60,6 +60,10 @@ func (r AgentRunner) Run(ctx context.Context, job Job) (Result, error) {
 		return res, err
 	}
 	res.ChildSessionID = sess.ID
+	// Publish session id before the turn so the drawer can merge live + store rows.
+	if job.OnSession != nil {
+		job.OnSession(sess.ID)
+	}
 
 	var ask func(q question.Question) (int, error)
 	if job.Ask != nil {

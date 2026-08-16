@@ -81,17 +81,23 @@ type Job struct {
 	Description     string
 	ParentSessionID string
 	ParentPartID    string
-	Workdir         string
-	Model           string
-	Endpoint        string
-	Variant         string
-	MaxSteps        int
-	Timeout         time.Duration
+	// ChildSessionID is set by the runner as soon as the child session row exists.
+	ChildSessionID string
+	Workdir        string
+	Model          string
+	Endpoint       string
+	Variant        string
+	MaxSteps       int
+	Timeout        time.Duration
 	// Tools is the child tool allowlist (no task tools at depth 1).
 	Tools   []string
 	Confirm func(dec policy.Decision, subject string) (bool, error)
 	// Ask may be nil when the parent has no question UI.
 	Ask func(question string, options []string) (int, error)
+	// OnSession is invoked once the child session id is known (before the
+	// agent loop). Used so the TUI can key live rows to the same session
+	// the store already has and avoid duplicate drawer entries.
+	OnSession func(childSessionID string)
 }
 
 // Runner executes a child job. Production uses an AgentRunner; tests use fakes.

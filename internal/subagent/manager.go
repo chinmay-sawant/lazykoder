@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -129,6 +130,7 @@ func (m *Manager) Spawn(ctx context.Context, parentSessionID, parentPartID strin
 	} else {
 		jobCtx, cancel = context.WithCancel(base)
 	}
+	now := time.Now().UnixMilli()
 	h := &handle{
 		id:     id,
 		cancel: cancel,
@@ -140,11 +142,19 @@ func (m *Manager) Spawn(ctx context.Context, parentSessionID, parentPartID strin
 			Status:          string(StatusQueued),
 			ParentSessionID: parentSessionID,
 			ParentPartID:    parentPartID,
+			// StartedAt at spawn so drawer order is fixed for the job's life.
+			StartedAt: now,
 		},
 	}
 	m.handles[id] = h
 
 	job := m.buildJob(id, parentSessionID, parentPartID, name, role, spec, timeout, rt)
+	// Bind session id as soon as the runner creates it (stable drawer identity).
+	job.OnSession = func(childSessionID string) {
+		h.mu.Lock()
+		h.snap.ChildSessionID = childSessionID
+		h.mu.Unlock()
+	}
 	m.mu.Unlock()
 
 	go m.execute(jobCtx, h, job, role, runner)
@@ -218,7 +228,9 @@ func (m *Manager) execute(jobCtx context.Context, h *handle, job Job, role strin
 
 	h.mu.Lock()
 	h.snap.Status = string(StatusRunning)
-	h.snap.StartedAt = time.Now().UnixMilli()
+	if h.snap.StartedAt == 0 {
+		h.snap.StartedAt = time.Now().UnixMilli()
+	}
 	h.mu.Unlock()
 
 	res, err := runner.Run(jobCtx, job)
@@ -318,6 +330,7 @@ func (m *Manager) Status(id string) (Snapshot, bool) {
 }
 
 // List returns snapshots for parentSessionID (empty parent lists none).
+// Order is stable: StartedAt ascending, then id (map iteration is never used as order).
 func (m *Manager) List(parentSessionID string) []Snapshot {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -329,6 +342,12 @@ func (m *Manager) List(parentSessionID string) []Snapshot {
 		}
 		h.mu.Unlock()
 	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].StartedAt != out[j].StartedAt {
+			return out[i].StartedAt < out[j].StartedAt
+		}
+		return out[i].ID < out[j].ID
+	})
 	return out
 }
 
