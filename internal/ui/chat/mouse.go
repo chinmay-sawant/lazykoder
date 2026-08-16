@@ -181,6 +181,10 @@ func (m Model) transcriptPosition(mu tea.Mouse) (textPosition, bool) {
 	if m.pickerMode || m.slashMode {
 		return textPosition{}, false
 	}
+	// Drawer is a strip above the prompt; transcript above it stays interactive.
+	if m.subagentPickerMode && !m.subagentLogMode && m.pointerInSubagentDrawer(mu.Y) {
+		return textPosition{}, false
+	}
 	top := m.transcriptTop()
 	height := m.transcriptRenderHeight()
 	if mu.Y < top || mu.Y >= top+height || mu.X < 0 || mu.X >= m.transcript.Width() {

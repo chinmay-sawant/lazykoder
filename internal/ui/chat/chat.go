@@ -147,14 +147,14 @@ type Options struct {
 
 // Model is the chat screen: title, transcript, prompt, status and confirm flow.
 type Model struct {
-	store        *db.Store
-	client       *opencode.Client
-	workdir      string
-	session      *db.Session
-	maxSteps              int
-	settingsPath          string
-	projectSettings       settings.Settings
-	settingsPickDefault   bool // model/variant picker is setting the project default
+	store               *db.Store
+	client              *opencode.Client
+	workdir             string
+	session             *db.Session
+	maxSteps            int
+	settingsPath        string
+	projectSettings     settings.Settings
+	settingsPickDefault bool // model/variant picker is setting the project default
 
 	width  int
 	height int
@@ -206,9 +206,11 @@ type Model struct {
 
 	helpMode bool
 
-	settingsMode   bool
-	settingsCursor int
-	stepLimitHit   bool // last turn stopped on agent step limit
+	settingsMode      bool
+	settingsCursor    int
+	settingsEdit      bool
+	settingsEditValue string
+	stepLimitHit      bool // last turn stopped on agent step limit
 
 	filePickerMode   bool
 	filePickerItems  []string
@@ -613,9 +615,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.historyCursor = -1
 		m.historyDraft = ""
 		m.copyNotice = ""
-		m.promptSelectAll = false
 		m = m.clearTextSelection()
 		m = m.rememberPrompt()
+		// Ctrl+A then paste should replace the selection, not append.
+		if m.promptSelectAll {
+			m.promptSelectAll = false
+			m.prompt.SetValue(msg.Content)
+			m.prompt.SetHeight(m.promptHeight())
+			m.slashMode = false
+			m.slashCursor = 0
+			m.slashFromPaste = strings.HasPrefix(m.prompt.Value(), "/")
+			return m, nil
+		}
+		m.promptSelectAll = false
 		var cmd tea.Cmd
 		m.prompt, cmd = m.prompt.Update(msg)
 		m.slashMode = false
@@ -684,7 +696,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.subagentLogVp = vp
 			return m, nil
 		}
-		if m.subagentPickerMode {
+		// Drawer open: wheel over the drawer scrolls the list; wheel over the
+		// transcript (or anywhere else) scrolls the chat behind it.
+		if m.subagentPickerMode && !m.subagentLogMode && m.pointerInSubagentDrawer(msg.Mouse().Y) {
 			vp, _ := m.subagentVp.Update(msg)
 			m.subagentVp = vp
 			return m, nil
@@ -707,20 +721,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m.refreshSessionHover(), nil
 		}
-		if m.subagentPickerMode && !m.subagentLogMode {
-			m.subagentHover = -1
-			if idx, ok := m.subagentIndexAtScreenY(msg.Mouse().Y); ok {
-				m.subagentHover = idx
-			}
-			return m.resizeSubagentDrawer(), nil
-		}
+		// Keep transcript selection / scrollbar drag working while the drawer
+		// is open; only update drawer hover when the pointer is on it.
 		if m.selection.dragging {
 			return m.updateTextSelection(msg), nil
 		}
-		if !m.dragOn {
+		if m.dragOn {
+			return m.mouseDrag(msg), nil
+		}
+		if m.subagentPickerMode && !m.subagentLogMode {
+			prev := m.subagentHover
+			m.subagentHover = -1
+			if m.pointerInSubagentDrawer(msg.Mouse().Y) {
+				if idx, ok := m.subagentIndexAtScreenY(msg.Mouse().Y); ok {
+					m.subagentHover = idx
+				}
+			}
+			if m.subagentHover != prev {
+				return m.resizeSubagentDrawer(), nil
+			}
 			return m, nil
 		}
-		return m.mouseDrag(msg), nil
+		return m, nil
 	case tea.MouseReleaseMsg:
 		m.selection.dragging = false
 		m.dragOn = false

@@ -428,11 +428,27 @@ func TestPromptCtrlCAndCtrlA(t *testing.T) {
 		t.Fatal("ctrl+c after ctrl+a did not copy the prompt")
 	}
 
+	// Select-all then type replaces the whole draft.
+	m, _ = updCmd(m, tea.KeyPressMsg{Code: 'a', Mod: tea.ModCtrl})
 	m = upd(m, tea.KeyPressMsg{Code: 'x', Text: "x"})
 	if m.promptSelectAll {
 		t.Fatal("typing did not clear the select-all state")
 	}
+	if got := m.prompt.Value(); got != "x" {
+		t.Fatalf("select-all + type = %q, want %q", got, "x")
+	}
 
+	m.prompt.SetValue("hello world")
+	m, _ = updCmd(m, tea.KeyPressMsg{Code: 'a', Mod: tea.ModCtrl})
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyBackspace})
+	if got := m.prompt.Value(); got != "" {
+		t.Fatalf("select-all + backspace = %q, want empty", got)
+	}
+	if m.promptSelectAll {
+		t.Fatal("select-all should clear after backspace")
+	}
+
+	m.prompt.SetValue("again")
 	m = upd(m, tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl})
 	if got := m.prompt.Value(); got != "" {
 		t.Fatalf("prompt after ctrl+u = %q, want empty", got)
@@ -2086,6 +2102,25 @@ func TestShiftEnterDoesNotSubmit(t *testing.T) {
 	}
 	if m.busy {
 		t.Fatal("shift+enter started a turn")
+	}
+}
+
+func TestAltEnterAndCtrlJInsertNewline(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	m = typeText(m, "a")
+	m, cmd := updCmd(m, tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModAlt})
+	if cmd != nil {
+		t.Fatalf("alt+enter submitted: %v", cmd)
+	}
+	if got := m.prompt.Value(); got != "a\n" {
+		t.Fatalf("alt+enter = %q, want %q", got, "a\n")
+	}
+	m, cmd = updCmd(m, tea.KeyPressMsg{Code: 'j', Mod: tea.ModCtrl})
+	if cmd != nil {
+		t.Fatalf("ctrl+j submitted: %v", cmd)
+	}
+	if got := m.prompt.Value(); got != "a\n\n" {
+		t.Fatalf("ctrl+j = %q, want %q", got, "a\n\n")
 	}
 }
 

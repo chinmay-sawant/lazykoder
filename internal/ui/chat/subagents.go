@@ -1029,18 +1029,45 @@ func (m Model) cancelSelectedSubagent() (Model, tea.Cmd) {
 	return m.resizeSubagentDrawer(), nil
 }
 
+// subagentDrawerTop is the first screen row of the sub-agent drawer (header).
+func (m Model) subagentDrawerTop() int {
+	top := m.transcriptTop() + m.transcriptRenderHeight() + 1 // alert row
+	if m.slashMode {
+		top += 1 + lipgloss.Height(m.slashView())
+	}
+	if m.pickerMode {
+		top += 1 + lipgloss.Height(m.pickerView())
+	}
+	return top
+}
+
+// pointerInSubagentDrawer reports whether screen row y sits on the drawer
+// chrome (header, list, footer), not the transcript or composer.
+func (m Model) pointerInSubagentDrawer(y int) bool {
+	if !m.subagentPickerMode || m.subagentLogMode {
+		return false
+	}
+	top := m.subagentDrawerTop()
+	h := lipgloss.Height(m.subagentDrawerView())
+	return y >= top && y < top+h
+}
+
 // subagentIndexAtScreenY maps a click Y to a drawer row (chat layout).
+// Only the visible list band counts so clicks on the transcript/composer
+// never open a sub-agent by accident.
 func (m Model) subagentIndexAtScreenY(y int) (int, bool) {
 	if !m.subagentPickerMode || m.subagentLogMode || len(m.subagentItems) == 0 {
 		return 0, false
 	}
-	// Drawer sits above the prompt: after transcript + alert (+ slash/err).
-	top := m.transcriptTop() + m.transcriptRenderHeight() + 1 // alert
-	if m.slashMode {
-		top += 1 + lipgloss.Height(m.slashView())
+	// Drawer header is one line, then the list viewport.
+	listTop := m.subagentDrawerTop() + 1
+	listH := m.subagentVp.Height()
+	if listH < 1 {
+		listH = 1
 	}
-	// drawer header is one line, then list.
-	listTop := top + 1
+	if y < listTop || y >= listTop+listH {
+		return 0, false
+	}
 	rel := y - listTop + m.subagentVp.YOffset()
 	if rel < 0 || rel >= len(m.subagentItems) {
 		return 0, false

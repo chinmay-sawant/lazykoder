@@ -18,17 +18,83 @@ type errMsg struct {
 	err error
 }
 
+// isPromptNewline reports keys that should insert a newline in the composer
+// instead of submitting. Shift+Enter needs terminal key-disambiguation
+// (Kitty protocol / bubbletea keyboard enhancements); Alt+Enter and Ctrl+J
+// are reliable fallbacks on terminals that still fold Shift+Enter into Enter.
+func isPromptNewline(key tea.KeyPressMsg) bool {
+	if key.Code == tea.KeyEnter && (key.Mod.Contains(tea.ModShift) || key.Mod.Contains(tea.ModAlt)) {
+		return true
+	}
+	if key.Mod.Contains(tea.ModCtrl) && (key.Code == 'j' || key.Code == 'J') {
+		return true
+	}
+	switch strings.ToLower(key.String()) {
+	case "shift+enter", "alt+enter", "ctrl+enter":
+		return true
+	}
+	switch strings.ToLower(key.Keystroke()) {
+	case "shift+enter", "alt+enter", "ctrl+enter":
+		return true
+	}
+	return false
+}
+
 func (m Model) updateKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 	m.copyNotice = ""
 	if key.Code != 'c' && key.Code != 'C' {
 		m = m.clearTextSelection()
 	}
-	if key.Code != 'a' && key.Code != 'A' && !(key.Mod.Contains(tea.ModCtrl) && key.Code == 'c') {
-		m.promptSelectAll = false
-	}
 	if key.Code != tea.KeyEscape {
 		m.escapePending = false
 	}
+
+	// Soft newline in the composer (shift+enter / alt+enter / ctrl+j).
+	// Handled before select-all is cleared and before plain Enter submits.
+	if isPromptNewline(key) {
+		m.quitConfirm = false
+		m.historyCursor = -1
+		m.historyDraft = ""
+		m = m.rememberPrompt()
+		if m.promptSelectAll {
+			m.prompt.SetValue("\n")
+			m.promptSelectAll = false
+		} else {
+			m.prompt.InsertString("\n")
+		}
+		m.prompt.SetHeight(m.promptHeight())
+		return m.syncPromptSlash(), nil
+	}
+
+	// Ctrl+A selection: backspace/delete clears the whole draft; typing replaces it.
+	if m.promptSelectAll && (key.Code == tea.KeyBackspace || key.Code == tea.KeyDelete) {
+		m.quitConfirm = false
+		m.historyCursor = -1
+		m.historyDraft = ""
+		m.promptSelectAll = false
+		m = m.rememberPrompt()
+		m.prompt.SetValue("")
+		m.prompt.SetHeight(m.promptHeight())
+		m.slashFromPaste = false
+		return m.syncPromptSlash(), nil
+	}
+	if m.promptSelectAll && key.Text != "" && !key.Mod.Contains(tea.ModCtrl) && !key.Mod.Contains(tea.ModAlt) {
+		m.quitConfirm = false
+		m.historyCursor = -1
+		m.historyDraft = ""
+		m.promptSelectAll = false
+		m = m.rememberPrompt()
+		m.prompt.SetValue(key.Text)
+		m.prompt.SetHeight(m.promptHeight())
+		return m.syncPromptSlash(), nil
+	}
+
+	// Keep the select-all highlight only for ctrl+a (set) and ctrl+c (copy).
+	// Plain 'a' must clear it; the old check treated any 'a' as sticky.
+	if !(key.Mod.Contains(tea.ModCtrl) && (key.Code == 'a' || key.Code == 'A' || key.Code == 'c' || key.Code == 'C')) {
+		m.promptSelectAll = false
+	}
+
 	if key.Mod.Contains(tea.ModCtrl) {
 		switch key.Code {
 		case 'a', 'A':
@@ -79,12 +145,7 @@ func (m Model) updateKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.escapePending = true
 		return m, nil
 	case tea.KeyEnter:
-		if key.Mod.Contains(tea.ModShift) {
-			m = m.rememberPrompt()
-			m.prompt.InsertString("\n")
-			m.prompt.SetHeight(m.promptHeight())
-			return m, nil
-		}
+		// Plain enter submits; shift/alt+enter already handled above.
 		text := m.prompt.Value()
 		if m.busy {
 			// Force-send: interrupt the stuck/running turn, then send the draft.
@@ -381,13 +442,15 @@ func (m Model) forceSend(text string) (Model, tea.Cmd) {
 // agentOptions builds Options for the parent agent, including the subagent Host.
 func (m Model) agentOptions() agent.Options {
 	opts := agent.Options{
-		Session:  m.session,
-		MaxSteps: m.maxSteps,
-		Model:    m.model,
-		Endpoint: m.modelEndpoint(),
-		Variant:  m.variant,
-		Confirm:  m.confirmHook,
-		Ask:      m.askHook,
+		Session:              m.session,
+		MaxSteps:             m.maxSteps,
+		Model:                m.model,
+		Endpoint:             m.modelEndpoint(),
+		Variant:              m.variant,
+		Confirm:              m.confirmHook,
+		Ask:                  m.askHook,
+		BashAllowlist:        m.projectSettings.EffectiveAgents().BashAllowlist,
+		BashAllowlistEnabled: m.projectSettings.EffectiveAgents().BashAllowlistEnabled,
 	}
 	if m.subMgr == nil || !m.projectSettings.EffectiveAgents().Enabled {
 		return opts

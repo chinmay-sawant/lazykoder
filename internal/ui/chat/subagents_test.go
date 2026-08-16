@@ -335,6 +335,57 @@ func TestSubagentDrawerKeepsComposerVisible(t *testing.T) {
 	}
 }
 
+func TestSubagentDrawerAllowsTranscriptMouse(t *testing.T) {
+	st := newTestStore(t)
+	workdir := t.TempDir()
+	parent, err := st.CreateSession(context.Background(), db.Session{Directory: workdir, Title: "main"})
+	if err != nil {
+		t.Fatalf("parent: %v", err)
+	}
+	pid := parent.ID
+	for i := 0; i < 3; i++ {
+		if _, err := st.CreateSession(context.Background(), db.Session{
+			Directory: workdir, Title: fmt.Sprintf("child-%d", i),
+			ParentSessionID: &pid, Kind: db.SessionKindSubagent,
+		}); err != nil {
+			t.Fatalf("child: %v", err)
+		}
+	}
+	m := New(Options{Store: st, Workdir: workdir, Session: &parent})
+	for i := 0; i < 80; i++ {
+		m.items = append(m.items, transcriptItem{kind: itemNote, text: fmt.Sprintf("line %02d", i)})
+	}
+	m.width = 100
+	m.height = 36
+	m = m.openSubagentPicker()
+	m.syncTranscript()
+	if !m.subagentPickerMode {
+		t.Fatal("drawer should be open")
+	}
+	// Wheel over the transcript (row 2) scrolls chat, not the drawer list.
+	if !m.transcript.AtBottom() {
+		t.Fatal("expected transcript at bottom before wheel")
+	}
+	beforeSub := m.subagentVp.YOffset()
+	mm, _ := m.Update(tea.MouseWheelMsg(tea.Mouse{X: 5, Y: 2, Button: tea.MouseWheelUp}))
+	m = mm.(Model)
+	if m.transcript.AtBottom() {
+		t.Fatal("wheel over transcript should scroll the chat behind the drawer")
+	}
+	if m.subagentVp.YOffset() != beforeSub {
+		t.Fatalf("wheel over transcript moved drawer offset %d -> %d", beforeSub, m.subagentVp.YOffset())
+	}
+	// Click in the transcript band must not map to a drawer row.
+	txTop := m.transcriptTop()
+	if _, ok := m.subagentIndexAtScreenY(txTop + 1); ok {
+		t.Fatal("transcript Y should not hit a sub-agent row")
+	}
+	// Click well below the drawer list must not hit either.
+	if _, ok := m.subagentIndexAtScreenY(m.height - 2); ok {
+		t.Fatal("composer Y should not hit a sub-agent row")
+	}
+}
+
 func TestSyncSubagentDrawerDoesNotForceOpen(t *testing.T) {
 	st := newTestStore(t)
 	workdir := t.TempDir()

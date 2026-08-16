@@ -56,6 +56,9 @@ func (m Model) newView(content string) tea.View {
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
 	v.BackgroundColor = theme.ColorBg()
+	// Request key disambiguation so shift+enter is distinct from enter
+	// (Kitty keyboard protocol / Windows console). Harmless when unsupported.
+	v.KeyboardEnhancements.ReportAlternateKeys = true
 	return v
 }
 
