@@ -337,8 +337,10 @@ func (m Model) loadSession(sess *db.Session) Model {
 		}
 		if m.store != nil {
 			m.replay(sess.ID)
+			m = m.loadTodos()
 		}
 	} else {
+		m.todos = nil
 		m.syncTranscript()
 	}
 	return m

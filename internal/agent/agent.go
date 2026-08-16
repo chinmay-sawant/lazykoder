@@ -20,6 +20,7 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/tools/grep"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/question"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/read"
+	"github.com/chinmay-sawant/lazykoder/internal/tools/todo"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/webfetch"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/write"
 )
@@ -468,6 +469,17 @@ func toolTitle(tc opencode.ToolCall) string {
 		if c := first("command"); c != "" {
 			return truncateRunes(c, maxToolTitle)
 		}
+	case toolTodowrite:
+		var wrap struct {
+			Todos []struct {
+				Content string `json:"content"`
+				Status  string `json:"status"`
+			} `json:"todos"`
+		}
+		if json.Unmarshal([]byte(tc.Arguments), &wrap) == nil {
+			return fmt.Sprintf("todos (%d)", len(wrap.Todos))
+		}
+		return "todos"
 	case "read", "write", "edit":
 		if p := first("filePath"); p != "" {
 			return p
@@ -525,6 +537,8 @@ func (a *Agent) executeTool(ctx context.Context, events chan<- Event, partID, ti
 		return a.execWebfetch(ctx, events, partID, title, tc)
 	case toolQuestion:
 		return a.execQuestion(ctx, events, partID, title, tc)
+	case toolTodowrite:
+		return a.execTodowrite(ctx, events, partID, title, tc)
 	default:
 		out := "unknown tool: " + tc.Name
 		return a.updateTool(ctx, events, partID, title, tc, "denied", &out, deniedJSON(), nil, nil)
@@ -739,6 +753,34 @@ func (a *Agent) execQuestion(ctx context.Context, events chan<- Event, partID, t
 	meta, _ := json.Marshal(res.Metadata)
 	metaJSON := string(meta)
 	return a.updateTool(ctx, events, partID, title, tc, "completed", &res.Output, toolOutputJSON(res.Output), nil, &metaJSON)
+}
+
+func (a *Agent) execTodowrite(ctx context.Context, events chan<- Event, partID, title string, tc opencode.ToolCall) (string, error) {
+	res, err := todo.Run(tc.Arguments)
+	if err != nil {
+		msg := err.Error()
+		return a.updateTool(ctx, events, partID, title, tc, "error", &msg, errorJSON(msg), nil, nil)
+	}
+	sid := a.sessionID()
+	if sid == "" {
+		msg := "todowrite requires an active session"
+		return a.updateTool(ctx, events, partID, title, tc, "error", &msg, errorJSON(msg), nil, nil)
+	}
+	items := make([]db.Todo, 0, len(res.Items))
+	for i, it := range res.Items {
+		items = append(items, db.Todo{
+			SessionID: sid,
+			Seq:       i,
+			Content:   it.Content,
+			Status:    it.Status,
+		})
+	}
+	if err := a.store.ReplaceTodos(ctx, sid, items); err != nil {
+		msg := err.Error()
+		return a.updateTool(ctx, events, partID, title, tc, "error", &msg, errorJSON(msg), nil, nil)
+	}
+	out := res.Output
+	return a.updateTool(ctx, events, partID, title, tc, "completed", &out, toolOutputJSON(out), nil, nil)
 }
 
 func (a *Agent) updateTool(ctx context.Context, events chan<- Event, partID, title string, tc opencode.ToolCall,

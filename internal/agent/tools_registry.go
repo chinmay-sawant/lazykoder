@@ -13,6 +13,7 @@ const (
 	toolGrep       = "grep"
 	toolWebfetch   = "webfetch"
 	toolQuestion   = "question"
+	toolTodowrite  = "todowrite"
 	toolTask       = "task"
 	toolTaskList   = "task_list"
 	toolTaskStatus = "task_status"
@@ -22,7 +23,7 @@ const (
 
 // DefaultParentTools is the full parent allowlist without task tools.
 var DefaultParentTools = []string{
-	toolBash, toolRead, toolWrite, toolEdit, toolGrep, toolWebfetch, toolQuestion,
+	toolBash, toolRead, toolWrite, toolEdit, toolGrep, toolWebfetch, toolQuestion, toolTodowrite,
 }
 
 // DefaultChildTools is the general-role child allowlist (no question, no task).
@@ -141,6 +142,29 @@ var allBaseToolSpecs = map[string]opencode.ToolSpec{
 				},
 			},
 			"required": []string{"questions"},
+		},
+	},
+	toolTodowrite: {
+		Name: toolTodowrite,
+		Description: "Replace the session todo checklist with the full list you pass. " +
+			"Send every item every time (replace-all). Status: pending, in_progress, completed, cancelled. " +
+			"Use this to plan multi-step work and keep the user-visible tracker in sync.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"todos": map[string]any{
+					"type": "array",
+					"items": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"content": map[string]any{"type": "string", "description": "short checklist item"},
+							"status":  map[string]any{"type": "string", "description": "pending|in_progress|completed|cancelled"},
+						},
+						"required": []string{"content"},
+					},
+				},
+			},
+			"required": []string{"todos"},
 		},
 	},
 }

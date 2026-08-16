@@ -386,6 +386,37 @@ func TestSubagentDrawerAllowsTranscriptMouse(t *testing.T) {
 	}
 }
 
+func TestSubagentDrawerAllowsTypingAndPaste(t *testing.T) {
+	st := newTestStore(t)
+	workdir := t.TempDir()
+	parent, err := st.CreateSession(context.Background(), db.Session{Directory: workdir, Title: "main"})
+	if err != nil {
+		t.Fatalf("parent: %v", err)
+	}
+	pid := parent.ID
+	if _, err := st.CreateSession(context.Background(), db.Session{
+		Directory: workdir, Title: "child-a", ParentSessionID: &pid, Kind: db.SessionKindSubagent,
+	}); err != nil {
+		t.Fatalf("child: %v", err)
+	}
+	m := New(Options{Store: st, Workdir: workdir, Session: &parent})
+	m = m.openSubagentPicker()
+	if !m.subagentPickerMode {
+		t.Fatal("drawer should be open")
+	}
+	m = typeText(m, "hello draft")
+	if got := m.prompt.Value(); got != "hello draft" {
+		t.Fatalf("typing with drawer open = %q, want hello draft", got)
+	}
+	if !m.subagentPickerMode {
+		t.Fatal("typing should not close the drawer")
+	}
+	m = upd(m, tea.PasteMsg{Content: " and paste"})
+	if got := m.prompt.Value(); got != "hello draft and paste" {
+		t.Fatalf("paste with drawer open = %q", got)
+	}
+}
+
 func TestSyncSubagentDrawerDoesNotForceOpen(t *testing.T) {
 	st := newTestStore(t)
 	workdir := t.TempDir()

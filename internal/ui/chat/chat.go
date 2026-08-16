@@ -218,6 +218,9 @@ type Model struct {
 	filePickerFilter string
 	filePickerAt     int
 
+	// todos is the session checklist from todowrite (shown under the header).
+	todos []db.Todo
+
 	pulse     int
 	pulseOn   bool
 	railInset int
@@ -424,6 +427,7 @@ func New(opts Options) Model {
 			m.variant = *m.session.Variant
 		}
 		m.replay(m.session.ID)
+		m = m.loadTodos()
 	} else {
 		// New run: seed live model/variant from project defaults.
 		m.model = cfg.EffectiveModel()
@@ -608,7 +612,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case tea.PasteMsg:
-		if m.confirmMode || m.pickerMode || m.subagentPickerMode {
+		// Full-screen sub-agent log keeps paste blocked; the list drawer does not.
+		if m.confirmMode || m.pickerMode || m.subagentLogMode {
 			return m, nil
 		}
 		m.escapePending = false
@@ -776,6 +781,9 @@ func (m Model) applyEvent(ev agent.Event) Model {
 			m = m.openSubagentDrawerIfNew()
 			m.pulseOn = m.busy || m.hasLiveSubagents()
 		}
+		if ev.Tool.Tool == "todowrite" {
+			m = m.applyTodosFromTool(ev.Tool)
+		}
 	case agent.EventError:
 		if ev.Err != nil && !isCancelErr(ev.Err) {
 			m.err = ev.Err.Error()
@@ -799,6 +807,7 @@ func (m Model) adoptSession(id string) Model {
 	}
 	m.session = &sess
 	// Load child rows for the footer chip; do not force-open the drawer.
+	m = m.loadTodos()
 	return m.syncSubagentDrawer()
 }
 
@@ -1062,6 +1071,9 @@ func (m Model) promptHasMultipleLines() bool {
 
 func (m Model) chromeHeight() int {
 	h := lipgloss.Height(m.headerView()) + 1 + lipgloss.Height(m.composerBlock())
+	if panel := m.todoPanelView(); panel != "" {
+		h += 1 + lipgloss.Height(panel)
+	}
 	if m.slashMode {
 		h += 1 + lipgloss.Height(m.slashView())
 	}

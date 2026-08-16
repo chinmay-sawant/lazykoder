@@ -747,22 +747,43 @@ func (m Model) renderedSubagentLogItems() []string {
 }
 
 func (m Model) updateSubagentPickerKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
-	if key.Mod.Contains(tea.ModCtrl) && key.Code == 'c' {
-		return m.closeDone(), tea.Quit
-	}
 	if m.subagentLogMode {
+		if key.Mod.Contains(tea.ModCtrl) && key.Code == 'c' {
+			return m.closeDone(), tea.Quit
+		}
 		return m.updateSubagentLogKey(key)
 	}
+	// Drawer stays open while the composer stays fully interactive: typing,
+	// paste, send, etc. Only dedicated navigation keys are handled here.
+	empty := strings.TrimSpace(m.prompt.Value()) == ""
 	switch key.Code {
-	case tea.KeyEscape, 'q', 'Q', 'x', 'X':
+	case tea.KeyEscape:
 		return m.closeSubagentPicker(), nil
-	case 'j', tea.KeyDown:
+	case tea.KeyDown:
 		if m.subagentCursor < len(m.subagentItems)-1 {
 			m.subagentCursor++
 			m = m.resizeSubagentDrawer()
 		}
 		return m, nil
-	case 'k', tea.KeyUp:
+	case tea.KeyUp:
+		if m.subagentCursor > 0 {
+			m.subagentCursor--
+			m = m.resizeSubagentDrawer()
+		}
+		return m, nil
+	case 'j':
+		if !empty {
+			return m.updateKey(key)
+		}
+		if m.subagentCursor < len(m.subagentItems)-1 {
+			m.subagentCursor++
+			m = m.resizeSubagentDrawer()
+		}
+		return m, nil
+	case 'k':
+		if !empty {
+			return m.updateKey(key)
+		}
 		if m.subagentCursor > 0 {
 			m.subagentCursor--
 			m = m.resizeSubagentDrawer()
@@ -775,14 +796,30 @@ func (m Model) updateSubagentPickerKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.subagentVp.PageUp()
 		return m, nil
 	case tea.KeyEnter:
+		// With a draft, enter sends; with an empty prompt, open the log.
+		if !empty {
+			return m.updateKey(key)
+		}
 		return m.openSelectedSubagentLog()
+	case 'q', 'Q', 'x', 'X':
+		if empty {
+			return m.closeSubagentPicker(), nil
+		}
+		return m.updateKey(key)
 	case 'd', 'D':
-		return m.cancelSelectedSubagent()
+		if empty {
+			return m.cancelSelectedSubagent()
+		}
+		return m.updateKey(key)
 	case 'r', 'R':
-		m = m.reloadSubagentRows()
-		return m.resizeSubagentDrawer(), nil
+		if empty {
+			m = m.reloadSubagentRows()
+			return m.resizeSubagentDrawer(), nil
+		}
+		return m.updateKey(key)
+	default:
+		return m.updateKey(key)
 	}
-	return m, nil
 }
 
 func (m Model) updateSubagentLogKey(key tea.KeyPressMsg) (Model, tea.Cmd) {

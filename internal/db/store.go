@@ -187,7 +187,7 @@ var schemaMigrations = [][]string{
 
 // schemaVersion is the highest applied migration number (includes rebuilds
 // implemented as Go steps rather than pure SQL slices).
-const schemaVersion = 8
+const schemaVersion = 9
 
 // Migrate runs numbered migrations. schema_migrations records the applied
 // versions after first open. Idempotent: a second call is a no-op.
@@ -209,6 +209,19 @@ func (s *Store) Migrate(ctx context.Context) error {
 			err = s.migrateV7SessionsParentFK(ctx)
 		case 8:
 			err = s.migrateV8SubagentJobsFK(ctx)
+		case 9:
+			// Model-driven todos (phase 4.5): full-list replace per session.
+			err = s.applyMigration(ctx, 9, []string{
+				`CREATE TABLE todos (
+  session_id   TEXT    NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  seq          INTEGER NOT NULL,
+  content      TEXT    NOT NULL DEFAULT '',
+  status       TEXT    NOT NULL DEFAULT 'pending',
+  time_updated INTEGER NOT NULL,
+  PRIMARY KEY (session_id, seq)
+)`,
+				`CREATE INDEX idx_todos_session ON todos(session_id, seq)`,
+			})
 		default:
 			if i < 1 || i > len(schemaMigrations) {
 				return fmt.Errorf("db: missing migration statements for version %d", i)

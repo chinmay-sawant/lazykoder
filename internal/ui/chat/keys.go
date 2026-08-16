@@ -504,7 +504,11 @@ func (m Model) undoPrompt() Model {
 }
 
 func (m Model) promptEditing() bool {
-	return !m.confirmMode && !m.askMode && !m.helpMode && !m.settingsMode && !m.filePickerMode && !m.pickerMode && !m.sessionPickerMode && !m.subagentPickerMode && !m.slashMode
+	// Sub-agent list drawer keeps the composer active; full-screen log does not.
+	if m.subagentLogMode {
+		return false
+	}
+	return !m.confirmMode && !m.askMode && !m.helpMode && !m.settingsMode && !m.filePickerMode && !m.pickerMode && !m.sessionPickerMode && !m.slashMode
 }
 
 func (m Model) selectedHistoryItem() (inputHistoryItem, bool) {

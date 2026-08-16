@@ -78,6 +78,23 @@ type ToolCall struct {
 	MetadataJSON *string
 }
 
+// Todo status values (model-driven checklist items).
+const (
+	TodoPending    = "pending"
+	TodoInProgress = "in_progress"
+	TodoCompleted  = "completed"
+	TodoCancelled  = "cancelled"
+)
+
+// Todo is one checklist item for a session (todowrite replace-all).
+type Todo struct {
+	SessionID   string
+	Seq         int
+	Content     string
+	Status      string
+	TimeUpdated int64
+}
+
 // SubagentJob is a durable parent-side task handle (sub_...).
 // Survives process restarts so task_list / task_wait / resume can reattach.
 type SubagentJob struct {

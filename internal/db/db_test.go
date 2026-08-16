@@ -31,11 +31,11 @@ func TestMigrateIdempotent(t *testing.T) {
 
 	var n int
 	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master
-WHERE type = 'table' AND name IN ('sessions', 'messages', 'parts', 'tool_calls', 'subagent_jobs', 'schema_migrations')`).Scan(&n); err != nil {
+WHERE type = 'table' AND name IN ('sessions', 'messages', 'parts', 'tool_calls', 'subagent_jobs', 'todos', 'schema_migrations')`).Scan(&n); err != nil {
 		t.Fatalf("count tables: %v", err)
 	}
-	if n != 6 {
-		t.Fatalf("got %d tables, want 6", n)
+	if n != 7 {
+		t.Fatalf("got %d tables, want 7", n)
 	}
 
 	if err := s.Migrate(ctx); err != nil {
@@ -985,5 +985,42 @@ func TestParentDeleteRemovesSubagentJobs(t *testing.T) {
 	}
 	if _, err := s.GetSubagentJob(ctx, job.ID); err == nil {
 		t.Fatal("job should cascade-delete with parent")
+	}
+}
+
+func TestReplaceAndListTodos(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	sess, err := s.CreateSession(ctx, Session{Directory: t.TempDir(), Title: "t"})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if err := s.ReplaceTodos(ctx, sess.ID, []Todo{
+		{Content: "a", Status: TodoPending},
+		{Content: "b", Status: TodoInProgress},
+		{Content: "c", Status: TodoCompleted},
+	}); err != nil {
+		t.Fatalf("ReplaceTodos: %v", err)
+	}
+	got, err := s.ListTodos(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("ListTodos: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("len = %d, want 3", len(got))
+	}
+	if got[0].Content != "a" || got[0].Seq != 0 || got[1].Status != TodoInProgress {
+		t.Fatalf("got = %+v", got)
+	}
+	// Replace-all shrinks the list.
+	if err := s.ReplaceTodos(ctx, sess.ID, []Todo{{Content: "only", Status: TodoCompleted}}); err != nil {
+		t.Fatal(err)
+	}
+	got, err = s.ListTodos(ctx, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Content != "only" || got[0].Status != TodoCompleted {
+		t.Fatalf("after replace = %+v", got)
 	}
 }

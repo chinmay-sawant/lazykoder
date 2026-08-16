@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/chinmay-sawant/lazykoder/internal/settings"
@@ -408,4 +409,61 @@ func (s *Store) DeleteSession(ctx context.Context, id string) error {
 		return fmt.Errorf("db: delete session: %w", err)
 	}
 	return nil
+}
+
+// ReplaceTodos replaces the full todo list for a session (todowrite contract).
+// items may be empty to clear the list. Seq is assigned 0..n-1 in order.
+func (s *Store) ReplaceTodos(ctx context.Context, sessionID string, items []Todo) error {
+	if sessionID == "" {
+		return fmt.Errorf("db: replace todos: empty session id")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("db: begin replace todos: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM todos WHERE session_id = ?`, sessionID); err != nil {
+		return fmt.Errorf("db: clear todos: %w", err)
+	}
+	now := time.Now().UnixMilli()
+	for i, it := range items {
+		st := it.Status
+		if st == "" {
+			st = TodoPending
+		}
+		content := strings.TrimSpace(it.Content)
+		if _, err := tx.ExecContext(ctx, `INSERT INTO todos (session_id, seq, content, status, time_updated)
+VALUES (?, ?, ?, ?, ?)`, sessionID, i, content, st, now); err != nil {
+			return fmt.Errorf("db: insert todo %d: %w", i, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("db: commit replace todos: %w", err)
+	}
+	return nil
+}
+
+// ListTodos returns todos for a session ordered by seq ascending.
+func (s *Store) ListTodos(ctx context.Context, sessionID string) ([]Todo, error) {
+	if sessionID == "" {
+		return nil, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT session_id, seq, content, status, time_updated
+FROM todos WHERE session_id = ? ORDER BY seq ASC`, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("db: list todos: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []Todo
+	for rows.Next() {
+		var t Todo
+		if err := rows.Scan(&t.SessionID, &t.Seq, &t.Content, &t.Status, &t.TimeUpdated); err != nil {
+			return nil, fmt.Errorf("db: scan todo: %w", err)
+		}
+		out = append(out, t)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("db: list todos: %w", err)
+	}
+	return out, nil
 }

@@ -66,6 +66,11 @@ func (m Model) chatScreen() string {
 	var b strings.Builder
 	b.WriteString(m.headerView())
 	b.WriteString("\n")
+	// Tracker strip: checklist under brand/title, above the transcript.
+	if panel := m.todoPanelView(); panel != "" {
+		b.WriteString(panel)
+		b.WriteString("\n")
+	}
 	b.WriteString(m.transcriptView())
 	b.WriteString("\n")
 	b.WriteString(m.alertRow())
@@ -497,6 +502,9 @@ func (m Model) transcriptRenderHeight() int {
 	// Reserve every row that sits outside the transcript so the composer
 	// never gets pushed off-screen by drawers (model, sub-agents, slash).
 	fixedRows := lipgloss.Height(m.headerView()) + 1 + 1 + 1 + lipgloss.Height(m.composerBlock())
+	if panel := m.todoPanelView(); panel != "" {
+		fixedRows += 1 + lipgloss.Height(panel)
+	}
 	if m.slashMode {
 		fixedRows += 1 + lipgloss.Height(m.slashView())
 	}
