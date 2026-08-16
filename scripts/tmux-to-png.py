@@ -1,26 +1,28 @@
 #!/usr/bin/env python3
 """Render a tmux capture-pane -e dump to a PNG.
 
-Used to snapshot the live lazyKoder TUI when a compositor grab is unavailable.
+Primary path: ANSI -> HTML (DejaVu Sans Mono) -> wkhtmltoimage.
+That keeps box-drawing and figlet/ASCII aligned instead of turning
+underscores into loose dashes.
 """
 
 from __future__ import annotations
 
 import argparse
+import html
 import re
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
-
-from PIL import Image, ImageDraw, ImageFont
 
 CSI = re.compile(r"\x1b\[([0-9;]*)m")
 
 DEFAULT_FG = (236, 234, 230)
 DEFAULT_BG = (0, 0, 0)
-
-# DejaVu covers box-drawing, diamonds, and triangles that the TUI uses.
-FONT_REGULAR = Path("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf")
-FONT_BOLD = Path("/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf")
+FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
+FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf"
+WKHTML = "/usr/local/bin/wkhtmltoimage"
 
 
 def parse_sgr(seq: str, fg, bg, bold, reverse):
@@ -83,55 +85,126 @@ def xterm256(n: int):
 
 def strip_other_escapes(text: str) -> str:
     text = re.sub(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)", "", text)
-    text = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", lambda m: m.group(0) if m.group(0).endswith("m") else "", text)
+    text = re.sub(
+        r"\x1b\[[0-9;?]*[A-Za-z]",
+        lambda m: m.group(0) if m.group(0).endswith("m") else "",
+        text,
+    )
     return text.replace("\r", "")
 
 
-def render(text: str, out: Path, size=15, pad=20) -> None:
+def css_color(rgb) -> str:
+    return f"rgb({rgb[0]},{rgb[1]},{rgb[2]})"
+
+
+def line_to_html(raw: str) -> str:
+    raw = strip_other_escapes(raw)
+    fg, bg, bold, reverse = DEFAULT_FG, DEFAULT_BG, False, False
+    out = []
+    buf = []
+    cur = None
+
+    def flush():
+        if not buf:
+            return
+        text = html.escape("".join(buf))
+        buf.clear()
+        style = f"color:{css_color(cur[0])};background:{css_color(cur[1])}"
+        if cur[2]:
+            style += ";font-weight:700"
+        out.append(f'<span style="{style}">{text}</span>')
+
+    pos = 0
+    while pos < len(raw):
+        m = CSI.match(raw, pos)
+        if m:
+            flush()
+            fg, bg, bold, reverse = parse_sgr(m.group(1), fg, bg, bold, reverse)
+            pos = m.end()
+            continue
+        ch = raw[pos]
+        pos += 1
+        if ch == "\x1b":
+            nxt = raw.find("\x1b", pos)
+            pos = len(raw) if nxt < 0 else nxt
+            continue
+        cell_fg, cell_bg = (bg, fg) if reverse else (fg, bg)
+        key = (cell_fg, cell_bg, bold)
+        if cur != key:
+            flush()
+            cur = key
+        buf.append(ch)
+    flush()
+    return "".join(out) if out else "&nbsp;"
+
+
+def ansi_to_html(text: str) -> str:
     lines = text.splitlines()
     if lines and lines[-1] == "":
         lines = lines[:-1]
-    cols = max((visible_width(line) for line in lines), default=80)
-    rows = max(len(lines), 1)
+    cols = max((len(CSI.sub("", strip_other_escapes(line))) for line in lines), default=80)
+    body = "\n".join(line_to_html(line) for line in lines)
+    # 9.6px per DejaVu 16px cell, plus padding.
+    width_px = max(cols * 10 + 40, 800)
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<style>
+@font-face {{
+  font-family: Term;
+  src: url('file://{FONT}');
+  font-weight: 400;
+}}
+@font-face {{
+  font-family: Term;
+  src: url('file://{FONT_BOLD}');
+  font-weight: 700;
+}}
+html, body {{
+  margin: 0;
+  background: #000;
+}}
+pre {{
+  margin: 16px;
+  padding: 0;
+  background: #000;
+  color: rgb(236,234,230);
+  font-family: Term, "DejaVu Sans Mono", monospace;
+  font-size: 15px;
+  line-height: 1.25;
+  letter-spacing: 0;
+  white-space: pre;
+  tab-size: 8;
+}}
+</style></head>
+<body>
+<pre>{body}</pre>
+</body></html>
+"""
 
-    regular = ImageFont.truetype(str(FONT_REGULAR), size)
-    bold = ImageFont.truetype(str(FONT_BOLD), size)
-    cell_w = max(int(regular.getlength("M")) + 1, 9)
-    cell_h = size + 8
 
-    img = Image.new("RGB", (cols * cell_w + pad * 2, rows * cell_h + pad * 2), DEFAULT_BG)
-    draw = ImageDraw.Draw(img)
-
-    for y, raw in enumerate(lines):
-        raw = strip_other_escapes(raw)
-        fg, bg, is_bold, reverse = DEFAULT_FG, DEFAULT_BG, False, False
-        x = 0
-        pos = 0
-        while pos < len(raw):
-            m = CSI.match(raw, pos)
-            if m:
-                fg, bg, is_bold, reverse = parse_sgr(m.group(1), fg, bg, is_bold, reverse)
-                pos = m.end()
-                continue
-            ch = raw[pos]
-            pos += 1
-            if ch == "\x1b":
-                nxt = raw.find("\x1b", pos)
-                pos = len(raw) if nxt < 0 else nxt
-                continue
-            cell_fg, cell_bg = (bg, fg) if reverse else (fg, bg)
-            px = pad + x * cell_w
-            py = pad + y * cell_h
-            draw.rectangle([px, py, px + cell_w - 1, py + cell_h - 1], fill=cell_bg)
-            font = bold if is_bold else regular
-            draw.text((px, py + 1), ch, font=font, fill=cell_fg, anchor="lt")
-            x += 1
-    img.save(out, "PNG")
-    print(f"wrote {out} ({img.size[0]}x{img.size[1]})")
-
-
-def visible_width(line: str) -> int:
-    return len(CSI.sub("", strip_other_escapes(line)))
+def render(text: str, out: Path) -> None:
+    page = ansi_to_html(text)
+    cols = max(
+        (len(CSI.sub("", strip_other_escapes(line))) for line in text.splitlines()),
+        default=80,
+    )
+    width_px = max(cols * 10 + 48, 900)
+    with tempfile.TemporaryDirectory() as tmp:
+        html_path = Path(tmp) / "pane.html"
+        html_path.write_text(page, encoding="utf-8")
+        cmd = [
+            WKHTML,
+            "--quiet",
+            "--format", "png",
+            "--quality", "100",
+            "--width", str(width_px),
+            "--disable-smart-width",
+            "--enable-local-file-access",
+            str(html_path),
+            str(out),
+        ]
+        subprocess.run(cmd, check=True)
+    print(f"wrote {out} ({out.stat().st_size} bytes, width={width_px})")
 
 
 def main() -> int:
