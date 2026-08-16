@@ -22,6 +22,10 @@ const (
 	tableSideBorders    = 2
 	tableMinColumnWidth = 3
 	tableCellPadding    = 2
+
+	// quoteIndent is the quote style chrome: the left border glyph plus the
+	// padding column, so quoted text wraps one column narrower.
+	quoteIndent = 2
 )
 
 var (
@@ -92,7 +96,7 @@ func Render(input string, width int) string {
 			i += len(rows)
 			continue
 		}
-		output = append(output, renderLine(source[i]))
+		output = append(output, renderLine(source[i], width))
 	}
 	if inCode {
 		flushCode()
@@ -272,25 +276,51 @@ func renderCodeBlock(language string, lines []string, width int) string {
 	return style.Render(body)
 }
 
-func renderLine(line string) string {
+func renderLine(line string, width int) string {
 	trimmed := strings.TrimSpace(line)
 	if trimmed == "" {
 		return ""
 	}
 	if level, heading, ok := parseHeading(trimmed); ok {
 		style := headingStyles[min(level-1, len(headingStyles)-1)]
-		return style.Render(heading)
+		return wrapText(style.Render(heading), width)
 	}
 	if strings.HasPrefix(trimmed, "> ") {
-		return quoteStyle.Render(renderInline(strings.TrimPrefix(trimmed, "> ")))
+		inner := renderInline(strings.TrimPrefix(trimmed, "> "))
+		return quoteStyle.Render(wrapText(inner, max(1, width-quoteIndent)))
 	}
 	if item, ok := parseUnorderedItem(trimmed); ok {
-		return "• " + renderInline(item)
+		return wrapListItem("• ", item, width)
 	}
 	if prefix, item, ok := parseOrderedItem(trimmed); ok {
-		return prefix + renderInline(item)
+		return wrapListItem(prefix, item, width)
 	}
-	return renderInline(trimmed)
+	return wrapText(renderInline(trimmed), width)
+}
+
+// wrapText wraps styled or plain text at the given width, preserving ANSI
+// escape codes. Lines already inside the width are returned untouched so
+// short paragraphs stay cheap to render.
+func wrapText(s string, width int) string {
+	if width <= 0 || lipgloss.Width(s) <= width {
+		return s
+	}
+	return ansi.Wrap(s, width, " ")
+}
+
+// wrapListItem wraps a bullet or numbered item with a hanging indent: the
+// first line carries the marker and continuation lines align under the text.
+func wrapListItem(prefix, item string, width int) string {
+	inner := wrapText(renderInline(item), max(1, width-lipgloss.Width(prefix)))
+	lines := strings.Split(inner, "\n")
+	for i, line := range lines {
+		if i == 0 {
+			lines[i] = prefix + line
+		} else {
+			lines[i] = strings.Repeat(" ", lipgloss.Width(prefix)) + line
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func parseHeading(line string) (int, string, bool) {

@@ -404,7 +404,8 @@ func (m Model) withWorkRail(s string, live bool) string {
 // the corner curls sit on the first and last lines, and every line between
 // them carries a side rail. The right edge stays open. The width follows the
 // longest line so every line stays inside the frame, and it is capped at the
-// pane width.
+// pane width minus the marker and space columns so the frame never spills
+// past the right edge.
 func frameUserPrompt(text string, width int) string {
 	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
 	innerW := 0
@@ -414,7 +415,7 @@ func frameUserPrompt(text string, width int) string {
 		}
 	}
 	if width > 0 {
-		innerW = min(innerW, max(minPaneWidth, width))
+		innerW = min(innerW, max(1, width-2))
 	}
 	innerW = max(1, innerW)
 	row := func(line, marker string) string {
@@ -482,6 +483,23 @@ func (m Model) metaWidth() int {
 		w -= m.railInset
 	}
 	return max(minPaneWidth, w)
+}
+
+// stampZoneWidth is the right-hand margin the role line reserves for the
+// timestamp stamp, plus one column of breathing room. Items without a stamp
+// reserve nothing.
+func (m Model) stampZoneWidth(when int64) int {
+	if when <= 0 {
+		return 0
+	}
+	return lipgloss.Width(formatClock(when)) + 1
+}
+
+// contentWidth is the pane width available to message text: the meta row
+// width minus the timestamp zone, so wrapped text never runs into the
+// columns where the clock sits on role lines above it.
+func (m Model) contentWidth(when int64) int {
+	return max(minPaneWidth, m.metaWidth()-m.stampZoneWidth(when))
 }
 
 func (m Model) plainTranscriptRows() []string {
@@ -603,9 +621,9 @@ func (m *Model) applyTool(ev agent.Event) {
 func (m Model) renderItem(it transcriptItem, selected bool, streaming bool) string {
 	switch it.kind {
 	case itemUser:
-		return m.roleLine(roleYou, it.when) + "\n" + userStyle.Render(frameUserPrompt(it.text, m.width-m.railInset))
+		return m.roleLine(roleYou, it.when) + "\n" + userStyle.Render(frameUserPrompt(it.text, m.contentWidth(it.when)))
 	case itemAssistant:
-		rendered := markdown.Render(it.text, max(minPaneWidth, m.width-m.railInset))
+		rendered := markdown.Render(it.text, m.contentWidth(it.when))
 		return m.roleLine(roleAssistant, it.when) + "\n" + rendered
 	case itemReasoning:
 		marker := "▸"
@@ -620,7 +638,7 @@ func (m Model) renderItem(it transcriptItem, selected bool, streaming bool) stri
 		if streaming {
 			body += streamCursor
 		}
-		return head + "\n" + reasoningStyle.Width(max(minPaneWidth, m.metaWidth())).Render(body)
+		return head + "\n" + reasoningStyle.Render(ansi.Wrap(body, m.contentWidth(it.when), " "))
 	case itemTool:
 		return m.renderTool(agent.Event{Part: it.part, Tool: it.tool}, it.collapsed, it.when)
 	case itemNote:

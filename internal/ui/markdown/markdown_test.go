@@ -106,3 +106,102 @@ func TestRenderTableNotDetectedWithoutSeparator(t *testing.T) {
 		t.Errorf("plain pipe lines must not draw a table: %q", got)
 	}
 }
+
+func TestRenderWrapsParagraphAtWidth(t *testing.T) {
+	const width = 40
+	text := strings.Repeat("This is a long sentence with several words. ", 6)
+	lines := strings.Split(ansi.Strip(Render(text, width)), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("long paragraph not wrapped: %q", lines)
+	}
+	for _, line := range lines {
+		if w := lipgloss.Width(line); w > width {
+			t.Errorf("line width = %d, want <= %d: %q", w, width, line)
+		}
+	}
+	if joined := strings.Join(lines, " "); joined != strings.TrimSpace(text) {
+		t.Errorf("wrapping changed the text:\nwant %q\ngot  %q", strings.TrimSpace(text), joined)
+	}
+}
+
+func TestRenderWrapsShortLineUntouched(t *testing.T) {
+	input := "**A short bold line**"
+	got := Render(input, 80)
+	if strings.Contains(got, "\n") {
+		t.Errorf("short line should stay on one line: %q", got)
+	}
+}
+
+func TestRenderWrapKeepsInlineStyles(t *testing.T) {
+	const width = 20
+	text := "Here is some `inline code` and **bold text** that should survive wrapping"
+	got := ansi.Strip(Render(text, width))
+	joined := strings.Join(strings.Split(got, "\n"), " ")
+	if !strings.Contains(joined, "inline code") || !strings.Contains(joined, "bold text") {
+		t.Errorf("inline styles lost in wrapped output: %q", got)
+	}
+	for _, line := range strings.Split(got, "\n") {
+		if w := lipgloss.Width(line); w > width {
+			t.Errorf("line width = %d, want <= %d: %q", w, width, line)
+		}
+	}
+}
+
+func TestRenderWrapsUnorderedItemWithHangingIndent(t *testing.T) {
+	const width = 30
+	item := "- " + strings.Repeat("word ", 10) + "end"
+	lines := strings.Split(ansi.Strip(Render(item, width)), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("long list item not wrapped: %q", lines)
+	}
+	for _, line := range lines {
+		if w := lipgloss.Width(line); w > width {
+			t.Errorf("list line width = %d, want <= %d: %q", w, width, line)
+		}
+	}
+	if !strings.HasPrefix(lines[0], "• ") {
+		t.Errorf("first list line missing bullet: %q", lines[0])
+	}
+	if !strings.HasPrefix(lines[1], "  ") {
+		t.Errorf("continuation line missing hanging indent: %q", lines[1])
+	}
+}
+
+func TestRenderWrapsOrderedItemWithHangingIndent(t *testing.T) {
+	const width = 30
+	item := "10. " + strings.Repeat("word ", 10) + "end"
+	lines := strings.Split(ansi.Strip(Render(item, width)), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("long ordered item not wrapped: %q", lines)
+	}
+	if !strings.HasPrefix(lines[0], "10. ") {
+		t.Errorf("first line missing number prefix: %q", lines[0])
+	}
+	if !strings.HasPrefix(lines[1], strings.Repeat(" ", len("10. "))) {
+		t.Errorf("continuation line missing hanging indent: %q", lines[1])
+	}
+}
+
+func TestRenderWrapsBlockquote(t *testing.T) {
+	const width = 30
+	quote := "> " + strings.Repeat("quoted words ", 12)
+	lines := strings.Split(ansi.Strip(Render(quote, width)), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("long quote not wrapped: %q", lines)
+	}
+	for _, line := range lines {
+		if w := lipgloss.Width(line); w > width {
+			t.Errorf("quote line width = %d, want <= %d: %q", w, width, line)
+		}
+	}
+}
+
+func TestRenderWrapsHeading(t *testing.T) {
+	const width = 20
+	heading := "## " + strings.Repeat("a ", 20) + "end"
+	for _, line := range strings.Split(ansi.Strip(Render(heading, width)), "\n") {
+		if w := lipgloss.Width(line); w > width {
+			t.Errorf("heading line width = %d, want <= %d: %q", w, width, line)
+		}
+	}
+}

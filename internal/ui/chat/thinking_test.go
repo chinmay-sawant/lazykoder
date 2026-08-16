@@ -78,3 +78,25 @@ func TestReasoningCollapsesWhenToolStarts(t *testing.T) {
 		t.Fatalf("tool card missing: %q", v)
 	}
 }
+
+func TestReasoningWrapsAtPaneWidth(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	m.width = 60
+	m.busy = true
+	thought := strings.Repeat("planning step ", 15) + "done"
+	m.applyPart(db.Part{ID: "prt_r4", Type: "reasoning", Text: &thought})
+	m.syncTranscript()
+	m.transcript.SetWidth(60)
+	view := stripANSI(viewText(m))
+	lines := strings.Split(view, "\n")
+	wrapped := false
+	for _, line := range lines {
+		if !strings.Contains(line, thought) && strings.Contains(line, "planning step") {
+			wrapped = true
+			break
+		}
+	}
+	if !wrapped {
+		t.Fatalf("long reasoning not wrapped at pane width: %q", view)
+	}
+}
