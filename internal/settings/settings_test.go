@@ -199,19 +199,19 @@ func TestEmptyModelNormalizes(t *testing.T) {
 func TestToolsForRole(t *testing.T) {
 	a := Default().Agents
 	explore := a.ToolsForRole("explore")
-	if !reflect.DeepEqual(explore, []string{"read", "webfetch"}) {
+	if !reflect.DeepEqual(explore, []string{"bash", "read", "grep", "webfetch"}) {
 		t.Fatalf("explore = %v", explore)
 	}
 	plan := a.ToolsForRole("plan")
-	if !reflect.DeepEqual(plan, []string{"read", "webfetch"}) {
+	if !reflect.DeepEqual(plan, []string{"bash", "read", "grep", "webfetch"}) {
 		t.Fatalf("plan = %v", plan)
 	}
 	general := a.ToolsForRole("general")
-	if !reflect.DeepEqual(general, []string{"bash", "read", "write", "edit", "webfetch"}) {
+	if !reflect.DeepEqual(general, []string{"bash", "read", "grep", "write", "edit", "webfetch"}) {
 		t.Fatalf("general = %v", general)
 	}
 	unknown := a.ToolsForRole("other")
-	if !reflect.DeepEqual(unknown, []string{"read", "webfetch"}) {
+	if !reflect.DeepEqual(unknown, []string{"bash", "read", "grep", "webfetch"}) {
 		t.Fatalf("unknown = %v", unknown)
 	}
 }

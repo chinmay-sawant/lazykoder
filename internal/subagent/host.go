@@ -26,14 +26,16 @@ func NewHost(mgr *Manager) *Host {
 func (h *Host) Specs() []opencode.ToolSpec {
 	return []opencode.ToolSpec{
 		{
-			Name:        "task",
-			Description: "Spawn a sub-agent to work on a focused prompt. Use background=true to run without waiting.",
+			Name: "task",
+			Description: "Spawn a sub-agent on a focused prompt. Prefer background=true for parallel work, then task_wait. " +
+				"Raise max_steps for multi-file explores (default is higher than parent chat but still finite). " +
+				"Ask the child to finish with a short written report before the step budget ends.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"prompt": map[string]any{
 						"type":        "string",
-						"description": "Full instructions for the sub-agent",
+						"description": "Full instructions for the sub-agent (include: write a final summary before stopping)",
 					},
 					"description": map[string]any{
 						"type":        "string",
@@ -58,11 +60,11 @@ func (h *Host) Specs() []opencode.ToolSpec {
 					},
 					"max_steps": map[string]any{
 						"type":        "integer",
-						"description": "Child step budget (0 = config default)",
+						"description": "Child tool-round budget (0 = config default, typically 32). Use 48-64 for large audits.",
 					},
 					"background": map[string]any{
 						"type":        "boolean",
-						"description": "If true, return immediately while the job runs",
+						"description": "If true, return immediately while the job runs (recommended for parallel agents)",
 					},
 					"timeout_ms": map[string]any{
 						"type":        "integer",

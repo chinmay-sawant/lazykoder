@@ -477,11 +477,12 @@ func isTerminalStatus(s string) bool {
 func toolsForRole(role string) []string {
 	switch role {
 	case RoleGeneral:
-		return []string{"bash", "read", "write", "edit", "webfetch"}
+		return []string{"bash", "read", "grep", "write", "edit", "webfetch"}
 	case RolePlan:
-		return []string{"read", "webfetch"}
+		// Plan/explore: search + read; shell for listing (policy still gates rm).
+		return []string{"bash", "read", "grep", "webfetch"}
 	default: // explore
-		return []string{"read", "webfetch"}
+		return []string{"bash", "read", "grep", "webfetch"}
 	}
 }
 

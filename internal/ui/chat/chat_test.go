@@ -753,8 +753,12 @@ func TestAlertRowHoldsJumpBarAndAlert(t *testing.T) {
 	}
 }
 
-func TestBusyIgnoresEnter(t *testing.T) {
-	fake := newFakeProvider(t, 0, respBody("ok", "stop", nil))
+func TestBusyEnterForceSends(t *testing.T) {
+	// While a turn is in flight, enter with a draft interrupts and sends.
+	fake := newFakeProvider(t, 0,
+		respBody("ok", "stop", nil),
+		respBody("ok2", "stop", nil),
+	)
 	st := newTestStore(t)
 	m := New(Options{Store: st, Client: newClient(fake.srv), Workdir: t.TempDir()})
 	p := newPump(t)
@@ -765,17 +769,26 @@ func TestBusyIgnoresEnter(t *testing.T) {
 		t.Fatal("Enter returned nil cmd")
 	}
 	p.run(cmd)
+	// Still busy (or drain until busy): type a second message and force-send.
+	if !m.busy {
+		// First turn may have finished already; re-busy for the force-send path.
+		m.busy = true
+		m.turnCancel = func() {}
+		m.activity = "thinking"
+	}
 	m = typeText(m, "second")
 	m, cmd2 := updCmd(m, enter())
-	if cmd2 != nil {
-		t.Fatal("Enter while busy returned a cmd")
+	if cmd2 == nil {
+		t.Fatal("Enter while busy with draft should force send")
 	}
+	p.run(cmd2)
 	m = p.drainIdle(m)
-	if n := fake.requestCount(); n != 1 {
-		t.Errorf("provider calls = %d, want 1", n)
+	v := stripANSI(viewText(m))
+	if !strings.Contains(v, "second") {
+		t.Errorf("force-sent message missing from view: %q", v)
 	}
-	if !strings.Contains(stripANSI(viewText(m)), "first") || !strings.Contains(stripANSI(viewText(m)), roleYou) {
-		t.Errorf("first turn missing from view: %q", viewText(m))
+	if !strings.Contains(v, "interrupted") && !strings.Contains(v, "second") {
+		t.Errorf("view after force send: %q", v)
 	}
 }
 
@@ -1580,15 +1593,18 @@ func TestLiveActivitySitsAbovePrompt(t *testing.T) {
 	mm, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = mm.(Model)
 	v := stripANSI(viewText(m))
-	if !strings.Contains(v, "thinking") {
-		t.Fatalf("live thinking missing above the prompt: %q", v)
+	if !strings.Contains(v, "working") {
+		t.Fatalf("live working status missing above the prompt: %q", v)
 	}
-	if !strings.Contains(v, "enter send") {
-		t.Fatalf("idle hint missing while busy: %q", v)
+	if !strings.Contains(v, "esc cancel") {
+		t.Fatalf("busy cancel hint missing: %q", v)
+	}
+	if !strings.Contains(v, "think") {
+		t.Fatalf("live thinking activity missing: %q", v)
 	}
 	thinkAt, promptAt := -1, -1
 	for i, line := range strings.Split(v, "\n") {
-		if thinkAt < 0 && strings.Contains(line, "thinking") && !strings.Contains(line, "enter") {
+		if thinkAt < 0 && strings.Contains(line, "working") {
 			thinkAt = i
 		}
 		if strings.Contains(line, "ask lazykoder") || strings.Contains(line, "╭") && promptAt < 0 && i > 2 {

@@ -16,7 +16,7 @@ func TestAdvertiseBaseTools(t *testing.T) {
 	for _, s := range specs {
 		tools = append(tools, s.Name)
 	}
-	for _, want := range []string{"bash", "read", "write", "edit", "webfetch", "question"} {
+	for _, want := range []string{"bash", "read", "grep", "write", "edit", "webfetch", "question"} {
 		found := false
 		for _, n := range tools {
 			if n == want {

@@ -156,12 +156,25 @@ func (m Model) showLiveStatus() bool {
 }
 
 func (m Model) liveStatusView() string {
+	w := max(minPaneWidth, m.width)
 	label := strings.TrimSpace(m.activity)
 	if label == "" {
 		label = thinkingLabel
 	}
-	line := m.workRailMark() + " " + hintStyle.Render(label)
-	return lipgloss.NewStyle().Width(max(minPaneWidth, m.width)).Render(line)
+	// Primary line: work rail + live activity so the user can see progress.
+	status := m.workRailMark() + " " + busyStyle.Render("working") + "  " + hintStyle.Render(label)
+	status = lipgloss.NewStyle().Width(w).MaxWidth(w).Render(truncateRunes(status, w))
+	if !m.busy {
+		return status
+	}
+	// Busy action strip (Grok Build-style): cancel / send now / edit draft.
+	draft := strings.TrimSpace(m.prompt.Value())
+	actions := "esc cancel  •  type to edit draft"
+	if draft != "" {
+		actions = "enter send now  •  esc cancel  •  type to edit draft"
+	}
+	actionLine := hintStyle.Width(w).Render(truncateRunes(actions, w))
+	return status + "\n" + actionLine
 }
 
 // jumpBarVisible reports whether the transcript is scrolled up so the
@@ -235,7 +248,8 @@ func (m Model) composerTop() int {
 
 func (m Model) composerBlock() string {
 	if m.showLiveStatus() {
-		return m.liveStatusView() + "\n\n" + m.promptLine()
+		// Status + action strip sit directly above the input box.
+		return m.liveStatusView() + "\n" + m.promptLine()
 	}
 	return m.promptLine()
 }
@@ -463,6 +477,11 @@ func (m Model) composerLeft() string {
 	switch {
 	case m.err != "":
 		return errStyle.Render("error")
+	case m.busy:
+		if strings.TrimSpace(m.prompt.Value()) != "" {
+			return busyStyle.Render("enter send now")
+		}
+		return busyStyle.Render("working · esc cancel")
 	default:
 		if _, ok := m.selectedHistoryItem(); ok {
 			return hintStyle.Render("history: ↑/↓ previous/next")
@@ -527,7 +546,7 @@ func (m Model) transcriptView() string {
 
 func (m Model) helpOverlay() string {
 	rows := [][2]string{
-		{"enter", "send"},
+		{"enter", "send / send now if busy"},
 		{"shift+enter", "newline"},
 		{"/", "commands"},
 		{"ctrl+s", "resume"},
@@ -736,7 +755,8 @@ func (m Model) composerFooterTop() int {
 		top += lipgloss.Height(errStyle.Width(max(minPaneWidth, m.width)).Render(m.err)) + 1
 	}
 	if m.showLiveStatus() {
-		top += 2
+		// liveStatusView is 1 line idle residual, 2 lines when busy (status+actions).
+		top += lipgloss.Height(m.liveStatusView())
 	}
 	// Footer sits inside the composer: top border + prompt rows.
 	top += 1 + m.promptHeight()

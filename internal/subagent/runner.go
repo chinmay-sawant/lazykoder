@@ -85,13 +85,26 @@ func (r AgentRunner) Run(ctx context.Context, job Job) (Result, error) {
 		AgentName:        job.Name,
 		DisableStreaming: true,
 	})
-	if err := ag.Send(ctx, job.Prompt, nil); err != nil {
+	// Nudge the child to emit a final text answer inside its step budget.
+	// Without this, multi-tool explores often burn every step on tools and
+	// look like crashes to the parent (status failed / step limit).
+	prompt := strings.TrimSpace(job.Prompt) + "\n\n" +
+		"Finish with a concise written report as plain assistant text before your step budget ends. " +
+		"Do not keep calling tools once you have enough evidence."
+	if err := ag.Send(ctx, prompt, nil); err != nil {
 		summary, _ := agent.LastAssistantText(ctx, r.Store, sess.ID)
 		res.Summary = summary
 		if ctx.Err() != nil {
 			// Manager maps cancel/timeout status.
 			res.Err = err.Error()
 			return res, err
+		}
+		// Step budget exhausted after real work is a partial success, not a crash.
+		// Parent models were treating "failed / step limit" as a hard agent crash.
+		if isStepLimitErr(err) {
+			res.Summary = withStepLimitNote(summary, err)
+			res.Status = string(StatusCompleted)
+			return res, nil
 		}
 		res.Status = string(StatusFailed)
 		res.Err = err.Error()
@@ -106,6 +119,23 @@ func (r AgentRunner) Run(ctx context.Context, job Job) (Result, error) {
 	res.Summary = summary
 	res.Status = string(StatusCompleted)
 	return res, nil
+}
+
+func isStepLimitErr(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "step limit reached")
+}
+
+func withStepLimitNote(summary string, err error) string {
+	note := "[note: child step limit reached; results may be incomplete"
+	if err != nil {
+		note += " (" + err.Error() + ")"
+	}
+	note += "]"
+	summary = strings.TrimSpace(summary)
+	if summary == "" {
+		return note
+	}
+	return summary + "\n\n" + note
 }
 
 func strPtr(s string) *string {

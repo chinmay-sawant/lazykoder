@@ -20,7 +20,9 @@ const (
 	// MinMaxSteps is the lowest configurable step budget.
 	MinMaxSteps = 1
 	// MaxMaxSteps caps the step budget so a runaway loop stays bounded.
-	MaxMaxSteps = 128
+	// Raised to 1000 so real multi-tool explore sub-agent jobs (which burn
+	// several steps per tool round) do not die with "step limit reached".
+	MaxMaxSteps = 1000
 	// unlimitedMaxSteps is the effective agent budget when the limit is off.
 	// The agent still needs a finite loop bound for safety.
 	unlimitedMaxSteps = 10_000
@@ -31,7 +33,10 @@ const (
 	// MinMaxConcurrent is the lowest concurrent sub-agent budget.
 	MinMaxConcurrent = 1
 	// DefaultChildMaxSteps is the default step budget for child agents.
-	DefaultChildMaxSteps = 12
+	// 12 was too tight for multi-tool explore jobs (children burned the
+	// whole budget on tools and failed with "step limit reached"). 1000
+	// matches MaxMaxSteps so explore jobs can finish tool-heavy work.
+	DefaultChildMaxSteps = 1000
 	// DefaultAgentsTimeoutSec is the default sub-agent timeout in seconds.
 	DefaultAgentsTimeoutSec = 600
 	// DefaultMaxQueued is the default sub-agent queue size.
@@ -189,11 +194,13 @@ func (a Agents) EffectiveTimeout() time.Duration {
 func (a Agents) ToolsForRole(role string) []string {
 	switch strings.TrimSpace(role) {
 	case "general":
-		return []string{"bash", "read", "write", "edit", "webfetch"}
+		return []string{"bash", "read", "grep", "write", "edit", "webfetch"}
 	case "explore", "plan":
-		return []string{"read", "webfetch"}
+		// Shell for listing; grep for fast content search; no write/edit.
+		// policy.Classify still gates destructive bash (rm, etc.).
+		return []string{"bash", "read", "grep", "webfetch"}
 	default:
-		return []string{"read", "webfetch"}
+		return []string{"bash", "read", "grep", "webfetch"}
 	}
 }
 

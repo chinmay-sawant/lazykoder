@@ -6,27 +6,28 @@ import (
 
 // Base tool names advertised to parent and child agents (role allowlists filter further).
 const (
-	toolBash     = "bash"
-	toolRead     = "read"
-	toolWrite    = "write"
-	toolEdit     = "edit"
-	toolWebfetch = "webfetch"
-	toolQuestion = "question"
-	toolTask     = "task"
-	toolTaskList = "task_list"
+	toolBash       = "bash"
+	toolRead       = "read"
+	toolWrite      = "write"
+	toolEdit       = "edit"
+	toolGrep       = "grep"
+	toolWebfetch   = "webfetch"
+	toolQuestion   = "question"
+	toolTask       = "task"
+	toolTaskList   = "task_list"
 	toolTaskStatus = "task_status"
-	toolTaskWait = "task_wait"
+	toolTaskWait   = "task_wait"
 	toolTaskCancel = "task_cancel"
 )
 
 // DefaultParentTools is the full parent allowlist without task tools.
 var DefaultParentTools = []string{
-	toolBash, toolRead, toolWrite, toolEdit, toolWebfetch, toolQuestion,
+	toolBash, toolRead, toolWrite, toolEdit, toolGrep, toolWebfetch, toolQuestion,
 }
 
 // DefaultChildTools is the general-role child allowlist (no question, no task).
 var DefaultChildTools = []string{
-	toolBash, toolRead, toolWrite, toolEdit, toolWebfetch,
+	toolBash, toolRead, toolWrite, toolEdit, toolGrep, toolWebfetch,
 }
 
 var allBaseToolSpecs = map[string]opencode.ToolSpec{
@@ -51,6 +52,36 @@ var allBaseToolSpecs = map[string]opencode.ToolSpec{
 				"filePath": map[string]any{"type": "string", "description": "path relative to or under workdir"},
 			},
 			"required": []string{"filePath"},
+		},
+	},
+	toolGrep: {
+		Name:        toolGrep,
+		Description: "Search file contents under the workdir with ripgrep (fast). Prefer this over reading many files. Returns path:line:match hits.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"pattern": map[string]any{
+					"type":        "string",
+					"description": "regex pattern to search for",
+				},
+				"path": map[string]any{
+					"type":        "string",
+					"description": "file or directory under workdir (default: workdir root)",
+				},
+				"glob": map[string]any{
+					"type":        "string",
+					"description": "filename glob filter, e.g. *.go",
+				},
+				"caseInsensitive": map[string]any{
+					"type":        "boolean",
+					"description": "case-insensitive search",
+				},
+				"maxMatches": map[string]any{
+					"type":        "integer",
+					"description": "max hits to return (default 50, max 200)",
+				},
+			},
+			"required": []string{"pattern"},
 		},
 	},
 	toolWrite: {

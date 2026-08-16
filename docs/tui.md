@@ -81,10 +81,20 @@ pickers are centered cards.
 
 | Key | Action |
 | --- | --- |
-| `enter` | send the prompt |
+| `enter` | send the prompt; while busy with a draft, **send now** (interrupts) |
 | `shift+enter` | insert a newline |
 | `q` | type the letter `q` (the prompt is focused) |
-| `esc` | cancel an in-flight turn; when idle, twice clears the prompt |
+| `esc` | cancel an in-flight turn (and live sub-agents); when idle, twice clears the prompt |
+
+While a turn is running, the status strip above the input shows **working** plus
+the live activity (thinking / tool). You can still type a draft in the input
+box (**edit**). Actions:
+
+| While busy | Action |
+| --- | --- |
+| type | edit a draft without waiting for the turn to finish |
+| `enter` (with draft) | cancel the current turn and send the draft immediately |
+| `esc` | cancel the current turn only (no new send) |
 | `t` | expand or collapse reasoning (empty prompt) |
 | `e` | expand or collapse the last tool card (empty prompt) |
 | `ctrl+s` | open the session picker (idle only) |
@@ -188,7 +198,7 @@ persist in `<cwd>/.lazykoder/settings.json`.
 | max steps | tool-calling rounds per user turn when the limit is on (1-128, default 16) |
 | sub-agents | on/off for parent `task` tools |
 | max concurrent | concurrent child agents (1-20, default 4) |
-| child max steps | step budget for each child agent (default 12) |
+| child max steps | step budget for each child agent (default 32) |
 
 When sub-agents are running, the footer may show `subs:N/M` (active / max
 concurrent). Cancelling the parent turn also cancels child jobs.

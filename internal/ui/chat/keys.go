@@ -59,6 +59,7 @@ func (m Model) updateKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 	switch key.Code {
 	case tea.KeyEscape:
 		if m.busy {
+			// esc while busy = cancel in-flight turn (and live sub-agents).
 			return m.cancelTurn(), nil
 		}
 		if m.escapePending {
@@ -80,10 +81,15 @@ func (m Model) updateKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 			m.prompt.SetHeight(m.promptHeight())
 			return m, nil
 		}
-		if m.busy {
-			return m, nil
-		}
 		text := m.prompt.Value()
+		if m.busy {
+			// Force-send: interrupt the stuck/running turn, then send the draft.
+			if strings.TrimSpace(text) == "" {
+				m.copyNotice = "type a message, then enter to send now  •  esc cancel"
+				return m, clearCopyNotice()
+			}
+			return m.forceSend(text)
+		}
 		if strings.TrimSpace(text) == "" {
 			return m, nil
 		}
@@ -326,11 +332,46 @@ func (m Model) cancelTurn() Model {
 	m.turnSeq++
 	m.busy = false
 	m.pendingUser = ""
+	m.activity = ""
+	m.pulseOn = false
 	m.err = "cancelled"
 	m.items = append(m.items, transcriptItem{kind: itemNote, text: "cancelled"})
 	m.syncTranscript()
 	m.turnCancel = nil
+	m.eventCh = nil
+	m.errCh = nil
 	return m
+}
+
+// forceSend interrupts the in-flight turn (if any) and immediately starts a
+// new user turn with text. This is the "send now" action while busy.
+func (m Model) forceSend(text string) (Model, tea.Cmd) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return m, nil
+	}
+	if m.busy {
+		// Quiet cancel: stop work without a sticky red "cancelled" error,
+		// then submit the new message.
+		if m.turnCancel != nil {
+			m.turnCancel()
+		}
+		if m.subMgr != nil && m.session != nil {
+			_ = m.subMgr.CancelAll(m.session.ID)
+		}
+		m.turnSeq++
+		m.busy = false
+		m.pendingUser = ""
+		m.activity = ""
+		m.pulseOn = false
+		m.turnCancel = nil
+		m.eventCh = nil
+		m.errCh = nil
+		m.err = ""
+		m.items = append(m.items, transcriptItem{kind: itemNote, text: "interrupted · sending now"})
+		m.syncTranscript()
+	}
+	return m.submit(text)
 }
 
 // agentOptions builds Options for the parent agent, including the subagent Host.

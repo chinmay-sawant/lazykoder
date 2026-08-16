@@ -28,6 +28,18 @@ Allowlisted tools that are forbidden for the current role get
 - Output capped at 1 MiB with `truncated` in metadata; `lines` count in
   metadata. Missing file -> `status = error`, no panic.
 
+## grep
+
+Fast content search under the workdir (ripgrep when installed, pure-Go
+fallback otherwise). Prefer this over reading many files to find symbols.
+
+- Input: `{"pattern": "...", "path?": "...", "glob?": "*.go",
+  "caseInsensitive?": false, "maxMatches?": 50}`.
+- `path` is a file or directory under the workdir (default: workdir root).
+- Output is `path:line:match` hits (capped; `matches` / `truncated` /
+  `engine` in metadata). No matches returns `no matches` as a completed
+  result (not an error).
+
 ## write
 
 - Input: `{"filePath": "...", "contents": "..."}`. Inside session directory;
@@ -69,7 +81,11 @@ When `settings.agents.enabled` is true, the parent agent gets:
 | `task_cancel` | Cancel one id or all |
 
 Default `task` waits until the child finishes and returns a JSON summary.
-`background: true` returns a handle immediately.
+`background: true` returns a handle immediately (preferred for parallel
+spawns; follow with `task_wait`). Default child step budget is 32
+(configurable via settings `agents.child_max_steps` or per-spawn
+`max_steps`). If a child hits its step limit after doing work, the job
+completes with a partial summary and a note instead of status `failed`.
 
 Schemas and pure JSON helpers live in `internal/tools/task`. Runtime
 lifecycle is `internal/subagent.Manager` + `AgentRunner`.
@@ -78,8 +94,8 @@ lifecycle is `internal/subagent.Manager` + `AgentRunner`.
 
 | Role | Tools |
 | --- | --- |
-| `explore` / `plan` | `read`, `webfetch` |
-| `general` | `bash`, `read`, `write`, `edit`, `webfetch` |
+| `explore` / `plan` | `bash`, `read`, `grep`, `webfetch` (no write/edit; bash still gated by policy for rm) |
+| `general` | `bash`, `read`, `grep`, `write`, `edit`, `webfetch` |
 
 Children never get `task` or `question` tools (depth 1). Concurrent
 `general` writers are serialized unless `allow_parallel_writers` is on.

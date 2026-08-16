@@ -123,6 +123,41 @@ func TestSubagentPickerListsChildrenAndShowsLog(t *testing.T) {
 		t.Fatalf("t should collapse thinking: %q", collapsed)
 	}
 
+	// Click the thinking header to expand again.
+	thinkIdx := -1
+	for i, it := range m.subagentLogItems {
+		if it.kind == itemReasoning {
+			thinkIdx = i
+			break
+		}
+	}
+	if thinkIdx < 0 {
+		t.Fatal("missing reasoning item")
+	}
+	// Find a screen Y that maps to the thinking item.
+	m = m.resizeSubagentLogCard()
+	foundY := -1
+	for y := 0; y < m.height; y++ {
+		if idx, ok := m.subagentLogItemIndexAtScreenY(y); ok && idx == thinkIdx {
+			foundY = y
+			break
+		}
+	}
+	if foundY < 0 {
+		t.Fatal("could not map thinking item to a screen row")
+	}
+	next, _, hit := m.subagentLogHit(2, foundY, tea.MouseLeft)
+	if !hit {
+		t.Fatal("click on thinking should hit")
+	}
+	m = next
+	if m.subagentLogItems[thinkIdx].collapsed {
+		t.Fatal("click should expand collapsed thinking")
+	}
+	if !strings.Contains(stripANSI(viewText(m)), "scanning packages carefully") {
+		t.Fatal("expanded thinking body missing after click")
+	}
+
 	// Footer chip should list total for the session.
 	m = m.closeSubagentPicker()
 	m = m.reloadSubagentRows()

@@ -613,8 +613,8 @@ func (m Model) subagentLogCloseRect() (x0, y, x1 int, ok bool) {
 	return 0, 0, 0, false
 }
 
-// subagentLogHit handles a mouse press on the full-screen log card.
-// Clicking [x] returns to the drawer list (same as esc).
+// subagentLogHit handles a mouse press on the full-screen log view.
+// [x] returns to the drawer; clicks on thinking/tool blocks expand or collapse.
 func (m Model) subagentLogHit(x, y int, button tea.MouseButton) (Model, tea.Cmd, bool) {
 	if !m.subagentLogMode {
 		return m, nil, false
@@ -626,8 +626,97 @@ func (m Model) subagentLogHit(x, y int, button tea.MouseButton) (Model, tea.Cmd,
 		next, cmd := m.updateSubagentLogKey(tea.KeyPressMsg{Code: tea.KeyEscape})
 		return next, cmd, true
 	}
-	// Consume other clicks on the card so they do not hit the chat underneath.
+	if button == tea.MouseLeft {
+		if idx, ok := m.subagentLogItemIndexAtScreenY(y); ok {
+			kind := m.subagentLogItems[idx].kind
+			if kind == itemTool || kind == itemReasoning {
+				it := m.subagentLogItems[idx]
+				it.collapsed = !it.collapsed
+				m.subagentLogItems[idx] = it
+				m.subagentLogSelected = idx
+				return m.refreshSubagentLogContent(), nil, true
+			}
+		}
+	}
+	// Consume other clicks so they do not hit the chat underneath.
 	return m, nil, true
+}
+
+// subagentLogItemIndexAtScreenY maps a click row in the full-screen log body
+// to a subagentLogItems index (same idea as itemIndexAtScreenY for main chat).
+func (m Model) subagentLogItemIndexAtScreenY(y int) (int, bool) {
+	if !m.subagentLogMode || len(m.subagentLogItems) == 0 {
+		return -1, false
+	}
+	// Body starts after the one-line header.
+	top := subagentLogHeaderRows
+	height := m.subagentLogVPHeight()
+	if y < top || y >= top+height {
+		return -1, false
+	}
+	target := y - top + m.subagentLogVp.YOffset()
+	if target < 0 {
+		return -1, false
+	}
+	rendered := m.renderedSubagentLogItems()
+	row := 0
+	ri := 0
+	for i, it := range m.subagentLogItems {
+		if i > 0 && (it.kind == itemUser || it.kind == itemAssistant) {
+			if ri < len(rendered) && isTurnGap(rendered[ri]) {
+				if target == row {
+					return -1, false
+				}
+				row++
+				ri++
+			}
+		}
+		if ri >= len(rendered) {
+			break
+		}
+		h := lipgloss.Height(rendered[ri])
+		if h < 1 {
+			h = 1
+		}
+		if target >= row && target < row+h {
+			return i, true
+		}
+		row += h
+		ri++
+	}
+	return -1, false
+}
+
+// renderedSubagentLogItems returns each painted block for hit-testing.
+func (m Model) renderedSubagentLogItems() []string {
+	if len(m.subagentLogItems) == 0 {
+		return nil
+	}
+	renderM := m
+	renderM.width = max(minPaneWidth, m.width)
+	if m.subagentLogVp.Width() > 0 {
+		renderM.transcript = m.subagentLogVp
+	}
+	out := make([]string, 0, len(m.subagentLogItems)*2)
+	for i, it := range m.subagentLogItems {
+		if i > 0 && (it.kind == itemUser || it.kind == itemAssistant) {
+			if it.kind == itemUser {
+				out = append(out, "")
+			} else {
+				out = append(out, renderM.withWorkRail(" ", false))
+			}
+		}
+		itemM := renderM
+		if it.kind != itemUser && it.kind != itemNote {
+			itemM.railInset = workRailCols
+		}
+		body := itemM.renderItem(it, i == m.subagentLogSelected, false)
+		if it.kind != itemUser && it.kind != itemNote {
+			body = itemM.withWorkRail(body, false)
+		}
+		out = append(out, body)
+	}
+	return out
 }
 
 func (m Model) updateSubagentPickerKey(key tea.KeyPressMsg) (Model, tea.Cmd) {

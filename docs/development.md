@@ -40,7 +40,7 @@ internal/
   subagent/                   Manager, Host, AgentRunner (concurrency)
   settings/                   project settings including agents caps
   policy/                     bash classifier
-  tools/{bash,read,write,
+  tools/{bash,read,grep,write,
          edit,question,
          webfetch,task}/      tool implementations / schemas
   ui/chat/                    chat TUI (transcript, prompt, picker)

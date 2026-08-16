@@ -3,6 +3,7 @@ package subagent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -96,6 +97,85 @@ func TestAgentRunnerCreatesChildSession(t *testing.T) {
 		t.Fatalf("list = %+v, want only parent", list)
 	}
 	_ = filepath.Join // keep path import if needed
+}
+
+func TestAgentRunnerStepLimitIsPartialSuccess(t *testing.T) {
+	// Children used to surface "step limit reached" as status=failed, which the
+	// parent UI and model treated as a crash even when tools had already run.
+	st := openStore(t)
+	var mu sync.Mutex
+	var n int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.ReadAll(r.Body)
+		mu.Lock()
+		n++
+		call := n
+		mu.Unlock()
+		// Keep requesting tools until the child budget is exhausted.
+		body := map[string]any{
+			"choices": []any{map[string]any{
+				"message": map[string]any{
+					"content": "partial findings so far",
+					"tool_calls": []any{map[string]any{
+						"id":   fmt.Sprintf("call_%d", call),
+						"type": "function",
+						"function": map[string]any{
+							"name":      "bash",
+							"arguments": `{"command":"echo loop"}`,
+						},
+					}},
+				},
+				"finish_reason": "tool-calls",
+			}},
+		}
+		raw, _ := json.Marshal(body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(raw)
+	}))
+	t.Cleanup(srv.Close)
+
+	client := opencode.NewClient("test", opencode.WithBaseURL(srv.URL))
+	runner := AgentRunner{Store: st, Client: client}
+	workdir := t.TempDir()
+	parent, err := st.CreateSession(context.Background(), db.Session{
+		Title:     "parent",
+		Directory: workdir,
+	})
+	if err != nil {
+		t.Fatalf("CreateSession parent: %v", err)
+	}
+
+	res, err := runner.Run(context.Background(), Job{
+		ID:              "sub_lim",
+		Name:            "explore-lim",
+		Role:            RoleExplore,
+		Prompt:          "dig forever",
+		ParentSessionID: parent.ID,
+		Workdir:         workdir,
+		MaxSteps:        3,
+		Tools:           []string{"bash", "read"},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v (want soft success, not hard error)", err)
+	}
+	if res.Status != string(StatusCompleted) {
+		t.Fatalf("status = %q err=%q, want completed partial success", res.Status, res.Err)
+	}
+	if res.Err != "" {
+		t.Fatalf("err field should be empty on soft step-limit complete, got %q", res.Err)
+	}
+	if !strings.Contains(res.Summary, "step limit") {
+		t.Fatalf("summary missing step-limit note: %q", res.Summary)
+	}
+	if !strings.Contains(res.Summary, "partial findings") {
+		t.Fatalf("summary missing child text: %q", res.Summary)
+	}
+	mu.Lock()
+	calls := n
+	mu.Unlock()
+	if calls != 3 {
+		t.Fatalf("provider calls = %d, want 3", calls)
+	}
 }
 
 func openStore(t *testing.T) *db.Store {

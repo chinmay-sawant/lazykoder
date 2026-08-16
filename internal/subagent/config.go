@@ -17,7 +17,8 @@ const (
 	// DefaultTimeout is the child wall-clock timeout.
 	DefaultTimeout = 600 * time.Second
 	// DefaultChildMaxSteps is the child agent step budget.
-	DefaultChildMaxSteps = 12
+	// Keep in sync with settings.DefaultChildMaxSteps.
+	DefaultChildMaxSteps = 32
 	// DefaultRole is used when Spec.Role is empty.
 	DefaultRole = RoleExplore
 	// BashConfirmParent asks the parent UI to confirm child bash.

@@ -280,6 +280,7 @@ func TestSendToolDispatch(t *testing.T) {
 	readArgs, _ := json.Marshal(map[string]any{"filePath": "fixture.txt"})
 	writeArgs, _ := json.Marshal(map[string]any{"filePath": "new.txt", "contents": "hello new"})
 	editArgs, _ := json.Marshal(map[string]any{"filePath": "fixture.txt", "oldString": "line one", "newString": "line uno"})
+	grepArgs, _ := json.Marshal(map[string]any{"pattern": "line two", "glob": "*.txt"})
 	webArgs, _ := json.Marshal(map[string]any{"url": webSrv.URL, "format": "text"})
 	qArgs, _ := json.Marshal(map[string]any{"questions": []any{
 		map[string]any{"question": "pick one?", "header": "choice", "options": []string{"alpha", "beta"}},
@@ -290,6 +291,7 @@ func TestSendToolDispatch(t *testing.T) {
 			{ID: "c_read", Name: "read", Args: string(readArgs)},
 			{ID: "c_write", Name: "write", Args: string(writeArgs)},
 			{ID: "c_edit", Name: "edit", Args: string(editArgs)},
+			{ID: "c_grep", Name: "grep", Args: string(grepArgs)},
 			{ID: "c_web", Name: "webfetch", Args: string(webArgs)},
 			{ID: "c_q", Name: "question", Args: string(qArgs)},
 		}, testUsage),
@@ -310,8 +312,8 @@ func TestSendToolDispatch(t *testing.T) {
 	}
 
 	tc := queryToolCalls(t, path)
-	if len(tc) != 5 {
-		t.Fatalf("tool_calls rows = %d, want 5", len(tc))
+	if len(tc) != 6 {
+		t.Fatalf("tool_calls rows = %d, want 6", len(tc))
 	}
 	byTool := map[string]rowTC{}
 	for _, r := range tc {
@@ -325,6 +327,9 @@ func TestSendToolDispatch(t *testing.T) {
 	}
 	if r := byTool["edit"]; r.Status != "completed" {
 		t.Errorf("edit row = %+v, want completed", r)
+	}
+	if r := byTool["grep"]; r.Status != "completed" || r.Output == nil || !strings.Contains(*r.Output, "line two") {
+		t.Errorf("grep row = %+v, want completed with match", r)
 	}
 	if r := byTool["webfetch"]; r.Status != "completed" || r.Output == nil || !strings.Contains(*r.Output, "web body ok") {
 		t.Errorf("webfetch row = %+v, want completed with body", r)

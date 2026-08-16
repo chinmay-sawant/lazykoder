@@ -15,6 +15,7 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/bash"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/edit"
+	"github.com/chinmay-sawant/lazykoder/internal/tools/grep"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/question"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/read"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/webfetch"
@@ -463,6 +464,13 @@ func toolTitle(tc opencode.ToolCall) string {
 		if p := first("filePath"); p != "" {
 			return p
 		}
+	case "grep":
+		if p := first("pattern"); p != "" {
+			if path := first("path"); path != "" {
+				return truncateRunes(p+"  "+path, maxToolTitle)
+			}
+			return truncateRunes(p, maxToolTitle)
+		}
 	case "webfetch":
 		if u := first("url"); u != "" {
 			return u
@@ -499,6 +507,8 @@ func (a *Agent) executeTool(ctx context.Context, events chan<- Event, partID, ti
 		return a.execBash(ctx, events, partID, title, tc)
 	case toolRead:
 		return a.execRead(ctx, events, partID, title, tc)
+	case toolGrep:
+		return a.execGrep(ctx, events, partID, title, tc)
 	case toolWrite:
 		return a.execWrite(ctx, events, partID, title, tc)
 	case toolEdit:
@@ -589,6 +599,38 @@ func (a *Agent) execRead(ctx context.Context, events chan<- Event, partID, title
 		return a.updateTool(ctx, events, partID, title, tc, "error", &msg, errorJSON(msg), nil, nil)
 	}
 	res, err := read.Run(args.FilePath, a.workdir)
+	if err != nil {
+		return a.updateTool(ctx, events, partID, title, tc, "error", errOut(err), errorJSON(err.Error()), nil, nil)
+	}
+	out := res.Output
+	if len([]rune(out)) > maxToolOutput {
+		out = truncateRunes(out, maxToolOutput)
+		res.Metadata["truncated"] = true
+	}
+	meta, _ := json.Marshal(res.Metadata)
+	metaJSON := string(meta)
+	return a.updateTool(ctx, events, partID, title, tc, "completed", &out, toolOutputJSON(out), nil, &metaJSON)
+}
+
+func (a *Agent) execGrep(ctx context.Context, events chan<- Event, partID, title string, tc opencode.ToolCall) (string, error) {
+	var args struct {
+		Pattern         string `json:"pattern"`
+		Path            string `json:"path"`
+		Glob            string `json:"glob"`
+		CaseInsensitive bool   `json:"caseInsensitive"`
+		MaxMatches      int    `json:"maxMatches"`
+	}
+	if err := json.Unmarshal([]byte(tc.Arguments), &args); err != nil {
+		msg := "invalid grep arguments: " + err.Error()
+		return a.updateTool(ctx, events, partID, title, tc, "error", &msg, errorJSON(msg), nil, nil)
+	}
+	res, err := grep.Run(ctx, a.workdir, grep.Options{
+		Pattern:         args.Pattern,
+		Path:            args.Path,
+		Glob:            args.Glob,
+		CaseInsensitive: args.CaseInsensitive,
+		MaxMatches:      args.MaxMatches,
+	}, nil)
 	if err != nil {
 		return a.updateTool(ctx, events, partID, title, tc, "error", errOut(err), errorJSON(err.Error()), nil, nil)
 	}
