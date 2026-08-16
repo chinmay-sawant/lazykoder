@@ -204,15 +204,34 @@ type wireResponseMessage struct {
 }
 
 type wireUsage struct {
-	TotalTokens      int64   `json:"total_tokens"`
-	PromptTokens     int64   `json:"prompt_tokens"`
-	CompletionTokens int64   `json:"completion_tokens"`
-	ReasoningTokens  int64   `json:"reasoning_tokens"`
-	CacheReadTokens  int64   `json:"cache_read_tokens"`
-	CacheRead        int64   `json:"cache_read"`
-	CacheWriteTokens int64   `json:"cache_write_tokens"`
-	CacheWrite       int64   `json:"cache_write"`
-	Cost             float64 `json:"cost"`
+	TotalTokens           int64 `json:"total_tokens"`
+	PromptTokens          int64 `json:"prompt_tokens"`
+	InputTokens           int64 `json:"input_tokens"`
+	CompletionTokens      int64 `json:"completion_tokens"`
+	ReasoningTokens       int64 `json:"reasoning_tokens"`
+	CacheReadTokens       int64 `json:"cache_read_tokens"`
+	CacheRead             int64 `json:"cache_read"`
+	CacheHitTokens        int64 `json:"cache_hit_tokens"`
+	CacheHit              int64 `json:"cache_hit"`
+	PromptCacheHitTokens  int64 `json:"prompt_cache_hit_tokens"`
+	CacheWriteTokens      int64 `json:"cache_write_tokens"`
+	CacheWrite            int64 `json:"cache_write"`
+	CacheMissTokens       int64 `json:"cache_miss_tokens"`
+	CacheMiss             int64 `json:"cache_miss"`
+	PromptCacheMissTokens int64 `json:"prompt_cache_miss_tokens"`
+	PromptTokensDetails   *struct {
+		CachedTokens int64 `json:"cached_tokens"`
+	} `json:"prompt_tokens_details"`
+	Cost float64 `json:"cost"`
+}
+
+func firstPositive(vals ...int64) int64 {
+	for _, v := range vals {
+		if v > 0 {
+			return v
+		}
+	}
+	return 0
 }
 
 // Chat POSTs <base>/chat/completions with Authorization: Bearer <key>.
@@ -262,17 +281,23 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, erro
 		out.ToolCalls = m.ToolCalls
 	}
 	if wire.Usage != nil {
-		cacheRead := wire.Usage.CacheReadTokens
-		if cacheRead == 0 {
-			cacheRead = wire.Usage.CacheRead
+		cachedDetails := int64(0)
+		if wire.Usage.PromptTokensDetails != nil {
+			cachedDetails = wire.Usage.PromptTokensDetails.CachedTokens
 		}
-		cacheWrite := wire.Usage.CacheWriteTokens
-		if cacheWrite == 0 {
-			cacheWrite = wire.Usage.CacheWrite
-		}
+		cacheRead := firstPositive(
+			wire.Usage.CacheReadTokens,
+			wire.Usage.CacheRead,
+			wire.Usage.CacheHitTokens,
+			wire.Usage.CacheHit,
+			wire.Usage.PromptCacheHitTokens,
+			cachedDetails,
+		)
+		cacheWrite := firstPositive(wire.Usage.CacheWriteTokens, wire.Usage.CacheWrite)
+		input := firstPositive(wire.Usage.PromptTokens, wire.Usage.InputTokens)
 		out.Usage = &Usage{
 			TokensTotal:      wire.Usage.TotalTokens,
-			TokensInput:      wire.Usage.PromptTokens,
+			TokensInput:      input,
 			TokensOutput:     wire.Usage.CompletionTokens,
 			TokensReasoning:  wire.Usage.ReasoningTokens,
 			TokensCacheRead:  cacheRead,

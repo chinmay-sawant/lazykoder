@@ -21,9 +21,12 @@ pickers are centered cards.
   the same black background as the rest of the screen (no cursor-line
   highlight). The footer left side stays idle (`enter send`). Live thinking
   and commands stay in the transcript. The right side shows
-  `model  used/window  $cost  tps` (click the model to switch). tps is
-  this turn's generated tokens (output, or reasoning if output is
-  missing) divided by turn wall time. It is never the session total.
+  `model  used/window  hit/miss  $cost  tps` (click the model to switch).
+  hit is cached input tokens (`cache_read` / `prompt_cache_hit`); miss is
+  uncached input (`prompt - hit`, or the full prompt when the API reports
+  input and cache separately). tps is this turn's generated tokens
+  (output, or reasoning if output is missing) divided by turn wall time.
+  It is never the session total.
   Context
   windows and list prices come from GET /models, filled from the OpenCode
   Go catalog when the API omits them, and are stored in

@@ -174,6 +174,9 @@ func (m Model) modelContextLabel() string {
 	} else if window > 0 {
 		label = label + "  0/" + formatTokens(int64(window))
 	}
+	if m.cacheHit > 0 || m.cacheMiss > 0 {
+		label = label + "  " + formatCache(m.cacheHit, m.cacheMiss)
+	}
 	if m.sessionCost > 0 {
 		label = label + "  " + formatCost(m.sessionCost)
 	}
@@ -181,6 +184,10 @@ func (m Model) modelContextLabel() string {
 		label = label + "  " + formatTPS(m.tokensPerSec)
 	}
 	return label
+}
+
+func formatCache(hit, miss int64) string {
+	return "hit " + formatTokens(hit) + "  miss " + formatTokens(miss)
 }
 
 func formatCost(usd float64) string {

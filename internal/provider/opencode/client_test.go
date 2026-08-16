@@ -312,6 +312,22 @@ func TestChatResponseVariants(t *testing.T) {
 	}
 }
 
+func TestChatUsageCacheHitAliases(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"x","finish_reason":"stop"}}],"usage":{"prompt_tokens":68790,"completion_tokens":10,"prompt_cache_hit_tokens":68000,"prompt_tokens_details":{"cached_tokens":68000}}}`)
+	}))
+	defer srv.Close()
+
+	c := NewClient("k", WithBaseURL(srv.URL))
+	resp, err := c.Chat(context.Background(), ChatRequest{Messages: []Message{{Role: "user", Content: "x"}}})
+	if err != nil {
+		t.Fatalf("Chat(): %v", err)
+	}
+	if resp.Usage == nil || resp.Usage.TokensInput != 68790 || resp.Usage.TokensCacheRead != 68000 {
+		t.Fatalf("Usage = %+v, want input 68790 cache hit 68000", resp.Usage)
+	}
+}
+
 func TestChatResponseWithoutUsage(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `{"choices":[{"message":{"content":"x","finish_reason":"stop"}}]}`)

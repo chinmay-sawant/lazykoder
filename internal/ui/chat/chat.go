@@ -153,6 +153,8 @@ type Model struct {
 	tokensUsed    int64
 	sessionCost   float64
 	tokensPerSec  float64
+	cacheHit      int64
+	cacheMiss     int64
 	turnStarted   time.Time
 	turnGenTokens int64
 	turnItemFrom  int

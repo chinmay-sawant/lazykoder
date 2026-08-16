@@ -133,6 +133,17 @@ func (m *Model) applyUsage(p db.Part) {
 	} else if total > 0 {
 		m.addCost(0, total)
 	}
+	var hit int64
+	if p.TokensCacheRead != nil {
+		hit = *p.TokensCacheRead
+	}
+	miss := cacheMissTokens(in, hit)
+	if hit > 0 {
+		m.cacheHit += hit
+	}
+	if miss > 0 {
+		m.cacheMiss += miss
+	}
 	if !m.busy {
 		return
 	}
@@ -157,6 +168,19 @@ func (m *Model) addCost(inputTokens, outputTokens int64) {
 		return
 	}
 	m.sessionCost += (float64(inputTokens)/1_000_000)*info.InputPerM + (float64(outputTokens)/1_000_000)*info.OutputPerM
+}
+
+func cacheMissTokens(input, hit int64) int64 {
+	if hit <= 0 {
+		return input
+	}
+	if input > hit {
+		return input - hit
+	}
+	if input > 0 && input < hit {
+		return input
+	}
+	return 0
 }
 
 func estimateTokens(items []transcriptItem) int64 {

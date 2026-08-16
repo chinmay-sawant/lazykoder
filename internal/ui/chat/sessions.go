@@ -254,6 +254,8 @@ func (m Model) loadSession(sess *db.Session) Model {
 	m.tokensUsed = 0
 	m.sessionCost = 0
 	m.tokensPerSec = 0
+	m.cacheHit = 0
+	m.cacheMiss = 0
 	m.turnGenTokens = 0
 	m.turnItemFrom = 0
 	m.turnStarted = time.Time{}

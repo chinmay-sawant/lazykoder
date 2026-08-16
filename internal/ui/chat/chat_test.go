@@ -728,6 +728,49 @@ func TestReplayRestoresTokensFromStepFinish(t *testing.T) {
 	}
 }
 
+func TestReplayRestoresCacheHitMiss(t *testing.T) {
+	st := newTestStore(t)
+	sess, err := st.CreateSession(context.Background(), db.Session{Title: "t", Directory: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	am, err := st.InsertMessage(context.Background(), db.Message{SessionID: sess.ID, Role: "assistant"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	in, hit := int64(68790), int64(68000)
+	if _, err := st.InsertPart(context.Background(), db.Part{
+		MessageID: am.ID, Type: "step-finish", TokensInput: &in, TokensCacheRead: &hit, TokensTotal: ptrInt64(69000),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	m := New(Options{Store: st, Client: deadClient(), Workdir: t.TempDir(), Session: &sess})
+	if m.cacheHit != 68000 || m.cacheMiss != 790 {
+		t.Fatalf("cache hit/miss = %d/%d, want 68000/790", m.cacheHit, m.cacheMiss)
+	}
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 140, Height: 24})
+	m = mm.(Model)
+	v := stripANSI(viewText(m))
+	if !strings.Contains(v, "hit 68k") || !strings.Contains(v, "miss 790") {
+		t.Fatalf("footer missing cache stats: %q", v)
+	}
+}
+
+func TestCacheMissTokens(t *testing.T) {
+	if got := cacheMissTokens(68790, 68000); got != 790 {
+		t.Fatalf("included cache: miss = %d, want 790", got)
+	}
+	if got := cacheMissTokens(1000, 1000); got != 0 {
+		t.Fatalf("full hit: miss = %d, want 0", got)
+	}
+	if got := cacheMissTokens(790, 68000); got != 790 {
+		t.Fatalf("separate input: miss = %d, want 790", got)
+	}
+	if got := cacheMissTokens(1000, 0); got != 1000 {
+		t.Fatalf("no cache: miss = %d, want 1000", got)
+	}
+}
+
 func TestReplayEstimatesTokensWithoutUsage(t *testing.T) {
 	st := newTestStore(t)
 	sess, err := st.CreateSession(context.Background(), db.Session{Title: "t", Directory: t.TempDir()})
