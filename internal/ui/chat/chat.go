@@ -213,7 +213,7 @@ type Model struct {
 	stepLimitHit      bool // last turn stopped on agent step limit
 
 	filePickerMode   bool
-	filePickerItems  []string
+	filePickerItems  []atPickItem
 	filePickerCursor int
 	filePickerFilter string
 	filePickerAt     int

@@ -253,7 +253,7 @@ func (m Model) updateKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 	m.prompt, cmd = m.prompt.Update(key)
 	if m.filePickerMode && key.Text != "" {
 		m.filePickerFilter += key.Text
-		m.filePickerItems = listProjectFiles(m.workdir, m.filePickerFilter)
+		m.filePickerItems = m.listAtPickItems(m.filePickerFilter)
 		m.filePickerCursor = 0
 	}
 	return m.syncPromptSlash(), cmd
@@ -288,6 +288,7 @@ func (m Model) submit(text string) (Model, tea.Cmd) {
 	m.slashFromPaste = false
 	m.pendingHistoryIndex = len(m.inputHistory)
 	m.inputHistory = append(m.inputHistory, inputHistoryItem{text: text})
+	// UI shows the typed text; the model receives @agent:… expansions.
 	m.items = append(m.items, transcriptItem{kind: itemUser, text: text, when: time.Now().UnixMilli()})
 	m.turnItemFrom = len(m.items)
 	m.turnGenTokens = 0
@@ -302,8 +303,9 @@ func (m Model) submit(text string) (Model, tea.Cmd) {
 	m.errCh = make(chan error, 1)
 	ag := agent.New(m.store, m.client, m.workdir, m.agentOptions())
 	eventCh, errCh := m.eventCh, m.errCh
+	sendText := m.withMentionContext(text)
 	sendCmd := func() tea.Msg {
-		go func() { errCh <- ag.Send(ctx, text, eventCh) }()
+		go func() { errCh <- ag.Send(ctx, sendText, eventCh) }()
 		return nil
 	}
 	m.pulse = 0

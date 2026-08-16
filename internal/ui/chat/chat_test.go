@@ -2523,6 +2523,73 @@ func TestFilePickerInsertsPath(t *testing.T) {
 	}
 }
 
+func TestAtPickerListsSubagentsWithStatus(t *testing.T) {
+	st := newTestStore(t)
+	dir := t.TempDir()
+	parent, err := st.CreateSession(context.Background(), db.Session{Directory: dir, Title: "main"})
+	if err != nil {
+		t.Fatalf("parent: %v", err)
+	}
+	pid := parent.ID
+	child, err := st.CreateSession(context.Background(), db.Session{
+		Directory: dir, Title: "lint-fix", ParentSessionID: &pid, Kind: db.SessionKindSubagent,
+	})
+	if err != nil {
+		t.Fatalf("child: %v", err)
+	}
+	um, err := st.InsertMessage(context.Background(), db.Message{SessionID: child.ID, Role: "user"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	task := "fix the linter"
+	if _, err := st.InsertPart(context.Background(), db.Part{MessageID: um.ID, Type: "text", Text: &task}); err != nil {
+		t.Fatal(err)
+	}
+	am, err := st.InsertMessage(context.Background(), db.Message{SessionID: child.ID, Role: "assistant"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply := "all clean"
+	if _, err := st.InsertPart(context.Background(), db.Part{MessageID: am.ID, Type: "text", Text: &reply}); err != nil {
+		t.Fatal(err)
+	}
+
+	m := New(Options{Store: st, Client: deadClient(), Workdir: dir, Session: &parent})
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 36})
+	m = mm.(Model)
+	m = typeText(m, "@lint")
+	if !m.filePickerMode {
+		t.Fatal("@ should open picker")
+	}
+	v := stripANSI(viewText(m))
+	if !strings.Contains(v, "lint-fix") {
+		t.Fatalf("picker missing sub-agent name: %q", v)
+	}
+	if !strings.Contains(v, "agent") {
+		t.Fatalf("picker missing agent label: %q", v)
+	}
+	if !strings.Contains(v, "completed") && !strings.Contains(v, theme.StatusDiamond) {
+		t.Fatalf("picker missing status: %q", v)
+	}
+	m = upd(m, enter())
+	if m.filePickerMode {
+		t.Fatal("picker should close")
+	}
+	if !strings.Contains(m.prompt.Value(), "@agent:lint-fix") {
+		t.Fatalf("prompt missing agent mention: %q", m.prompt.Value())
+	}
+	expanded := m.withMentionContext(m.prompt.Value() + " please continue")
+	if !strings.Contains(expanded, "Sub-agent context: lint-fix") {
+		t.Fatalf("expanded missing context header: %q", expanded)
+	}
+	if !strings.Contains(expanded, "fix the linter") {
+		t.Fatalf("expanded missing child task: %q", expanded)
+	}
+	if !strings.Contains(expanded, "all clean") {
+		t.Fatalf("expanded missing child reply: %q", expanded)
+	}
+}
+
 func TestFilePickerEsc(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "hello.go"), []byte("x"), 0o600); err != nil {
