@@ -48,6 +48,10 @@ set `messages.agent` to the sub-agent name.
 - Ids are readable prefixes plus 16 hex chars from crypto/rand:
   `ses_`, `msg_`, `prt_`; `tool_calls.part_id` equals the owning part id.
 - Timestamps are Unix milliseconds.
+- `sessions.time_created` is set once on insert. `sessions.time_updated`
+  is bumped whenever a message is inserted (or visibility changes), and
+  also when the model or variant is changed, so resume order and age
+  labels track real activity.
 - `seq` increments per parent (messages per session, parts per message),
   computed as MAX+1 inside a transaction.
 - Nullable columns are stored as NULL, never empty strings.
@@ -64,11 +68,12 @@ set `messages.agent` to the sub-agent name.
 
 ## Store API
 
-`CreateSession`, `InsertMessage`, `InsertPart`, `UpdatePartText`
-(streamed reasoning/text growth), `InsertToolCall`,
-`UpdateToolCall` (upsert + part status), `DeleteSession`, `ListMessages`,
-`ListParts`, `ListSessionsByDir` (latest first), `ListToolCalls` (per
-session), `UpdateSessionModel` (model picker persistence).
+`CreateSession`, `InsertMessage` (bumps session `time_updated`),
+`InsertPart`, `UpdatePartText` (streamed reasoning/text growth),
+`InsertToolCall`, `UpdateToolCall` (upsert + part status),
+`TouchSession`, `DeleteSession`, `ListMessages`, `ListParts`,
+`ListSessionsByDir` (latest first), `ListToolCalls` (per session),
+`UpdateSessionModel` / `UpdateSessionVariant` (also bump `time_updated`).
 
 ## Tool call lifecycle
 

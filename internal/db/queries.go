@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -56,7 +57,8 @@ func (s *Store) CreateSession(ctx context.Context, sess Session) (Session, error
 }
 
 // InsertMessage inserts a message, filling the ID, TimeCreated and the
-// per-session seq as MAX(seq)+1.
+// per-session seq as MAX(seq)+1. Also bumps the parent session's
+// time_updated so resume lists and age labels stay current.
 func (s *Store) InsertMessage(ctx context.Context, m Message) (Message, error) {
 	if m.ID == "" {
 		m.ID = NewID("msg_")
@@ -77,6 +79,9 @@ func (s *Store) InsertMessage(ctx context.Context, m Message) (Message, error) {
 		m.ID, m.SessionID, m.Role, m.Agent, m.ProviderID, m.ModelID, m.Variant, m.TimeCreated, m.Seq)
 	if err != nil {
 		return Message{}, fmt.Errorf("db: insert message: %w", err)
+	}
+	if err := touchSessionTx(ctx, tx, m.SessionID, m.TimeCreated); err != nil {
+		return Message{}, err
 	}
 	if err := tx.Commit(); err != nil {
 		return Message{}, fmt.Errorf("db: commit message insert: %w", err)
@@ -185,11 +190,54 @@ func (s *Store) ListMessages(ctx context.Context, sessionID string) ([]Message, 
 }
 
 // SetMessageVisibility soft-hides or restores a message without deleting it.
+// Bumps the owning session's time_updated.
 func (s *Store) SetMessageVisibility(ctx context.Context, messageID string, visible bool) error {
-	if _, err := s.db.ExecContext(ctx, `UPDATE messages SET visible = ? WHERE id = ?`, visible, messageID); err != nil {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("db: begin set message visibility: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `UPDATE messages SET visible = ? WHERE id = ?`, visible, messageID); err != nil {
 		return fmt.Errorf("db: set message visibility: %w", err)
 	}
+	var sessionID string
+	if err := tx.QueryRowContext(ctx, `SELECT session_id FROM messages WHERE id = ?`, messageID).Scan(&sessionID); err != nil {
+		return fmt.Errorf("db: message session for visibility: %w", err)
+	}
+	if err := touchSessionTx(ctx, tx, sessionID, 0); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("db: commit set message visibility: %w", err)
+	}
 	return nil
+}
+
+// TouchSession sets sessions.time_updated to now (or when > 0).
+// Used when activity happens without a new message row.
+func (s *Store) TouchSession(ctx context.Context, sessionID string) error {
+	if sessionID == "" {
+		return fmt.Errorf("db: touch session: empty id")
+	}
+	return touchSession(ctx, s.db, sessionID, 0)
+}
+
+type execContext interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+func touchSession(ctx context.Context, db execContext, sessionID string, when int64) error {
+	if when <= 0 {
+		when = time.Now().UnixMilli()
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE sessions SET time_updated = ? WHERE id = ?`, when, sessionID); err != nil {
+		return fmt.Errorf("db: touch session: %w", err)
+	}
+	return nil
+}
+
+func touchSessionTx(ctx context.Context, tx *sql.Tx, sessionID string, when int64) error {
+	return touchSession(ctx, tx, sessionID, when)
 }
 
 // ListParts returns the parts of a message ordered by seq.
@@ -297,14 +345,14 @@ func (s *Store) GetSession(ctx context.Context, id string) (Session, error) {
 }
 
 // ListChildSessions returns sub-agent sessions spawned under parentID,
-// newest first. Used by the TUI sub-agent picker/log view.
+// most recently updated first. Used by the TUI sub-agent picker/log view.
 func (s *Store) ListChildSessions(ctx context.Context, parentID string) ([]Session, error) {
 	if parentID == "" {
 		return nil, nil
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT `+sessionColumns+` FROM sessions
 WHERE parent_session_id = ? AND kind = 'subagent'
-ORDER BY time_created DESC`, parentID)
+ORDER BY time_updated DESC, time_created DESC`, parentID)
 	if err != nil {
 		return nil, fmt.Errorf("db: list child sessions: %w", err)
 	}
@@ -326,11 +374,12 @@ ORDER BY time_created DESC`, parentID)
 }
 
 // ListSessionsByDir returns main sessions of a directory ordered by
-// time_updated DESC. Sub-agent child sessions are omitted from resume lists.
+// time_updated DESC (stable ties via time_created, id). Sub-agent child
+// sessions are omitted from resume lists.
 func (s *Store) ListSessionsByDir(ctx context.Context, directory string) ([]Session, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT `+sessionColumns+` FROM sessions
 WHERE directory = ? AND (kind = 'main' OR kind = '' OR kind IS NULL)
-ORDER BY time_updated DESC`, directory)
+ORDER BY time_updated DESC, time_created DESC, id DESC`, directory)
 	if err != nil {
 		return nil, fmt.Errorf("db: list sessions: %w", err)
 	}

@@ -490,6 +490,67 @@ func TestUpdateSessionModel(t *testing.T) {
 	}
 }
 
+func TestInsertMessageBumpsSessionTimeUpdated(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	// Fixed created/updated so a later message cannot match by chance.
+	sess, err := s.CreateSession(ctx, Session{
+		Directory:   "/a",
+		TimeCreated: 1_000,
+		TimeUpdated: 1_000,
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if sess.TimeCreated != 1_000 || sess.TimeUpdated != 1_000 {
+		t.Fatalf("session timestamps not preserved: %+v", sess)
+	}
+	time.Sleep(2 * time.Millisecond)
+	msg, err := s.InsertMessage(ctx, Message{SessionID: sess.ID, Role: "user"})
+	if err != nil {
+		t.Fatalf("InsertMessage: %v", err)
+	}
+	if msg.TimeCreated == 0 {
+		t.Fatal("message time_created not filled")
+	}
+	got, err := s.GetSession(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if got.TimeCreated != 1_000 {
+		t.Errorf("time_created changed: %d", got.TimeCreated)
+	}
+	if got.TimeUpdated < msg.TimeCreated {
+		t.Errorf("time_updated = %d, want >= message time %d", got.TimeUpdated, msg.TimeCreated)
+	}
+	if got.TimeUpdated <= sess.TimeUpdated {
+		t.Errorf("time_updated not bumped: %d <= %d", got.TimeUpdated, sess.TimeUpdated)
+	}
+}
+
+func TestTouchSessionBumpsTimeUpdated(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	sess, err := s.CreateSession(ctx, Session{Directory: "/a", TimeCreated: 50, TimeUpdated: 50})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	time.Sleep(2 * time.Millisecond)
+	if err := s.TouchSession(ctx, sess.ID); err != nil {
+		t.Fatalf("TouchSession: %v", err)
+	}
+	got, err := s.GetSession(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if got.TimeCreated != 50 {
+		t.Errorf("time_created changed: %d", got.TimeCreated)
+	}
+	if got.TimeUpdated <= 50 {
+		t.Errorf("time_updated not bumped: %d", got.TimeUpdated)
+	}
+}
+
 func TestUpdateSessionVariant(t *testing.T) {
 	ctx := context.Background()
 	s := openTestStore(t)
