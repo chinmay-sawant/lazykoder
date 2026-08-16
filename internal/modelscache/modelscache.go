@@ -20,10 +20,11 @@ const DefaultTTL = 15 * time.Minute
 // responses, so it is not world-readable.
 const cacheMode = 0o600
 
-// Info is one cached model: context window, USD per million tokens, and
-// selectable reasoning variants.
+// Info is one cached model: context window, USD per million tokens,
+// selectable reasoning variants, and the chat-completions endpoint to call.
 type Info struct {
 	ID             string   `json:"id"`
+	Endpoint       string   `json:"endpoint,omitempty"`
 	Context        int      `json:"context,omitempty"`
 	InputPerM      float64  `json:"input_per_million"`
 	OutputPerM     float64  `json:"output_per_million"`
@@ -69,6 +70,14 @@ func ContextOf(infos []Info, id string) int {
 		return info.Context
 	}
 	return 0
+}
+
+// EndpointOf returns the stored chat-completions URL for id, or "".
+func EndpointOf(infos []Info, id string) string {
+	if info, ok := InfoOf(infos, id); ok {
+		return info.Endpoint
+	}
+	return ""
 }
 
 // InfoOf returns the cached row for id.

@@ -24,6 +24,44 @@ const (
 	maxErrorBodyLen = 300
 )
 
+// ChatURL returns the OpenAI-compatible chat-completions URL for an API base.
+func ChatURL(base string) string {
+	return strings.TrimSuffix(base, "/") + "/chat/completions"
+}
+
+// ZenBaseURL maps an OpenCode Go base (.../zen/go/v1) to the Zen sibling
+// (.../zen/v1). Non-Go bases return false so tests and other providers skip it.
+func ZenBaseURL(goBase string) (string, bool) {
+	if !strings.Contains(goBase, "/zen/go/") {
+		return "", false
+	}
+	return strings.Replace(goBase, "/zen/go/", "/zen/", 1), true
+}
+
+// ZenChatURL is the Zen chat-completions URL derived from a Go API base.
+func ZenChatURL(goBase string) (string, bool) {
+	zen, ok := ZenBaseURL(goBase)
+	if !ok {
+		return "", false
+	}
+	return ChatURL(zen), true
+}
+
+// ChatURLForModel picks the chat URL for a model id when models.json has no
+// stored endpoint. Free Zen models go to the Zen sibling; others use base.
+func ChatURLForModel(base, id string) string {
+	if isFreeModelID(id) {
+		if u, ok := ZenChatURL(base); ok {
+			return u
+		}
+	}
+	return ChatURL(base)
+}
+
+func isFreeModelID(id string) bool {
+	return strings.HasSuffix(id, "-free") || id == "big-pickle"
+}
+
 // ErrMissingAPIKey is returned when no API key is available from the environment.
 var ErrMissingAPIKey = errors.New("opencode: OPENCODE_API_KEY (or OPENCODE_ZEN_API_KEY) is not set")
 
@@ -159,6 +197,10 @@ type ToolSpec struct {
 type ChatRequest struct {
 	// Model overrides the client default model id when non-empty.
 	Model string
+	// Endpoint is the full chat-completions URL. Empty uses the client base.
+	// Stored per model in models.json so Go, Zen, and later OpenAI-style
+	// providers can share this client.
+	Endpoint string
 	// ReasoningEffort is the selected model variant (low, medium, high).
 	// Empty omits the field so the provider default applies.
 	ReasoningEffort string
@@ -269,7 +311,7 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, erro
 	if err != nil {
 		return nil, fmt.Errorf("opencode: marshal request: %w", err)
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(raw))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.chatURL(req), bytes.NewReader(raw))
 	if err != nil {
 		return nil, fmt.Errorf("opencode: build request: %w", err)
 	}
@@ -326,9 +368,17 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, erro
 	return out, nil
 }
 
+func (c *Client) chatURL(req ChatRequest) string {
+	if req.Endpoint != "" {
+		return strings.TrimSuffix(req.Endpoint, "/")
+	}
+	return ChatURL(c.baseURL)
+}
+
 // ModelInfo is one entry from GET /models.
 type ModelInfo struct {
 	ID             string
+	Endpoint       string // full chat-completions URL for this model
 	Context        int
 	InputPerM      float64
 	OutputPerM     float64
@@ -374,11 +424,14 @@ func (c *Client) ModelInfos(ctx context.Context) ([]ModelInfo, error) {
 		return nil, fmt.Errorf("opencode: decode models response: %w", err)
 	}
 	out := make([]ModelInfo, 0, len(wire.Data))
+	endpoint := ChatURL(c.baseURL)
 	for _, m := range wire.Data {
 		if m.ID == "" {
 			continue
 		}
-		out = append(out, m.info())
+		info := m.info()
+		info.Endpoint = endpoint
+		out = append(out, info)
 	}
 	return out, nil
 }
@@ -410,20 +463,24 @@ func (c *Client) FreeModelInfos(ctx context.Context) ([]ModelInfo, error) {
 		return nil, fmt.Errorf("opencode: decode free models response: %w", err)
 	}
 	out := make([]ModelInfo, 0)
+	endpoint, _ := ZenChatURL(c.baseURL)
 	for _, m := range wire.Data {
 		if m.ID == "" || !m.isFree() {
 			continue
 		}
-		out = append(out, m.info())
+		info := m.info()
+		info.Endpoint = endpoint
+		out = append(out, info)
 	}
 	return out, nil
 }
 
 func zenModelsURL(base string) (string, bool) {
-	if !strings.Contains(base, "/zen/go/") {
+	zen, ok := ZenBaseURL(base)
+	if !ok {
 		return "", false
 	}
-	return strings.Replace(base, "/zen/go/", "/zen/", 1) + "/models", true
+	return zen + "/models", true
 }
 
 type wireModel struct {
@@ -474,7 +531,7 @@ func (m wireModel) info() ModelInfo {
 }
 
 func (m wireModel) isFree() bool {
-	return strings.HasSuffix(m.ID, "-free") || m.ID == "big-pickle"
+	return isFreeModelID(m.ID)
 }
 
 func (m wireModel) contextWindow() int {

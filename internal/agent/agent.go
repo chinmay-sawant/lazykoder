@@ -38,6 +38,9 @@ type Options struct {
 	// Model overrides the provider default for new sessions and every
 	// chat request. When empty the client default applies.
 	Model string
+	// Endpoint is the chat-completions URL for Model, from models.json.
+	// Empty uses the client default base.
+	Endpoint string
 	// Variant is the selected reasoning effort (low, medium, high).
 	// Empty omits the field so the provider default applies.
 	Variant string
@@ -137,6 +140,7 @@ func (a *Agent) Send(ctx context.Context, userText string, events chan<- Event) 
 		}
 		resp, err := a.client.Chat(ctx, opencode.ChatRequest{
 			Model:           a.opts.Model,
+			Endpoint:        a.opts.Endpoint,
 			ReasoningEffort: a.opts.Variant,
 			Messages:        history,
 			Tools:           []opencode.ToolSpec{bashToolSpec},

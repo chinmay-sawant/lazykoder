@@ -34,8 +34,10 @@ pickers are centered cards.
   truth for the picker. `/variant` shows whatever variants are stored
   for the current model, including `max` when the catalog lists it.
   Every model row keeps `cache_write_per_million` (0 when the provider
-  has no write price). Free OpenCode models come from the Zen models
-  list on `/refresh`. Reopening a session restores used tokens from
+  has no write price) and an `endpoint` (the chat-completions URL to
+  call). Free OpenCode models come from the Zen models list on
+  `/refresh` and keep the Zen endpoint so send does not hit the Go
+  API. Reopening a session restores used tokens from
   stored step-finish usage, or estimates them from the transcript.
   Session token totals never drop when a later step reports smaller
   usage. `/refresh` always rewrites that cache. Live text is painted
@@ -122,7 +124,8 @@ Selecting a model:
 1. updates the current chat model (shown in the status line),
 2. persists to `sessions.model` via `db.UpdateSessionModel` (when a session
    exists), and
-3. sends `ChatRequest.Model` on every subsequent turn.
+3. sends `ChatRequest.Model` and the stored `endpoint` on every
+   subsequent turn.
 
 The chosen model survives restart because the app resumes the latest session
 for the cwd on startup.

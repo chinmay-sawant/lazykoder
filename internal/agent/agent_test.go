@@ -32,6 +32,7 @@ type fakeProvider struct {
 	requests  [][]wireMessage
 	models    []string
 	variants  []string
+	paths     []string
 	srv       *httptest.Server
 }
 
@@ -58,6 +59,7 @@ func newFakeProvider(t *testing.T, responses ...string) *fakeProvider {
 		f.requests = append(f.requests, req.Messages)
 		f.models = append(f.models, req.Model)
 		f.variants = append(f.variants, req.ReasoningEffort)
+		f.paths = append(f.paths, r.URL.Path)
 		resp := f.responses[len(f.responses)-1]
 		if idx < len(f.responses) {
 			resp = f.responses[idx]
@@ -87,6 +89,15 @@ func (f *fakeProvider) requestVariants(idx int) string {
 		return ""
 	}
 	return f.variants[idx]
+}
+
+func (f *fakeProvider) requestPath(idx int) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if idx < 0 || idx >= len(f.paths) {
+		return ""
+	}
+	return f.paths[idx]
 }
 
 func (f *fakeProvider) requestMessages(idx int) []wireMessage {
@@ -802,6 +813,26 @@ func TestSendModelOption(t *testing.T) {
 	}
 	if model != "picked-model" {
 		t.Errorf("session model = %q, want picked-model", model)
+	}
+}
+
+func TestSendEndpointOption(t *testing.T) {
+	fake := newFakeProvider(t, respBody("hello", "", "stop", nil, nil))
+	st, _ := newTestEnv(t)
+	endpoint := fake.srv.URL + "/zen/v1/chat/completions"
+	a := New(st, newClient(t, fake.srv), t.TempDir(), Options{
+		Model:    "deepseek-v4-flash-free",
+		Endpoint: endpoint,
+	})
+
+	if _, err := sendAndCollect(t, a, "hi"); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if got := fake.requestModels(0); got != "deepseek-v4-flash-free" {
+		t.Errorf("wire model = %q", got)
+	}
+	if got := fake.requestPath(0); got != "/zen/v1/chat/completions" {
+		t.Errorf("path = %q, want /zen/v1/chat/completions", got)
 	}
 }
 

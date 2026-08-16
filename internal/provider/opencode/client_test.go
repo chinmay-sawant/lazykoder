@@ -418,6 +418,66 @@ func TestFreeModelInfosSkippedOnTestURL(t *testing.T) {
 	}
 }
 
+func TestModelInfosStampsGoEndpoint(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"data":[{"id":"deepseek-v4-flash"}]}`)
+	}))
+	defer srv.Close()
+	c := NewClient("k", WithBaseURL(srv.URL))
+	infos, err := c.ModelInfos(context.Background())
+	if err != nil {
+		t.Fatalf("ModelInfos: %v", err)
+	}
+	if len(infos) != 1 || infos[0].Endpoint != srv.URL+"/chat/completions" {
+		t.Fatalf("infos = %+v", infos)
+	}
+}
+
+func TestFreeModelInfosStampsZenEndpointAndAuth(t *testing.T) {
+	var zenAuth, zenPath, goPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/zen/v1/models"):
+			zenPath = r.URL.Path
+			zenAuth = r.Header.Get("Authorization")
+			fmt.Fprint(w, `{"data":[{"id":"deepseek-v4-flash-free"},{"id":"deepseek-v4-flash"}]}`)
+		case strings.HasSuffix(r.URL.Path, "/zen/go/v1/models"):
+			goPath = r.URL.Path
+			fmt.Fprint(w, `{"data":[{"id":"deepseek-v4-flash"}]}`)
+		default:
+			t.Errorf("unexpected path %q", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	c := NewClient("zen-key", WithBaseURL(srv.URL+"/zen/go/v1"))
+	goModels, err := c.ModelInfos(context.Background())
+	if err != nil {
+		t.Fatalf("ModelInfos: %v", err)
+	}
+	if goPath == "" || len(goModels) != 1 || goModels[0].Endpoint != srv.URL+"/zen/go/v1/chat/completions" {
+		t.Fatalf("go models = %+v path=%q", goModels, goPath)
+	}
+
+	zenModels, err := c.FreeModelInfos(context.Background())
+	if err != nil {
+		t.Fatalf("FreeModelInfos: %v", err)
+	}
+	if zenAuth != "Bearer zen-key" {
+		t.Fatalf("zen Authorization = %q", zenAuth)
+	}
+	if zenPath != "/zen/v1/models" {
+		t.Fatalf("zen path = %q", zenPath)
+	}
+	if len(zenModels) != 1 || zenModels[0].ID != "deepseek-v4-flash-free" {
+		t.Fatalf("zen models = %+v, want only the free id", zenModels)
+	}
+	if zenModels[0].Endpoint != srv.URL+"/zen/v1/chat/completions" {
+		t.Fatalf("zen endpoint = %q", zenModels[0].Endpoint)
+	}
+}
+
 func TestChatRequestSendsReasoningEffort(t *testing.T) {
 	var got string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -442,6 +502,52 @@ func TestChatRequestSendsReasoningEffort(t *testing.T) {
 	}
 	if got != "high" {
 		t.Fatalf("reasoning_effort = %q, want high", got)
+	}
+}
+
+func TestChatURLHelpers(t *testing.T) {
+	goBase := "https://opencode.ai/zen/go/v1"
+	if got := ChatURL(goBase); got != goBase+"/chat/completions" {
+		t.Fatalf("ChatURL = %q", got)
+	}
+	zen, ok := ZenChatURL(goBase)
+	if !ok || zen != "https://opencode.ai/zen/v1/chat/completions" {
+		t.Fatalf("ZenChatURL = %q %v", zen, ok)
+	}
+	if _, ok := ZenChatURL("http://127.0.0.1:1"); ok {
+		t.Fatal("ZenChatURL ok on non-go base")
+	}
+	if got := ChatURLForModel(goBase, "deepseek-v4-flash-free"); got != zen {
+		t.Fatalf("free model URL = %q, want %q", got, zen)
+	}
+	if got := ChatURLForModel(goBase, "deepseek-v4-flash"); got != goBase+"/chat/completions" {
+		t.Fatalf("go model URL = %q", got)
+	}
+}
+
+func TestChatRequestUsesEndpoint(t *testing.T) {
+	var gotPath, gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"hi","finish_reason":"stop"}}]}`)
+	}))
+	defer srv.Close()
+
+	c := NewClient("k", WithBaseURL(srv.URL+"/zen/go/v1"))
+	endpoint := srv.URL + "/zen/v1/chat/completions"
+	if _, err := c.Chat(context.Background(), ChatRequest{
+		Model:    "deepseek-v4-flash-free",
+		Endpoint: endpoint,
+		Messages: []Message{{Role: "user", Content: "x"}},
+	}); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if gotPath != "/zen/v1/chat/completions" {
+		t.Fatalf("path = %q, want /zen/v1/chat/completions", gotPath)
+	}
+	if gotAuth != "Bearer k" {
+		t.Fatalf("Authorization = %q", gotAuth)
 	}
 }
 

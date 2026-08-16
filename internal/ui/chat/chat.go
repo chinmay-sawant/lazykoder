@@ -383,6 +383,7 @@ func toCacheInfos(infos []opencode.ModelInfo) []modelscache.Info {
 	for _, info := range infos {
 		row := modelscache.Info{
 			ID:             info.ID,
+			Endpoint:       info.Endpoint,
 			Context:        info.Context,
 			InputPerM:      info.InputPerM,
 			OutputPerM:     info.OutputPerM,
@@ -792,6 +793,23 @@ func (m Model) modelLabel() string {
 		label = "default"
 	}
 	return label
+}
+
+// modelEndpoint is the chat-completions URL for the selected model.
+// models.json is the source of truth; free models without a stored
+// endpoint fall back to the Zen sibling of the Go client base.
+func (m Model) modelEndpoint() string {
+	id := m.model
+	if id == "" && m.client != nil {
+		id = m.client.Model()
+	}
+	if ep := modelscache.EndpointOf(m.modelInfos, id); ep != "" {
+		return ep
+	}
+	if m.client == nil {
+		return ""
+	}
+	return opencode.ChatURLForModel(m.client.BaseURL(), id)
 }
 
 func (m Model) modelDisplayLabel() string {

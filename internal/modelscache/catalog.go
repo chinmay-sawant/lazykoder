@@ -90,14 +90,28 @@ func ParseModelsDev(raw []byte) (map[string]Info, error) {
 			if id == "" {
 				continue
 			}
-			out[id] = liveInfo(id, m)
+			out[id] = liveInfo(id, m, key)
 		}
 	}
 	return out, nil
 }
 
-func liveInfo(id string, m liveModel) Info {
+// Known OpenCode chat-completions URLs. Kept here so the catalog can fill
+// models.json without importing the HTTP client. Must match the defaults
+// in internal/provider/opencode.
+const (
+	catalogGoChatURL  = "https://opencode.ai/zen/go/v1/chat/completions"
+	catalogZenChatURL = "https://opencode.ai/zen/v1/chat/completions"
+)
+
+func liveInfo(id string, m liveModel, provider string) Info {
 	info := Info{ID: id, Context: m.Limit.Context, Variants: effortVariants(m.ReasoningOptions)}
+	switch provider {
+	case "opencode-go":
+		info.Endpoint = catalogGoChatURL
+	case "opencode":
+		info.Endpoint = catalogZenChatURL
+	}
 	if m.Cost != nil {
 		info.InputPerM = m.Cost.Input
 		info.OutputPerM = m.Cost.Output
@@ -134,8 +148,8 @@ func effortVariants(opts []liveReasonOption) []string {
 	return out
 }
 
-// MergeLive copies missing context, prices, and variants from the live
-// catalog row. Existing non-zero API values are kept.
+// MergeLive copies missing context, prices, variants, and endpoint from
+// the live catalog row. Existing non-zero API values are kept.
 func MergeLive(info Info, live map[string]Info) Info {
 	fb, ok := live[info.ID]
 	if !ok {
@@ -161,6 +175,9 @@ func MergeLive(info Info, live map[string]Info) Info {
 	}
 	if len(info.Variants) == 0 && len(fb.Variants) > 0 {
 		info.Variants = append([]string(nil), fb.Variants...)
+	}
+	if info.Endpoint == "" && fb.Endpoint != "" {
+		info.Endpoint = fb.Endpoint
 	}
 	if fb.Free || isFreeID(info.ID) {
 		info.Free = true

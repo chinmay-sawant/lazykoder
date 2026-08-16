@@ -3,6 +3,8 @@ package chat
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +16,7 @@ import (
 
 	"github.com/chinmay-sawant/lazykoder/internal/db"
 	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
+	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
 
@@ -820,6 +823,74 @@ func TestRefreshWritesModelsCache(t *testing.T) {
 	}
 	if !strings.Contains(string(raw), `"cache_write_per_million"`) {
 		t.Fatalf("cache missing cache_write_per_million:\n%s", raw)
+	}
+	flash, ok := modelscache.InfoOf(infos, "deepseek-v4-flash")
+	if !ok || !strings.HasSuffix(flash.Endpoint, "/chat/completions") {
+		t.Fatalf("go model endpoint = %+v", flash)
+	}
+}
+
+func TestRefreshStampsZenEndpoint(t *testing.T) {
+	dir := t.TempDir()
+	cachePath := filepath.Join(dir, "models.json")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/zen/go/v1/models"):
+			fmt.Fprint(w, `{"data":[{"id":"deepseek-v4-flash"}]}`)
+		case strings.HasSuffix(r.URL.Path, "/zen/v1/models"):
+			if r.Header.Get("Authorization") == "" {
+				t.Error("zen models request missing Authorization")
+			}
+			fmt.Fprint(w, `{"data":[{"id":"deepseek-v4-flash-free"},{"id":"deepseek-v4-flash"}]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	c := opencode.NewClient("test-key", opencode.WithBaseURL(srv.URL+"/zen/go/v1"))
+	m := New(Options{Store: newTestStore(t), Client: c, Workdir: dir, CachePath: cachePath})
+	msg := m.refreshModels()
+	got, ok := msg.(modelsMsg)
+	if !ok {
+		t.Fatalf("refreshModels returned %T", msg)
+	}
+	if got.err != nil {
+		t.Fatalf("refreshModels err = %v", got.err)
+	}
+	infos, _, err := modelscache.Load(cachePath, time.Now(), modelscache.DefaultTTL)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	flash, ok := modelscache.InfoOf(infos, "deepseek-v4-flash")
+	if !ok || flash.Endpoint != srv.URL+"/zen/go/v1/chat/completions" {
+		t.Fatalf("go model = %+v", flash)
+	}
+	free, ok := modelscache.InfoOf(infos, "deepseek-v4-flash-free")
+	if !ok || free.Endpoint != srv.URL+"/zen/v1/chat/completions" {
+		t.Fatalf("zen free model = %+v", free)
+	}
+}
+
+func TestModelEndpointPrefersCacheThenFreeFallback(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	m.model = "deepseek-v4-flash-free"
+	m.modelInfos = []modelscache.Info{{
+		ID:       "deepseek-v4-flash-free",
+		Endpoint: "https://opencode.ai/zen/v1/chat/completions",
+	}}
+	if got := m.modelEndpoint(); got != "https://opencode.ai/zen/v1/chat/completions" {
+		t.Fatalf("cached endpoint = %q", got)
+	}
+
+	m.modelInfos = nil
+	m.client = opencode.NewClient("k", opencode.WithBaseURL("https://opencode.ai/zen/go/v1"))
+	if got := m.modelEndpoint(); got != "https://opencode.ai/zen/v1/chat/completions" {
+		t.Fatalf("free fallback = %q", got)
+	}
+
+	m.model = "deepseek-v4-flash"
+	if got := m.modelEndpoint(); got != "https://opencode.ai/zen/go/v1/chat/completions" {
+		t.Fatalf("go fallback = %q", got)
 	}
 }
 

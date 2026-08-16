@@ -52,9 +52,10 @@ status line; the prompt stays usable.
 | --- | --- |
 | Env | `OPENCODE_API_KEY` (alias `OPENCODE_ZEN_API_KEY`), optionally from `.env` |
 | Default model | `deepseek-v4-flash` |
-| Chat URL | `https://opencode.ai/zen/go/v1/chat/completions` |
-| Models URL | `https://opencode.ai/zen/go/v1/models` |
-| Auth header | `Authorization: Bearer <key>` |
+| Default chat URL | `https://opencode.ai/zen/go/v1/chat/completions` |
+| Go models URL | `https://opencode.ai/zen/go/v1/models` |
+| Zen models URL | `https://opencode.ai/zen/v1/models` |
+| Auth header | `Authorization: Bearer <key>` on every Go and Zen request |
 
 The client is OpenAI-compatible:
 
@@ -62,6 +63,10 @@ The client is OpenAI-compatible:
   The `tools` key is omitted entirely when no tools are advertised.
 - `ChatRequest.Model` overrides the client default per request when non-empty
   (used by the model picker).
+- `ChatRequest.Endpoint` is the full chat-completions URL from
+  `.lazykoder/models.json`. Go models use `/zen/go/v1/chat/completions`.
+  Free Zen models (for example `deepseek-v4-flash-free`) use
+  `/zen/v1/chat/completions`. Empty falls back to the client default.
 - Responses map defensively: `reasoning` or `reasoning_content`, usage with
   common token key variants, tool calls with raw JSON arguments.
 - HTTP errors become readable errors with status code and a body snippet.

@@ -56,6 +56,12 @@ func TestParseModelsDevReadsPricesAndVariants(t *testing.T) {
 	if !free.Free || !containsID(free.Variants, "max") {
 		t.Fatalf("free model = %+v", free)
 	}
+	if free.Endpoint != catalogZenChatURL {
+		t.Fatalf("free endpoint = %q, want zen chat URL", free.Endpoint)
+	}
+	if glm.Endpoint != catalogGoChatURL {
+		t.Fatalf("glm endpoint = %q, want go chat URL", glm.Endpoint)
+	}
 }
 
 func TestMergeLiveFillsMissingOnly(t *testing.T) {
@@ -68,6 +74,20 @@ func TestMergeLiveFillsMissingOnly(t *testing.T) {
 	}
 	if got.CacheReadPerM != 0.26 || strings.Join(got.Variants, ",") != "low,high,max" {
 		t.Fatalf("merge = %+v", got)
+	}
+}
+
+func TestMergeLiveFillsMissingEndpoint(t *testing.T) {
+	live := map[string]Info{
+		"deepseek-v4-flash-free": {Endpoint: catalogZenChatURL},
+	}
+	got := MergeLive(Info{ID: "deepseek-v4-flash-free"}, live)
+	if got.Endpoint != catalogZenChatURL {
+		t.Fatalf("endpoint = %q", got.Endpoint)
+	}
+	kept := MergeLive(Info{ID: "deepseek-v4-flash-free", Endpoint: "https://custom.example/v1/chat/completions"}, live)
+	if kept.Endpoint != "https://custom.example/v1/chat/completions" {
+		t.Fatalf("overwrote endpoint: %q", kept.Endpoint)
 	}
 }
 

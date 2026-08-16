@@ -187,6 +187,7 @@ func (m Model) submit(text string) (Model, tea.Cmd) {
 		Session:  m.session,
 		MaxSteps: m.maxSteps,
 		Model:    m.model,
+		Endpoint: m.modelEndpoint(),
 		Variant:  m.variant,
 		Confirm:  m.confirmHook,
 		Ask:      m.askHook,

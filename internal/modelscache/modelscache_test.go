@@ -11,7 +11,10 @@ import (
 func TestSaveLoadRoundtrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "models.json")
 	now := time.Now()
-	if err := Save(path, []Info{{ID: "deepseek-v4-flash", Context: 128000}, {ID: "claude-4", Context: 200000}}, now); err != nil {
+	if err := Save(path, []Info{
+		{ID: "deepseek-v4-flash", Endpoint: "https://opencode.ai/zen/go/v1/chat/completions", Context: 128000},
+		{ID: "claude-4", Context: 200000},
+	}, now); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 	models, fresh, err := Load(path, now.Add(time.Minute), DefaultTTL)
@@ -23,6 +26,12 @@ func TestSaveLoadRoundtrip(t *testing.T) {
 	}
 	if models[0].Context != 128000 {
 		t.Errorf("context = %d, want 128000", models[0].Context)
+	}
+	if models[0].Endpoint != "https://opencode.ai/zen/go/v1/chat/completions" {
+		t.Errorf("endpoint = %q", models[0].Endpoint)
+	}
+	if EndpointOf(models, "deepseek-v4-flash") == "" || EndpointOf(models, "missing") != "" {
+		t.Errorf("EndpointOf = %q / %q", EndpointOf(models, "deepseek-v4-flash"), EndpointOf(models, "missing"))
 	}
 	if !fresh {
 		t.Error("fresh = false, want true within TTL")
