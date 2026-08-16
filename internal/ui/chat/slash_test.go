@@ -90,11 +90,15 @@ func TestSlashMenuFilterAndRunNew(t *testing.T) {
 	if m.slashMode {
 		t.Fatal("slash mode still open after enter")
 	}
-	if !m.pickerMode {
-		t.Fatal("enter on /model did not open the picker")
+	if !m.pickerMode || !m.pickerFromPrompt {
+		t.Fatal("enter on /model did not open the search drawer")
+	}
+	if got := m.prompt.Value(); got != "/model " {
+		t.Fatalf("prompt after /mode enter = %q, want %q", got, "/model ")
 	}
 
 	m = upd(m, tea.KeyPressMsg{Code: tea.KeyEscape})
+	m.prompt.SetValue("")
 	m.items = append(m.items, transcriptItem{kind: itemNote, text: "old line"})
 	m = typeRune(m, '/')
 	m = upd(m, tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -137,7 +141,7 @@ func TestSlashMenuFullWidthLeftAligned(t *testing.T) {
 		t.Fatal("/model row missing")
 	}
 	nameAt := strings.Index(modelLine, "/model")
-	descAt := strings.Index(modelLine, "switch the chat model")
+	descAt := strings.Index(modelLine, "search and switch the chat model")
 	if nameAt < 0 || descAt < 0 || nameAt > descAt {
 		t.Fatalf("/model should sit left of its description on the same line: %q", modelLine)
 	}
@@ -157,6 +161,127 @@ func TestSlashMenuEscapeLeavesSlash(t *testing.T) {
 	}
 	if got := m.prompt.Value(); got != "/" {
 		t.Errorf("prompt after esc = %q, want /", got)
+	}
+}
+
+func TestSlashModelSearchFiltersDrawer(t *testing.T) {
+	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
+	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
+	m.models = []string{"deepseek-v4-flash", "deepseek-v4-flash-free", "claude-4", "grok-4.5"}
+	m.modelInfos = []modelscache.Info{
+		{ID: "deepseek-v4-flash", Provider: modelscache.ProviderOpenCodeGo},
+		{ID: "deepseek-v4-flash-free", Provider: modelscache.ProviderOpenCodeZen, Free: true},
+		{ID: "claude-4", Provider: modelscache.ProviderOpenCodeGo},
+		{ID: "grok-4.5", Provider: modelscache.ProviderOpenCodeGo},
+	}
+
+	for _, r := range "/model" {
+		m = typeRune(m, r)
+	}
+	if m.slashMode {
+		t.Fatal("slash menu still open after /model")
+	}
+	if !m.pickerMode || !m.pickerFromPrompt {
+		t.Fatalf("pickerMode=%v fromPrompt=%v, want model drawer from prompt", m.pickerMode, m.pickerFromPrompt)
+	}
+	if !containsModel(m.pickerItems, "deepseek-v4-flash") || !containsModel(m.pickerItems, "claude-4") {
+		t.Fatalf("full /model list = %v", m.pickerItems)
+	}
+	if got := m.prompt.Value(); got != "/model " {
+		t.Fatalf("prompt after typing /model = %q, want trailing space", got)
+	}
+	hint := stripANSI(m.pickerView())
+	if !strings.Contains(hint, "type to search") {
+		t.Fatalf("missing type-to-search hint: %q", hint)
+	}
+
+	for _, r := range "ope" {
+		m = typeRune(m, r)
+	}
+	if got := m.prompt.Value(); got != "/model ope" {
+		t.Fatalf("prompt = %q, want /model ope", got)
+	}
+	if !containsModel(m.pickerItems, "deepseek-v4-flash") || !containsModel(m.pickerItems, "deepseek-v4-flash-free") {
+		t.Fatalf("ope filter missing opencode models: %v", m.pickerItems)
+	}
+
+	m = typeRune(m, ' ')
+	for _, r := range "zen" {
+		m = typeRune(m, r)
+	}
+	if len(m.pickerItems) != 1 || m.pickerItems[0] != "deepseek-v4-flash-free" {
+		t.Fatalf("opencode zen filter = %v, want only deepseek-v4-flash-free", m.pickerItems)
+	}
+	v := stripANSI(m.pickerView())
+	if strings.Contains(v, "claude-4") || strings.Contains(v, "grok-4.5") {
+		t.Fatalf("drawer still shows non-matching models: %q", v)
+	}
+	if !strings.Contains(v, "deepseek-v4-flash-free") {
+		t.Fatalf("drawer missing the matching model: %q", v)
+	}
+
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.pickerMode {
+		t.Fatal("picker still open after select")
+	}
+	if m.model != "deepseek-v4-flash-free" {
+		t.Fatalf("model = %q, want deepseek-v4-flash-free", m.model)
+	}
+	if got := m.prompt.Value(); got != "" {
+		t.Fatalf("prompt after select = %q, want empty", got)
+	}
+}
+
+func TestSlashModelSearchBackspaceReturnsToMenu(t *testing.T) {
+	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
+	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
+	for _, r := range "/model" {
+		m = typeRune(m, r)
+	}
+	if !m.pickerMode {
+		t.Fatal("expected drawer on /model")
+	}
+	if got := m.prompt.Value(); got != "/model " {
+		t.Fatalf("prompt = %q, want /model with trailing space", got)
+	}
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyBackspace})
+	if m.pickerMode {
+		t.Fatal("drawer still open after backspace to /mode")
+	}
+	if !m.slashMode {
+		t.Fatal("slash menu did not return after /mode")
+	}
+	if got := m.prompt.Value(); got != "/mode" {
+		t.Fatalf("prompt after backspace = %q, want /mode", got)
+	}
+}
+
+func TestSlashModelUnmatchedQueryHidesDrawer(t *testing.T) {
+	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
+	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
+	m.models = []string{"deepseek-v4-flash", "claude-4"}
+	m.modelInfos = []modelscache.Info{
+		{ID: "deepseek-v4-flash", Provider: modelscache.ProviderOpenCodeGo},
+		{ID: "claude-4", Provider: modelscache.ProviderOpenCodeGo},
+	}
+	for _, r := range "/model" {
+		m = typeRune(m, r)
+	}
+	for _, r := range "this is the thing I want to test" {
+		m = typeRune(m, r)
+	}
+	if m.pickerMode {
+		t.Fatal("empty model drawer still open for unmatched prompt text")
+	}
+	if m.slashMode {
+		t.Fatal("slash menu still open for unmatched /model text")
+	}
+	v := stripANSI(viewText(m))
+	if strings.Contains(v, "no models match") || strings.Contains(v, "models  ·") {
+		t.Fatalf("model box still shown for a normal prompt: %q", v)
+	}
+	if got := m.prompt.Value(); got != "/model this is the thing I want to test" {
+		t.Fatalf("prompt = %q", got)
 	}
 }
 

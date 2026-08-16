@@ -184,14 +184,15 @@ type Model struct {
 	pulse   int
 	pulseOn bool
 
-	pickerVp        viewport.Model
-	pickerItems     []string
-	pickerCursor    int
-	pickerFilter    string
-	pickerFiltering bool
-	pickerBuilt     bool
-	pickerMode      bool
-	pickerKind      string
+	pickerVp         viewport.Model
+	pickerItems      []string
+	pickerCursor     int
+	pickerFilter     string
+	pickerFiltering  bool
+	pickerBuilt      bool
+	pickerMode       bool
+	pickerKind       string
+	pickerFromPrompt bool
 
 	sessionPickerMode bool
 	sessionItems      []db.Session
@@ -249,7 +250,7 @@ type copyNoticeMsg struct{}
 var slashCommands = []slashCmd{
 	{name: "/new", description: "start a new session and clear the transcript"},
 	{name: "/sessions", description: "open a previous session"},
-	{name: "/model", description: "switch the chat model"},
+	{name: "/model", description: "search and switch the chat model"},
 	{name: "/variant", description: "switch the model variant (low, medium, high)"},
 	{name: "/refresh", description: "reload the model list from the server"},
 	{name: "/help", description: "show the keyboard shortcuts"},

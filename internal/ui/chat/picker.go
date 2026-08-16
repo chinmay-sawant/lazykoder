@@ -61,7 +61,9 @@ func (m Model) pickerView() string {
 	}
 
 	filter := "filter /  •  r refresh  •  enter select  •  esc cancel"
-	if m.pickerFiltering {
+	if m.pickerFromPrompt {
+		filter = "type to search  •  enter select  •  esc cancel"
+	} else if m.pickerFiltering {
 		filter = "filter: " + m.pickerFilter + "▏"
 	} else if m.pickerFilter != "" {
 		filter = "filter: " + m.pickerFilter + "  •  enter select"
@@ -126,6 +128,9 @@ func (m Model) updatePickerKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 	if key.Mod.Contains(tea.ModCtrl) && key.Code == 'c' {
 		return m.closeDone(), tea.Quit
 	}
+	if m.pickerFromPrompt {
+		return m.updatePromptPickerKey(key)
+	}
 	if m.pickerFiltering {
 		switch key.Code {
 		case tea.KeyEscape, tea.KeyEnter:
@@ -181,6 +186,54 @@ func (m Model) updatePickerKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m Model) updatePromptPickerKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
+	switch key.Code {
+	case tea.KeyEscape:
+		m = m.closePicker()
+		m.slashMode = false
+		m.slashCursor = 0
+		m.prompt.SetValue("/")
+		return m, nil
+	case tea.KeyEnter:
+		return m.selectPickerItem(m.pickerCursor)
+	case tea.KeyDown:
+		if m.pickerCursor < len(m.pickerItems)-1 {
+			m.pickerCursor++
+			m = m.refreshPickerCursor()
+		}
+		return m, nil
+	case tea.KeyUp:
+		if m.pickerCursor > 0 {
+			m.pickerCursor--
+			m = m.refreshPickerCursor()
+		}
+		return m, nil
+	case tea.KeyPgDown:
+		m.pickerVp.PageDown()
+		return m, nil
+	case tea.KeyPgUp:
+		m.pickerVp.PageUp()
+		return m, nil
+	case tea.KeyBackspace, tea.KeyDelete:
+		if m.prompt.Value() == "/model " {
+			m = m.rememberPrompt()
+			m.prompt.SetValue("/mode")
+			return m.syncSlash("/mode"), nil
+		}
+		m = m.rememberPrompt()
+		var cmd tea.Cmd
+		m.prompt, cmd = m.prompt.Update(key)
+		return m.syncSlash(m.prompt.Value()), cmd
+	}
+	if key.Text != "" {
+		m = m.rememberPrompt()
+		var cmd tea.Cmd
+		m.prompt, cmd = m.prompt.Update(key)
+		return m.syncSlash(m.prompt.Value()), cmd
+	}
+	return m, nil
+}
+
 func (m Model) selectPickerItem(idx int) (Model, tea.Cmd) {
 	if !m.pickerBuilt || idx < 0 || idx >= len(m.pickerItems) {
 		return m, nil
@@ -188,7 +241,7 @@ func (m Model) selectPickerItem(idx int) (Model, tea.Cmd) {
 	if m.pickerKind == pickerKindVariant {
 		m.variant = m.pickerItems[idx]
 		m.syncSessionVariant()
-		m.pickerMode = false
+		m = m.finishPickerSelection()
 		return m, m.persistVariant()
 	}
 	m.model = m.pickerItems[idx]
@@ -196,13 +249,23 @@ func (m Model) selectPickerItem(idx int) (Model, tea.Cmd) {
 		m.variant = ""
 	}
 	m.syncSessionVariant()
-	m.pickerMode = false
+	m = m.finishPickerSelection()
 	return m, m.persistSelection()
+}
+
+func (m Model) finishPickerSelection() Model {
+	if m.pickerFromPrompt {
+		m.prompt.SetValue("")
+		m.promptUndo = nil
+		m.slashFromPaste = false
+	}
+	return m.closePicker()
 }
 
 func (m Model) closePicker() Model {
 	m.pickerMode = false
 	m.pickerFiltering = false
+	m.pickerFromPrompt = false
 	m.pickerKind = pickerKindModel
 	m.dragOn = false
 	return m
@@ -222,10 +285,7 @@ func (m *Model) applyFilter() {
 	m.pickerItems = nil
 	needle := strings.ToLower(m.pickerFilter)
 	for _, id := range m.pickerSource() {
-		provider := strings.ToLower(modelscache.ProviderOf(m.modelInfos, id))
-		if needle == "" || strings.Contains(strings.ToLower(id), needle) ||
-			strings.Contains(provider, needle) ||
-			(needle == "free" && modelscache.IsFree(modelscache.Info{ID: id})) {
+		if modelMatchesFilter(id, modelscache.ProviderOf(m.modelInfos, id), needle) {
 			m.pickerItems = append(m.pickerItems, id)
 		}
 	}
@@ -239,6 +299,25 @@ func (m *Model) applyFilter() {
 	} else {
 		m.pickerVp.EnsureVisible(m.pickerCursor, 0, 1)
 	}
+}
+
+func modelMatchesFilter(id, provider, needle string) bool {
+	if needle == "" {
+		return true
+	}
+	haystack := strings.ToLower(id + " " + provider)
+	if modelscache.IsFree(modelscache.Info{ID: id}) {
+		haystack += " free"
+	}
+	if strings.Contains(haystack, needle) {
+		return true
+	}
+	for _, tok := range strings.Fields(needle) {
+		if !strings.Contains(haystack, tok) {
+			return false
+		}
+	}
+	return len(strings.Fields(needle)) > 0
 }
 
 func (m Model) openPicker() Model {

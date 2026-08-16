@@ -111,6 +111,12 @@ free OpenCode models. Each row shows the provider on the right
 (`opencode go` or `opencode zen`). Navigation: `j`/`k` or arrows;
 `enter` or a click selects, `esc`/`q` cancels. `/` enters model
 filtering (also by provider) and `r` refreshes the model list.
+Typing `/model` (or `/mode` then enter) opens the drawer with a
+trailing space so you can type a search right away. `/model ope`
+or `/model flash` filters the list live. If the extra text matches
+no model, the drawer closes so a normal prompt like `/model and
+then this is the thing I want to test` is not blocked by an empty
+model box.
 
 `/variant` opens the same card for the current model's reasoning variants
 from `models.json`. The choice is stored in `sessions.variant` and sent

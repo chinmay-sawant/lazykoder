@@ -63,6 +63,9 @@ func (m Model) updateSlashKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 			m.slashMode = false
 			m.slashCursor = 0
 			m.slashFromPaste = false
+			if name == "/model" {
+				return m.openModelSearch(), nil
+			}
 			m.prompt.SetValue("")
 			m.promptUndo = nil
 			return m.runSlash(name)
@@ -101,7 +104,7 @@ func (m Model) runSlash(name string) (Model, tea.Cmd) {
 	case "/sessions":
 		return m.openSessionPicker(), nil
 	case "/model":
-		return m.openPicker(), nil
+		return m.openModelSearch(), nil
 	case "/variant":
 		return m.openVariantPicker(), nil
 	case "/refresh":
@@ -116,10 +119,36 @@ func (m Model) runSlash(name string) (Model, tea.Cmd) {
 // when the prompt starts with "/" and closes when it no longer does.
 func (m Model) syncSlash(value string) Model {
 	if !strings.HasPrefix(value, "/") {
+		if m.pickerFromPrompt {
+			m = m.closePicker()
+		}
 		m.slashMode = false
 		m.slashCursor = 0
 		m.slashFromPaste = false
 		return m
+	}
+	if query, ok := modelSearchQuery(value); ok {
+		if strings.EqualFold(value, "/model") {
+			m.prompt.SetValue("/model ")
+			query = ""
+		}
+		m.slashMode = false
+		m.slashCursor = 0
+		if !m.pickerMode || m.pickerKind != pickerKindModel {
+			m = m.openKindPicker(pickerKindModel)
+		}
+		m.pickerFromPrompt = true
+		m.pickerFilter = query
+		m.pickerFiltering = false
+		m.applyFilter()
+		if query != "" && len(m.pickerItems) == 0 {
+			m = m.closePicker()
+			m.slashMode = false
+		}
+		return m
+	}
+	if m.pickerFromPrompt {
+		m = m.closePicker()
 	}
 	partial := strings.ToLower(strings.TrimPrefix(value, "/"))
 	m.slashItems = nil
@@ -133,6 +162,28 @@ func (m Model) syncSlash(value string) Model {
 	}
 	m.slashMode = true
 	return m
+}
+
+// modelSearchQuery reports whether value is `/model` plus an optional
+// search string. The search looks through model names and providers.
+func modelSearchQuery(value string) (string, bool) {
+	if !strings.HasPrefix(value, "/") {
+		return "", false
+	}
+	rest := strings.ToLower(strings.TrimPrefix(value, "/"))
+	if rest == "model" {
+		return "", true
+	}
+	if strings.HasPrefix(rest, "model ") {
+		return strings.TrimSpace(rest[len("model"):]), true
+	}
+	return "", false
+}
+
+func (m Model) openModelSearch() Model {
+	m.prompt.SetValue("/model ")
+	m.promptUndo = nil
+	return m.syncSlash("/model ")
 }
 
 func (m Model) syncPromptSlash() Model {
