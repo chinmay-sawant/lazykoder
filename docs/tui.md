@@ -69,7 +69,9 @@ pickers are centered cards.
   shortcuts in two columns. `esc` or `?` closes it.
 - `@` in the prompt opens a project file picker. Enter inserts `@path`.
 - Dragging across transcript rows selects and copies the range on mouse
-  release; a temporary `text copied` notice appears above the prompt. A
+  release; a temporary `text copied` notice appears above the prompt. The
+  left work rail and user-frame curls stay on screen for layout, but are
+  stripped from the clipboard so the paste is plain message text. A
   click on a tool card or reasoning header expands or collapses that item
   instead of starting a selection. Clicks on the model status and scrollbar
   keep their existing navigation behavior. A click on a slash-menu row runs

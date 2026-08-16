@@ -382,7 +382,23 @@ func (m Model) selectedText() (string, bool) {
 		if row == end.row {
 			to = end.col
 		}
-		selected = append(selected, ansi.Cut(rows[row], from, to))
+		// Keep on-screen rails/brackets for layout; strip them from the
+		// clipboard so drag-copy yields plain message text.
+		selected = append(selected, stripTranscriptChrome(ansi.Cut(rows[row], from, to)))
 	}
 	return strings.Join(selected, "\n"), true
+}
+
+// stripTranscriptChrome removes left layout markers (work rail, user frame
+// curls) from a copied transcript slice. The markers stay visible in the TUI.
+func stripTranscriptChrome(line string) string {
+	for _, p := range []string{workRail + " ", "╭ ", "╰ "} {
+		if strings.HasPrefix(line, p) {
+			return strings.TrimPrefix(line, p)
+		}
+	}
+	if line == workRail {
+		return ""
+	}
+	return line
 }
