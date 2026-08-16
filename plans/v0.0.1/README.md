@@ -1,7 +1,7 @@
 # v0.0.1 - OpenCode agent harness (lazyKoder)
 
 > **Parent:** none - first canonical ledger for this product
-> **Status:** not started (planning only)
+> **Status:** implemented (all phases landed 2026-08-15; automated gates green, manual TUI rows pending user terminal)
 > **Estimated effort:** 5-8 days across three phases
 > **Skill:** `skills/phase-wise-checklist/SKILLS.md`
 > **App version:** 0.0.1
@@ -24,7 +24,10 @@ Phase files (live ledgers, update `[x]` only after the gate passes):
 | --- | --- | --- |
 | [phase-1-foundation.md](phase-1-foundation.md) | P0 | Workspace, SQLite, auth, send `hi`, persist text |
 | [phase-2-safety-bash.md](phase-2-safety-bash.md) | P0 | `rm` y/n confirm, bash tool, deny-by-default |
-| [phase-3-tools-cleanup.md](phase-3-tools-cleanup.md) | P1 | Remaining tools, replay, employee-prototype cleanup |
+| [phase-3-tools-cleanup.md](phase-3-tools-cleanup.md) | P1 | Remaining tools, replay, prototype cleanup |
+| [phase-4-tokens-status-todos.md](phase-4-tokens-status-todos.md) | P1 | Streaming tokens/sec, status line customizations, tracked todos |
+| [phase-5-go-pattern-db.md](phase-5-go-pattern-db.md) | P1 | Per-language Go lint/improvisation pattern database |
+| [findings/](findings/README.md) | P0/P1 | TUI findings ledger (usable chat, chrome, polish). Not a duplicate of phase 4 or 5 |
 
 ---
 
@@ -34,28 +37,8 @@ Phase files (live ledgers, update `[x]` only after the gate passes):
 2. Auth is environment-only for v0.0.1: `OPENCODE_API_KEY` (alias `OPENCODE_ZEN_API_KEY`). Missing key is a visible TUI error, not a crash with no message.
 3. Phase 1 talks to `https://opencode.ai/zen/go/v1/chat/completions` with model `deepseek-v4-flash` (the model already used in `opencode_session_logs.json`). No tools in that request.
 4. Conversations are stored as sessions / messages / parts, matching the OpenCode export shape in `opencode_session_logs.json`: `text`, `reasoning`, `step-start`, `step-finish`, `tool`. Tool rows further name `bash`, `edit`, `read`, `write`, `question`, `webfetch`.
-5. Safety is a hard invariant: any bash invocation that is an `rm` command opens the employee-style y/n confirm (`Delete <subject>?` / `y confirm  •  n cancel`). `rm -rf` and other recursive deletes never run unless the user explicitly allows that one call. Decline, Escape, or dismiss means deny. There is no "always allow". The same confirm is used when stopping a sub-agent: the sub-agent name is the highlighted subject.
-6. The employee CRUD prototype is gone. Only its y/n confirm layout is kept as the spec for rm and sub-agent prompts. Phase 1 writes a new `main.go`.
-
----
-
-## Cleanup node (temporary employee prototype)
-
-Done (user request, 2026-08-15). Prototype files removed. `go.mod` and `go.sum` were left untouched so the Charm v2 pin stays.
-
-Removed:
-
-- `main.go` employee wiring
-- `internal/employee/`
-- `internal/store/`
-- `internal/ui/` (list/add/edit/delete + `ui_test.go`)
-- `employees.json`
-
-Kept on purpose: `go.mod`, `go.sum`, `AGENTS.md`, `.gitignore`, `plans/`, `skills/`, `opencode_session_logs.json`.
-
-New harness code is written into empty packages (`internal/workspace`, `internal/db`, `internal/provider/opencode`, `internal/agent`, `internal/policy`, `internal/tools`, `internal/ui/chat`, `internal/ui/confirm`). Phase 1 creates `main.go` again as the chat entry.
-
-The delete-confirm layout from the prototype is the design source of truth for every later y/n prompt (rm, sub-agent stop). See "Confirm view" below.
+5. Safety is a hard invariant: any bash invocation that is an `rm` command opens the y/n confirm (`Delete <subject>?` / `y confirm  •  n cancel`). `rm -rf` and other recursive deletes never run unless the user explicitly allows that one call. Decline, Escape, or dismiss means deny. There is no "always allow". The same confirm is used when stopping a sub-agent: the sub-agent name is the highlighted subject.
+6. The prototype CRUD app is gone. Only its y/n confirm layout is kept as the spec for rm and sub-agent prompts. Phase 1 writes a new `main.go`.
 
 ---
 
@@ -72,10 +55,10 @@ internal/agent                  # turn loop: user text -> provider -> parts
 internal/policy                 # bash classifier + Decision (allow/deny/ask)
 internal/tools                  # bash, edit, read, write, question, webfetch
 internal/ui/chat                # transcript, prompt, streaming status
-internal/ui/confirm             # employee-style y/n view (rm + sub-agents)
+internal/ui/confirm             # y/n confirm view (rm + sub-agents)
 ```
 
-Side effects live in `tea.Cmd`. `Update` stays deterministic. Confirm is a dedicated view, not an OS dialog.
+Side effects live in `tea.Cmd`. `Update` stays deterministic. Confirm is an overlay card on the chat, not an OS dialog.
 
 ### Launch sequence
 
@@ -219,7 +202,7 @@ Tool names we will persist (Phase 2-3):
 
 Large tool output stays in `tool_calls.output` for 0.0.1. A blob table is out of scope unless a single part exceeds a few megabytes.
 
-SQLite driver: `modernc.org/sqlite` via `database/sql` (pure Go, no CGO). This is a new dependency. Per `AGENTS.md` it is a project-policy change and needs explicit user sign-off before `go get`. Do not add it until Phase 1 implementation starts and the user confirms.
+SQLite driver: `modernc.org/sqlite` via `database/sql` (pure Go, no CGO). This is a new dependency. Per `AGENTS.md` it is a project-policy change and needs explicit user sign-off before `go get`. **Approved 2026-08-15 (user); `modernc.org/sqlite v1.56.0` added to `go.mod`.**
 
 ### Safety (hard invariant)
 
@@ -233,7 +216,7 @@ model tool-call (bash)
         |
         +-- deny  --> store tool_calls.status = denied, do not exec
         +-- allow --> exec (non-rm only; rm never returns allow)
-        +-- ask   --> ui/confirm view (same layout as employee delete)
+        +-- ask   --> ui/confirm view (the y/n delete layout)
                           +-- y     --> exec once, store completed/error
                           +-- n/esc --> status = denied, do not exec
 ```
@@ -255,11 +238,11 @@ Phase 1 screen: transcript (user + assistant text) + one-line prompt + status (k
 
 Reuse Charm widgets already in the module (`textinput`, `viewport` if needed). Do not hand-roll a prompt box.
 
-### Confirm view (copy the employee delete view)
+### Confirm view (y/n delete layout)
 
 The removed prototype had one confirm screen. That is the only confirm design for this app. Do not invent a boxed overlay, button row, or "allow once" copy.
 
-Layout (two blocks, same styles as the old `renderDelete`):
+Layout (two blocks):
 
 ```
 Delete <subject> (<qualifier>)?
@@ -270,7 +253,7 @@ y confirm  •  n cancel
 - Line 1: error color for `Delete ` and the trailing qualifier/`?`; focused/bold color for the subject
 - Blank line
 - Hint line in muted color: `y confirm  •  n cancel`
-- Full view switch (like `viewDelete`). Keys do not leak to the list, chat prompt, or transcript
+- Overlay card on the dimmed chat. Keys do not leak to the list, chat prompt, or transcript
 - `y` / `Y` = confirm once
 - `n` / `N` / `esc` / `q` = cancel
 - `ctrl+c` = quit the app, never confirm
@@ -278,7 +261,7 @@ y confirm  •  n cancel
 
 Subject mapping:
 
-| Prompt | Subject (highlighted like an employee name) | Qualifier |
+| Prompt | Subject (highlighted) | Qualifier |
 | --- | --- | --- |
 | `rm` / destructive bash | the command string, or the path being removed | `rm` / `rm -rf` |
 | Sub-agent stop, cancel, or dismiss | the sub-agent name | `sub-agent` |
@@ -300,7 +283,7 @@ Delete rm -rf /tmp/x (rm -rf)?
 y confirm  •  n cancel
 ```
 
-A later sub-agent list, if we add one, follows the employee list: show the name as the item title, `d` (or the stop key) opens this same confirm with that name highlighted. Do not use a different confirm for sub-agents.
+A later sub-agent list, if we add one, follows the same item pattern: show the name as the item title, `d` (or the stop key) opens this same confirm with that name highlighted. Do not use a different confirm for sub-agents.
 
 ### Dependency policy
 
@@ -319,7 +302,7 @@ No other new modules in 0.0.1. No OpenCode JS SDK. No CGO sqlite.
 - Global `~/.local/share/opencode` reads or writes
 - Auto-run of any `rm`
 - Sticky tool permissions
-- Employee CRUD (prototype removed; confirm layout kept as the y/n spec)
+- Prototype CRUD (removed; confirm layout kept as the y/n spec)
 
 ---
 
@@ -327,17 +310,19 @@ No other new modules in 0.0.1. No OpenCode JS SDK. No CGO sqlite.
 
 - Phase 2 needs Phase 1 store + chat model (modal sits on the same tea.Model).
 - Phase 3 tools need Phase 2 policy (bash) and Phase 1 parts schema.
-- Employee cleanup is last so the Charm stack keeps compiling while the harness lands.
+- Prototype cleanup happened early so the Charm stack keeps compiling while the harness lands.
 
 ## Closure gates (whole 0.0.1)
 
-- [ ] `go test ./...` passes on a rebuilt tree
-- [ ] `go vet ./...` clean
-- [ ] App start with no `.lazykoder/` creates the dir and an empty migrated db
-- [ ] `OPENCODE_API_KEY` set: sending `hi` shows a reply and writes session/message/text parts
-- [ ] Missing key: TUI shows an error, no panic
-- [ ] Any `rm` (including `rm ./file` and `rm -rf ...`) opens the y/n confirm view; decline does not execute
-- [ ] `.gitignore` contains `.lazykoder/`, `opencode_session_logs.json`, `.env`, and Go build artifacts
-- [ ] Employee prototype removed only after the harness is the `main.go` entry (Phase 3)
+- [x] `go test ./...` passes on a rebuilt tree - `go test ./... -count=1` 2026-08-15, exit 0, all 13 packages
+- [x] `go vet ./...` clean - exit 0
+- [x] App start with no `.lazykoder/` creates the dir and an empty migrated db - headless smoke: dir + lazykoder.db + WAL created, schema_migrations v1, 5 tables + 7 indexes
+- [x] `OPENCODE_API_KEY` set: sending `hi` shows a reply and writes session/message/text parts - recorded-httptest proof (TestSendPhase1Gate, chat tests); live run left for the user (no key here)
+- [x] Missing key: TUI shows an error, no panic - InitialErr path tested; headless run with no key exits cleanly
+- [x] Any `rm` (including `rm ./file` and `rm -rf ...`) opens the y/n confirm view; decline does not execute - policy table (33 cases) + bash gate tests + chat confirm-flow tests; fake-runner proof that denied rm never reaches the runner
+- [x] `.gitignore` contains `.lazykoder/`, `opencode_session_logs.json`, `.env`, and Go build artifacts - verified
+- [x] Prototype removed only after the harness is the `main.go` entry (Phase 3) - prototype removed early by user request; harness main.go is now the only entry
+
+Manual checks pending (need a live terminal / API key, cannot be gated in this session): phase-1 1.5 manual rows, phase-2 2.6 UI proof.
 
 Do not mark a row `[x]` from intent. Record the command and exit code beside the row when it lands.

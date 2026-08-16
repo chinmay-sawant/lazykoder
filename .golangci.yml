@@ -1,0 +1,53 @@
+# golangci-lint configuration for lazyKoder.
+# Keep this list deliberately small and high-signal. In particular, do not
+# enable whitespace, blank-line, line-length, naming, or parameter-layout
+# linters as repository gates.
+# Docs: https://golangci-lint.run/usage/configuration/
+#
+# Toolchain note: this module is go 1.26 / toolchain go1.26.4.
+
+run:
+  timeout: 10m
+  tests: true
+
+linters:
+  disable-all: true
+  enable:
+    # Compiler and static correctness.
+    - govet
+    - staticcheck
+    - typecheck
+    - ineffassign
+    - unused
+
+    # Error and resource handling.
+    - errcheck
+    - errorlint
+    - nilerr
+    - nilnesserr
+    - bodyclose
+    - rowserrcheck
+    - sqlclosecheck
+    - durationcheck
+    - noctx
+
+    # Security and project policy.
+    - gosec
+    - gomodguard
+
+    # Deliberate maintainability guardrails.
+    - mnd
+    - nolintlint
+
+issues:
+  # Report every finding. Default caps hide useful diagnostics.
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+  # Keep generated or vendored frontend trees out of Go analysis if they exist.
+  exclude-dirs:
+    - node_modules
+    - frontend/dist
+
+output:
+  sort-results: true

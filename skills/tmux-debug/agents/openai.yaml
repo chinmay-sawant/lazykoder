@@ -1,0 +1,4 @@
+interface:
+  display_name: "Bubble Tea tmux Debugging"
+  short_description: "Capture Bubble Tea layouts in tmux"
+  default_prompt: "Use $tmux-debug to reproduce and inspect this Bubble Tea layout in a tmux pseudo-terminal."

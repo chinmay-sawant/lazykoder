@@ -13,7 +13,7 @@ Bubble Tea (charmbracelet) TUI agent harness written in Go. v0.0.1 supports
 OpenCode Go only. Project workspace is `.lazykoder/` in the current working
 directory. Small repo, small team: **one agent at a time, no subagent waves
 until the codebase grows**.
-Module: `employee-tui` (local name, rename pending). Default branch: `master`.
+Module: `github.com/chinmay-sawant/lazykoder` (renamed from `lazykoder` on 2026-08-15, and from the prototype module name before that). Default branch: `master`.
 
 ## Golden rules (from the gowkhtmltopdf audit)
 
@@ -56,7 +56,7 @@ Module: `employee-tui` (local name, rename pending). Default branch: `master`.
      dropped `display:flex/grid`, W/H swaps, float precision breaks.)
 2. **Verifying against stale artifacts.** Rebuild before any verification
    run — compliance validators once ran against an old binary, and committed
-   PDFs were trusted as proof of current behavior. In this repo: `go run .`
+   PDFs were trusted as proof of current behavior. In this repo: `make run`
    / `go test ./...` before claiming anything works.
 3. **Claiming completion without the gate output.** A task is done only when
    the final exit code says so. One session claimed "resolved and verified"
@@ -144,17 +144,46 @@ Module: `employee-tui` (local name, rename pending). Default branch: `master`.
 ## Bubble Tea specifics (this repo)
 
 - UI lives in `internal/ui/chat` (bubbletea `tea.Model` with `Init/Update/View`).
-  Confirm views copy the old employee-delete layout: highlight the subject
+  Confirm views copy the y/n delete layout: highlight the subject
   name (command path, or sub-agent name), then `y confirm  •  n cancel`.
 - Keep `Update` pure and deterministic; side effects belong in `tea.Cmd`.
-- Run with `go run .` to verify; the app uses alt screen and creates
-  `.lazykoder/` at startup (idempotent - do not make init destructive to
-  user data).
+- Run with `make run` (requires `nodemon`; watches `*.go` and restarts
+  `go run main.go` on every change) to verify; the app uses alt screen and
+  creates `.lazykoder/` at startup (idempotent - do not make init destructive
+  to user data). The model list is cached in `.lazykoder/models.json` (15 min
+  TTL, `r` in the model picker or `/refresh` to force a reload) so nodemon
+  restarts do not hit the models endpoint every time.
+- **Never run the binary headless.** `go run .` / `bin/lk` piped, redirected
+  (`</dev/null`), or under `timeout` fails with
+  `bubbletea: error opening TTY: open /dev/tty: no such device or address`,
+  and a `| head` / `echo "exit: $?"` pipeline masks it as exit 0 (8 silent
+  false-success smoke runs on 2026-08-15). It cannot verify the TUI. Verify
+  rendering with `go test ./internal/ui/chat` (View output), and let the user
+  run `make run` in a real terminal for anything visual.
 - When adding a view/component, run `go test ./...` and verify the full
   screen renders (no clipped lines, no unreadable colors) before asking the
   user to look.
 - Do not re-invent bubbletea idioms: use `bubbles` (list, table, textinput)
   rather than hand-rolling widgets, and follow charmbracelet conventions.
+
+## Code structure (this repo)
+
+- **File size hard limit:** no Go file may grow past ~2,000 lines. The
+  absolute maximum is 2,500 lines and needs a written reason. The largest
+  file today is `internal/ui/chat/chat.go` (~1,280 lines) - do not let it
+  (or anything else) cross 2,000.
+- **Split module-wise, not length-wise:** divide code by responsibility
+  (each package, view, store, or tool gets its own focused file), not by
+  "cut the file here" chunks. When a file approaches the limit, extract a
+  cohesive piece into a new file in the same package (e.g. `views.go`,
+  `keys.go`, `messages.go`) rather than appending.
+- **Use abstractions properly:** introduce interfaces at real seams
+  (storage, provider, runners, renderers), keep constructors small, and
+  prefer composition over fat structs. Abstractions exist to make the
+  module testable and navigable - one purpose per abstraction, no
+  speculative generality.
+- Verify with `go build ./...` + tests after any file split; do not
+  reorder or rename code during a split (see lint whack-a-mole rule).
 
 ## Skills (this folder)
 
