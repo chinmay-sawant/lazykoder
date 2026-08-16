@@ -33,6 +33,37 @@ func TestMouseWheelScrollsTranscript(t *testing.T) {
 	}
 }
 
+func TestJumpBarClickScrollsToLatest(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	for i := 0; i < 80; i++ {
+		m.items = append(m.items, transcriptItem{kind: itemNote, text: fmt.Sprintf("line %02d", i)})
+	}
+	m.syncTranscript()
+	mm, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	m = mm.(Model)
+	if !m.jumpBarVisible() {
+		t.Fatal("jump bar not visible after scrolling up")
+	}
+	mm, cmd := m.Update(tea.MouseClickMsg(tea.Mouse{
+		X:      10,
+		Y:      m.jumpBarRow(),
+		Button: tea.MouseLeft,
+	}))
+	m = mm.(Model)
+	if cmd != nil {
+		t.Fatalf("jump bar click returned a command %v", cmd)
+	}
+	if !m.transcript.AtBottom() {
+		t.Fatal("jump bar click did not scroll to the bottom")
+	}
+	if m.jumpBarVisible() {
+		t.Fatal("jump bar still visible after jumping to the bottom")
+	}
+	if strings.Contains(viewText(m), jumpDownArrow) {
+		t.Fatal("jump bar arrow still rendered after jumping to the bottom")
+	}
+}
+
 func TestTranscriptDragSelectsAndCopiesText(t *testing.T) {
 	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
 	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
@@ -64,10 +95,10 @@ func TestTranscriptDragSelectsAndCopiesText(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("mouse release returned nil clipboard command")
 	}
-	if m.copyNotice != "text copied" {
-		t.Fatalf("copy notice = %q, want %q", m.copyNotice, "text copied")
+	if m.copyNotice != "Text copied" {
+		t.Fatalf("copy notice = %q, want %q", m.copyNotice, "Text copied")
 	}
-	if !strings.Contains(stripANSI(viewText(m)), "text copied") {
+	if !strings.Contains(stripANSI(viewText(m)), "Text copied") {
 		t.Fatalf("View() missing copy notice: %q", viewText(m))
 	}
 

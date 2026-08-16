@@ -11,11 +11,22 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
+// jumpBarRow is the screen row of the jump-to-latest icon above the input
+// box: the row right after the transcript lines.
+func (m Model) jumpBarRow() int {
+	return m.transcriptTop() + m.transcriptRenderHeight()
+}
+
 // mousePress starts a scrollbar drag when the click lands on a scrollbar
 // column, and jumps the viewport to the clicked position.
 func (m Model) mousePress(msg tea.MouseClickMsg) (Model, tea.Cmd) {
 	mu := msg.Mouse()
 	m.copyNotice = ""
+	if mu.Button == tea.MouseLeft && m.jumpBarVisible() && mu.Y == m.jumpBarRow() {
+		m = m.clearTextSelection()
+		m.transcript.GotoBottom()
+		return m, nil
+	}
 	if !m.pickerMode && !m.slashMode {
 		if _, top, right, bottom, ok := m.modelStatusRect(); ok && mu.X < right && mu.Y >= top && mu.Y < bottom {
 			m = m.clearTextSelection()

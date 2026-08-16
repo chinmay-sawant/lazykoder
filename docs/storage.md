@@ -54,7 +54,8 @@ Indexes: `messages(session_id, seq)`, `parts(message_id, seq)`,
 
 ## Store API
 
-`CreateSession`, `InsertMessage`, `InsertPart`, `InsertToolCall`,
+`CreateSession`, `InsertMessage`, `InsertPart`, `UpdatePartText`
+(streamed reasoning/text growth), `InsertToolCall`,
 `UpdateToolCall` (upsert + part status), `DeleteSession`, `ListMessages`,
 `ListParts`, `ListSessionsByDir` (latest first), `ListToolCalls` (per
 session), `UpdateSessionModel` (model picker persistence).

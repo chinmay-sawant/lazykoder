@@ -10,8 +10,11 @@ pickers are centered cards.
   directory basename.
 - Transcript: user turns labeled `you`, assistant turns labeled `assistant`,
   each with a clock timestamp (`15:32:05`) on the far right of the row.
-  Reasoning starts collapsed as `▸ thinking` with the same clock on the
-  far right; `t` expands it when the prompt is empty. Tool runs are
+  Reasoning streams live as `▾ thinking` with the growing body under
+  the header. It collapses to `▸ thinking` as soon as the assistant
+  reply, a tool card, or the end of the turn arrives. The same clock
+  sits on the far right; `t` expands a collapsed block when the prompt
+  is empty. Tool runs are
   full-width cards that start collapsed (`◆  ▸  bash  title` on the left,
   `15:32:05` on the far right). The diamond is the only status mark: white
   while pending or running, green on success, red on error or deny. `e`
@@ -30,12 +33,14 @@ pickers are centered cards.
   when the session is reopened. Typed text uses
   the same black background as the rest of the screen (no cursor-line
   highlight). The footer left side stays idle (`enter send`). The right side shows
-  `model  used/window  hit/miss  $cost  tps` (click the model to switch).
-  hit is cached input tokens (`cache_read` / `prompt_cache_hit`); miss is
-  uncached input (`prompt - hit`, or the full prompt when the API reports
-  input and cache separately). tps is this turn's generated tokens
-  (output, or reasoning if output is missing) divided by turn wall time.
-  It is never the session total.
+  `model  used/window  hit N 93%  miss N 7%  $cost  tps` (click the
+  model to switch). hit is cached input tokens (`cache_read` /
+  `prompt_cache_hit`); miss is uncached input (`prompt - hit`, or the
+  full prompt when the API reports input and cache separately). Each
+  count carries its share of hit+miss. tps is this turn's generated tokens (output, or
+  reasoning if output is missing) divided by turn wall time. While a
+  turn is running it updates from streamed output; after the turn it
+  stays as that turn's average. It is never the session total.
   Context
   windows, list prices, cache read/write prices, and reasoning variants
   come from GET /models plus the live models.dev OpenCode catalog, then
@@ -49,8 +54,9 @@ pickers are centered cards.
   API. Reopening a session restores used tokens from
   stored step-finish usage, or estimates them from the transcript.
   Session token totals never drop when a later step reports smaller
-  usage. `/refresh` always rewrites that cache. Live text is painted
-  instantly.
+  usage. `/refresh` always rewrites that cache. Live reasoning and
+  assistant text are painted as SSE deltas arrive. A non-streaming JSON
+  response is treated as one complete chunk.
 - Session list (`/sessions` or `ctrl+s`) groups runs as `just now`,
   `recently`, and `older`.
 - Session picker: `/sessions` or `ctrl+s` lists sessions for the project

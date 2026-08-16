@@ -49,6 +49,9 @@ type Options struct {
 	// Ask is invoked when the model calls the question tool; it must return
 	// the chosen option index. When nil, question calls fail as denied.
 	Ask func(q question.Question) (int, error)
+	// DisableStreaming forces the non-streaming Chat path. Streaming is
+	// the default so reasoning and text can paint as they arrive.
+	DisableStreaming bool
 }
 
 // Agent runs user turns against a store and provider client.
@@ -138,18 +141,27 @@ func (a *Agent) Send(ctx context.Context, userText string, events chan<- Event) 
 		if err != nil {
 			return a.fail(events, err)
 		}
-		resp, err := a.client.Chat(ctx, opencode.ChatRequest{
+		req := opencode.ChatRequest{
 			Model:           a.opts.Model,
 			Endpoint:        a.opts.Endpoint,
 			ReasoningEffort: a.opts.Variant,
 			Messages:        history,
 			Tools:           []opencode.ToolSpec{bashToolSpec},
-		})
-		if err != nil {
-			return a.fail(events, fmt.Errorf("agent: provider: %w", err))
 		}
-		if err := a.writeResponse(ctx, events, resp); err != nil {
-			return a.fail(events, err)
+		var resp *opencode.ChatResponse
+		if a.opts.DisableStreaming {
+			resp, err = a.client.Chat(ctx, req)
+			if err != nil {
+				return a.fail(events, fmt.Errorf("agent: provider: %w", err))
+			}
+			if err := a.writeResponse(ctx, events, resp); err != nil {
+				return a.fail(events, err)
+			}
+		} else {
+			resp, err = a.streamStep(ctx, events, req)
+			if err != nil {
+				return a.fail(events, err)
+			}
 		}
 		if resp.FinishReason != "tool-calls" && len(resp.ToolCalls) == 0 {
 			break
@@ -315,67 +327,26 @@ func concatText(parts []db.Part) string {
 }
 
 func (a *Agent) writeResponse(ctx context.Context, events chan<- Event, resp *opencode.ChatResponse) error {
-	m, err := a.store.InsertMessage(ctx, db.Message{
-		SessionID: a.sessionID(),
-		Role:      "assistant",
-		ModelID:   a.opts.Model,
-		Variant:   strPtr(a.opts.Variant),
-	})
+	m, err := a.beginAssistant(ctx, events)
 	if err != nil {
-		return fmt.Errorf("agent: insert assistant message: %w", err)
+		return err
 	}
-	a.emit(events, Event{Kind: EventMessage, SessionID: a.sessionID(), MessageID: m.ID, Role: "assistant"})
-
-	part, err := a.store.InsertPart(ctx, db.Part{MessageID: m.ID, Type: "step-start"})
-	if err != nil {
-		return fmt.Errorf("agent: insert step-start: %w", err)
-	}
-	a.emit(events, Event{Kind: EventPart, SessionID: a.sessionID(), MessageID: m.ID, Part: part})
-
 	if resp.Reasoning != "" {
-		text := resp.Reasoning
-		part, err := a.store.InsertPart(ctx, db.Part{MessageID: m.ID, Type: "reasoning", Text: &text})
-		if err != nil {
-			return fmt.Errorf("agent: insert reasoning: %w", err)
+		if err := a.writeTextPart(ctx, events, m.ID, "reasoning", resp.Reasoning); err != nil {
+			return err
 		}
-		a.emit(events, Event{Kind: EventPart, SessionID: a.sessionID(), MessageID: m.ID, Part: part})
 	}
-
 	if resp.Content != "" {
-		text := resp.Content
-		part, err := a.store.InsertPart(ctx, db.Part{MessageID: m.ID, Type: "text", Text: &text})
-		if err != nil {
-			return fmt.Errorf("agent: insert text: %w", err)
+		if err := a.writeTextPart(ctx, events, m.ID, "text", resp.Content); err != nil {
+			return err
 		}
-		a.emit(events, Event{Kind: EventPart, SessionID: a.sessionID(), MessageID: m.ID, Part: part})
 	}
-
 	for _, tc := range resp.ToolCalls {
 		if err := a.runTool(ctx, events, m.ID, tc); err != nil {
 			return err
 		}
 	}
-
-	if resp.Usage != nil {
-		u := resp.Usage
-		part, err := a.store.InsertPart(ctx, db.Part{
-			MessageID:        m.ID,
-			Type:             "step-finish",
-			FinishReason:     strPtr(resp.FinishReason),
-			TokensTotal:      &u.TokensTotal,
-			TokensInput:      &u.TokensInput,
-			TokensOutput:     &u.TokensOutput,
-			TokensReasoning:  &u.TokensReasoning,
-			TokensCacheRead:  &u.TokensCacheRead,
-			TokensCacheWrite: &u.TokensCacheWrite,
-			Cost:             &u.Cost,
-		})
-		if err != nil {
-			return fmt.Errorf("agent: insert step-finish: %w", err)
-		}
-		a.emit(events, Event{Kind: EventPart, SessionID: a.sessionID(), MessageID: m.ID, Part: part})
-	}
-	return nil
+	return a.writeStepFinish(ctx, events, m.ID, resp)
 }
 
 func (a *Agent) runTool(ctx context.Context, events chan<- Event, msgID string, tc opencode.ToolCall) error {

@@ -19,6 +19,7 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
 	"github.com/chinmay-sawant/lazykoder/internal/policy"
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
+	"github.com/chinmay-sawant/lazykoder/internal/tips"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/question"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/confirm"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
@@ -66,6 +67,12 @@ const (
 	promptUndoLimit = 32
 	// copyNoticeDuration controls how long the clipboard confirmation stays visible.
 	copyNoticeDuration = 2 * time.Second
+	// jumpDownArrow is the faint centered icon on the alert row above the
+	// input box that returns the transcript to the latest output.
+	jumpDownArrow = "▼"
+	// tipLabel is the bold prefix that marks the rotating idle hint on the
+	// alert row.
+	tipLabel = "Tip:"
 
 	// cardBorder is the two columns of border/margin chrome on each side
 	// of the overlay card content.
@@ -201,15 +208,19 @@ type Model struct {
 	sessionVp         viewport.Model
 	sessionBuilt      bool
 
-	slashMode      bool
-	slashCursor    int
-	slashItems     []slashCmd
-	slashFromPaste bool
-	selection      textSelection
-	copyNotice     string
+	slashMode       bool
+	slashCursor     int
+	slashItems      []slashCmd
+	slashFromPaste  bool
+	selection       textSelection
+	copyNotice      string
+	promptSelectAll bool
+	tipsIndex       int
 
 	dragTarget int // -1 none, 0 transcript, 1 picker
 	dragOn     bool
+
+	renderCache *renderCache
 
 	turnSeq    int
 	turnCancel context.CancelFunc
@@ -296,6 +307,8 @@ type eventDoneMsg struct {
 
 type pulseMsg struct{}
 
+type tipsTickMsg struct{}
+
 // New returns a chat model for the given options.
 func New(opts Options) Model {
 	m := Model{
@@ -317,6 +330,7 @@ func New(opts Options) Model {
 		cachePath:           opts.CachePath,
 		transcript:          viewport.New(viewport.WithWidth(defaultWidth-1), viewport.WithHeight(defaultHeight-chromeLines)),
 		prompt:              newPromptArea(defaultWidth),
+		renderCache:         &renderCache{},
 	}
 	if m.cachePath != "" {
 		if infos, _, err := modelscache.Load(m.cachePath, time.Now(), 0); err == nil && len(infos) > 0 {
@@ -336,7 +350,7 @@ func New(opts Options) Model {
 
 // Init starts the fetch and watcher commands.
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(m.confirmWatch(), m.askWatch(), m.fetchModels)
+	return tea.Batch(m.confirmWatch(), m.askWatch(), m.fetchModels, tipsTick())
 }
 
 func (m Model) fetchModels() tea.Msg {
@@ -447,6 +461,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.pulse = (m.pulse + 1) % pulseSteps
 		return m, pulseTick()
+	case tipsTickMsg:
+		m.tipsIndex++
+		return m, tipsTick()
 	case modelsMsg:
 		m.models = msg.list
 		if len(msg.infos) > 0 {
@@ -495,6 +512,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.historyCursor = -1
 		m.historyDraft = ""
 		m.copyNotice = ""
+		m.promptSelectAll = false
 		m = m.clearTextSelection()
 		m = m.rememberPrompt()
 		var cmd tea.Cmd
@@ -505,11 +523,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case tea.KeyPressMsg:
 		if msg.Mod.Contains(tea.ModCtrl) && msg.Code == 'c' {
-			if m.quitConfirm {
+			if m.promptEditing() && m.prompt.Value() != "" {
+				// Fall through to updateKey: copy the input box content.
+			} else if m.quitConfirm {
 				return m.closeDone(), tea.Quit
+			} else {
+				m.quitConfirm = true
+				return m, nil
 			}
-			m.quitConfirm = true
-			return m, nil
 		}
 		if m.quitConfirm {
 			if msg.Code == tea.KeyEscape {
@@ -571,7 +592,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !ok {
 			return m, nil
 		}
-		m.copyNotice = "text copied"
+		m.copyNotice = "Text copied"
 		return m, tea.Batch(tea.SetClipboard(text), clearCopyNotice())
 	}
 	return m, nil
@@ -631,6 +652,8 @@ func (m Model) finishTurn(err error) Model {
 	m.errCh = nil
 	m.pulseOn = false
 	m.activity = ""
+	m.collapseLiveReasoning()
+	m.syncTranscript()
 	if !m.turnStarted.IsZero() {
 		m.tokensPerSec = tokensPerSec(m.generatedThisTurn(), time.Since(m.turnStarted))
 	}
@@ -644,6 +667,13 @@ func tokensPerSec(generated int64, elapsed time.Duration) float64 {
 		return 0
 	}
 	return float64(generated) / sec
+}
+
+func (m Model) displayTPS() float64 {
+	if m.busy && !m.turnStarted.IsZero() {
+		return tokensPerSec(m.generatedThisTurn(), time.Since(m.turnStarted))
+	}
+	return m.tokensPerSec
 }
 
 func (m Model) generatedThisTurn() int64 {
@@ -720,6 +750,11 @@ func pulseTick() tea.Cmd {
 	return tea.Tick(pulseInterval, func(time.Time) tea.Msg { return pulseMsg{} })
 }
 
+// tipsTick advances the idle tip rotation every tips.Rotation.
+func tipsTick() tea.Cmd {
+	return tea.Tick(tips.Rotation, func(time.Time) tea.Msg { return tipsTickMsg{} })
+}
+
 func (m Model) pulseT() float64 {
 	step := m.pulse
 	if step > pulseSteps/2 {
@@ -752,6 +787,10 @@ func newPromptArea(width int) textarea.Model {
 	ta.SetWidth(max(minPaneWidth, width))
 	ta.SetHeight(promptMinRows)
 	ta.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("shift+enter"))
+	ta.KeyMap.WordBackward = key.NewBinding(key.WithKeys("alt+left", "ctrl+left", "alt+b"))
+	ta.KeyMap.WordForward = key.NewBinding(key.WithKeys("alt+right", "ctrl+right", "alt+f"))
+	ta.KeyMap.LinePrevious = key.NewBinding(key.WithKeys("up", "ctrl+p", "ctrl+up"))
+	ta.KeyMap.LineNext = key.NewBinding(key.WithKeys("down", "ctrl+n", "ctrl+down"))
 	plain := lipgloss.NewStyle().Background(theme.ColorBg()).Foreground(theme.ColorText())
 	mute := lipgloss.NewStyle().Background(theme.ColorBg()).Foreground(theme.ColorMute())
 	ta.SetStyles(textarea.Styles{

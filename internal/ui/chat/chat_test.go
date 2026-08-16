@@ -17,6 +17,7 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/db"
 	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
+	"github.com/chinmay-sawant/lazykoder/internal/tips"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
 
@@ -89,8 +90,8 @@ func TestReplayNoNetwork(t *testing.T) {
 	if strings.Contains(v, "hmm") {
 		t.Errorf("collapsed reasoning leaked body: %q", v)
 	}
-	if !strings.Contains(v, workBracket+"hello there"+workBracketClose) {
-		t.Fatalf("resumed session lost the user prompt bracket: %q", v)
+	if !strings.Contains(v, "hello there") || !strings.Contains(v, "╭") {
+		t.Fatalf("resumed session lost the user prompt box: %q", v)
 	}
 	if !lineHasPrefix(v, roleAssistant, workRail) && !lineHasPrefix(v, thinkingLabel, workRail) {
 		t.Fatalf("resumed session lost the reply rail: %q", v)
@@ -388,6 +389,367 @@ func TestQuitKeys(t *testing.T) {
 	}
 	if n := fake.requestCount(); n != 2 {
 		t.Errorf("agent did not finish after quit, provider calls = %d, want 2", n)
+	}
+}
+
+func TestPromptCtrlCAndCtrlA(t *testing.T) {
+	st := newTestStore(t)
+	m := New(Options{Store: st, Client: deadClient(), Workdir: t.TempDir()})
+	m = typeText(m, "hello world")
+
+	m, cmd := updCmd(m, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	if !copyCmdContains(cmd, "hello world") {
+		t.Fatalf("ctrl+c in the input box did not copy the prompt: %v", cmd)
+	}
+	if m.copyNotice != "Text copied" {
+		t.Fatalf("copyNotice = %q, want %q", m.copyNotice, "Text copied")
+	}
+	if m.quitConfirm {
+		t.Fatal("ctrl+c with text in the input box triggered quit confirmation")
+	}
+
+	m, cmd = updCmd(m, tea.KeyPressMsg{Code: 'a', Mod: tea.ModCtrl})
+	if cmd != nil {
+		t.Fatal("ctrl+a returned a command")
+	}
+	if !m.promptSelectAll {
+		t.Fatal("ctrl+a did not select all")
+	}
+	if got := m.prompt.Value(); got != "hello world" {
+		t.Fatalf("prompt value after ctrl+a = %q", got)
+	}
+	if !strings.Contains(viewText(m), "48;2;212;160;199") {
+		t.Fatalf("select-all highlight missing from view: %q", viewText(m))
+	}
+
+	m, cmd = updCmd(m, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	if !copyCmdContains(cmd, "hello world") {
+		t.Fatal("ctrl+c after ctrl+a did not copy the prompt")
+	}
+
+	m = upd(m, tea.KeyPressMsg{Code: 'x', Text: "x"})
+	if m.promptSelectAll {
+		t.Fatal("typing did not clear the select-all state")
+	}
+
+	m = upd(m, tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl})
+	if got := m.prompt.Value(); got != "" {
+		t.Fatalf("prompt after ctrl+u = %q, want empty", got)
+	}
+	m, cmd = updCmd(m, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	if cmd != nil {
+		t.Fatalf("ctrl+c with an empty input box returned a command %v", cmd)
+	}
+	if !m.quitConfirm {
+		t.Fatal("ctrl+c with an empty input box did not show quit confirmation")
+	}
+}
+
+func copyCmdContains(cmd tea.Cmd, want string) bool {
+	if cmd == nil {
+		return false
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, sub := range batch {
+			if fmt.Sprint(sub()) == want {
+				return true
+			}
+		}
+		return false
+	}
+	return fmt.Sprint(msg) == want
+}
+
+func TestJumpBarShowsWhenScrolledUp(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	for i := 0; i < 60; i++ {
+		m.items = append(m.items, transcriptItem{kind: itemNote, text: fmt.Sprintf("line %02d", i)})
+	}
+	m.syncTranscript()
+	if m.jumpBarVisible() {
+		t.Fatal("jump bar visible while at the bottom")
+	}
+	mm, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	m = mm.(Model)
+	if !m.jumpBarVisible() {
+		t.Fatal("jump bar not visible after scrolling up")
+	}
+	v := viewText(m)
+	if !strings.Contains(v, jumpDownArrow) {
+		t.Fatalf("jump bar arrow missing from view: %q", v)
+	}
+	row := viewLineIndex(m, jumpDownArrow)
+	if row != m.jumpBarRow() {
+		t.Errorf("jump bar at row %d, want %d", row, m.jumpBarRow())
+	}
+}
+
+func TestJumpBarHiddenWithoutOverflow(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	m.items = append(m.items, transcriptItem{kind: itemNote, text: "short"})
+	m.syncTranscript()
+	if m.jumpBarVisible() {
+		t.Fatal("jump bar visible without transcript overflow")
+	}
+	if strings.Contains(viewText(m), jumpDownArrow) {
+		t.Fatal("jump bar arrow rendered without overflow")
+	}
+}
+
+func TestScrollPositionPreservedOnNewContent(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	for i := 0; i < 60; i++ {
+		m.items = append(m.items, transcriptItem{kind: itemNote, text: fmt.Sprintf("line %02d", i)})
+	}
+	m.syncTranscript()
+	m.transcript.SetYOffset(10)
+	if m.transcript.AtBottom() {
+		t.Fatal("test setup: viewport should be scrolled up")
+	}
+	m.items = append(m.items, transcriptItem{kind: itemNote, text: "newest"})
+	m.syncTranscript()
+	if m.transcript.AtBottom() {
+		t.Fatal("new content yanked the scrolled-up view to the bottom")
+	}
+	if got := m.transcript.YOffset(); got != 10 {
+		t.Errorf("offset after new content = %d, want 10", got)
+	}
+	if !m.jumpBarVisible() {
+		t.Fatal("jump bar should offer the way down after new content while scrolled up")
+	}
+}
+
+func TestAlertRowCopyNotice(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	m = typeText(m, "hello world")
+	m, cmd := updCmd(m, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	if !copyCmdContains(cmd, "hello world") {
+		t.Fatalf("ctrl+c did not copy the prompt: %v", cmd)
+	}
+	v := viewText(m)
+	if !strings.Contains(v, "38;2;158;206;106") {
+		t.Fatalf("copy alert is not green: %q", v)
+	}
+	if !strings.Contains(stripANSI(v), "Text copied") {
+		t.Fatalf("copy alert missing from view: %q", v)
+	}
+	alertRow := viewLineIndex(m, "Text copied")
+	wantRow := m.transcriptTop() + m.transcriptRenderHeight()
+	if alertRow != wantRow {
+		t.Errorf("copy alert on row %d, want the alert row %d", alertRow, wantRow)
+	}
+	if strings.Contains(stripANSI(m.promptLine()), "Text copied") {
+		t.Fatal("copy alert still rendered inside the input box")
+	}
+}
+
+func TestTipsShowWhenIdle(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	v := stripANSI(viewText(m))
+	if !strings.Contains(v, tips.At(0)) {
+		t.Fatalf("idle tip missing from view: %q", v)
+	}
+	if !strings.Contains(v, tipLabel) {
+		t.Fatalf("bold TIP label missing from view: %q", v)
+	}
+	row := viewLineIndex(m, tips.At(0))
+	wantRow := m.transcriptTop() + m.transcriptRenderHeight()
+	if row != wantRow {
+		t.Errorf("tip on row %d, want the alert row %d", row, wantRow)
+	}
+	if row != viewLineIndex(m, tipLabel) {
+		t.Errorf("TIP label and tip text are not on the same alert row")
+	}
+
+	m.busy = true
+	if strings.Contains(stripANSI(viewText(m)), tips.At(0)) {
+		t.Fatal("tip still shown while busy")
+	}
+	m.busy = false
+
+	m = typeText(m, "hello world")
+	m, cmd := updCmd(m, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	if !copyCmdContains(cmd, "hello world") {
+		t.Fatal("copy failed")
+	}
+	if strings.Contains(stripANSI(viewText(m)), tips.At(0)) {
+		t.Fatal("tip still shown while the copy alert is up")
+	}
+}
+
+func TestTipsRotateOnTick(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	if got := m.tipsIndex; got != 0 {
+		t.Fatalf("tipsIndex = %d, want 0", got)
+	}
+	mm, cmd := m.Update(tipsTickMsg{})
+	m = mm.(Model)
+	if cmd == nil {
+		t.Fatal("tips tick did not re-arm")
+	}
+	if got := m.tipsIndex; got != 1 {
+		t.Fatalf("tipsIndex after tick = %d, want 1", got)
+	}
+	if !strings.Contains(stripANSI(viewText(m)), tips.At(1)) {
+		t.Fatalf("next tip missing after tick: %q", viewText(m))
+	}
+	for i := 0; i < len(tips.All)*3; i++ {
+		mm, _ = m.Update(tipsTickMsg{})
+		m = mm.(Model)
+	}
+	if !strings.Contains(stripANSI(viewText(m)), tips.At(m.tipsIndex)) {
+		t.Fatalf("tip after cycling does not match tipsIndex %d", m.tipsIndex)
+	}
+	if want := (1 + len(tips.All)*3) % len(tips.All); m.tipsIndex%len(tips.All) != want {
+		t.Errorf("tipsIndex %d does not wrap to %d", m.tipsIndex, want)
+	}
+}
+
+func TestAlertRowQuitWarning(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	m, cmd := updCmd(m, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	if cmd != nil {
+		t.Fatalf("first ctrl+c returned a command %v", cmd)
+	}
+	if !m.quitConfirm {
+		t.Fatal("first ctrl+c did not arm the quit confirmation")
+	}
+	v := viewText(m)
+	if strings.Contains(stripANSI(v), "close lazyKoder") {
+		t.Fatalf("full-screen quit card still rendered: %q", v)
+	}
+	if !strings.Contains(stripANSI(v), "ctrl+c again to quit") {
+		t.Fatalf("quit warning missing from view: %q", v)
+	}
+	if !strings.Contains(v, "38;2;224;108;117") {
+		t.Fatalf("quit warning is not red: %q", v)
+	}
+	alertRow := viewLineIndex(m, "ctrl+c again to quit")
+	wantRow := m.transcriptTop() + m.transcriptRenderHeight()
+	if alertRow != wantRow {
+		t.Errorf("quit warning on row %d, want the alert row %d", alertRow, wantRow)
+	}
+	m, cmd = updCmd(m, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	if cmd == nil || cmd() != (tea.QuitMsg{}) {
+		t.Fatalf("second ctrl+c did not quit: %v", cmd)
+	}
+}
+
+func TestPromptCtrlArrowWordMovement(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	m = typeText(m, "hello world foo")
+
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyLeft, Mod: tea.ModCtrl})
+	m = typeText(m, "X")
+	if got := m.prompt.Value(); got != "hello world Xfoo" {
+		t.Fatalf("ctrl+left then X = %q, want %q", got, "hello world Xfoo")
+	}
+
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyRight, Mod: tea.ModCtrl})
+	m = typeText(m, "Y")
+	if got := m.prompt.Value(); got != "hello world XfooY" {
+		t.Fatalf("ctrl+right then Y = %q, want %q", got, "hello world XfooY")
+	}
+}
+
+func TestPromptCtrlUpDownLineMovement(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	m = typeText(m, "line one")
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift})
+	m = typeText(m, "line two")
+	if m.prompt.LineCount() != 2 {
+		t.Fatalf("prompt lines = %d, want 2", m.prompt.LineCount())
+	}
+
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyUp, Mod: tea.ModCtrl})
+	m = typeText(m, "X")
+	if got := m.prompt.Value(); got != "line oneX\nline two" {
+		t.Fatalf("ctrl+up then X = %q, want %q", got, "line oneX\nline two")
+	}
+
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyDown, Mod: tea.ModCtrl})
+	m = typeText(m, "Y")
+	if got := m.prompt.Value(); got != "line oneX\nline twoY" {
+		t.Fatalf("ctrl+down then Y = %q, want %q", got, "line oneX\nline twoY")
+	}
+}
+
+func TestPromptCtrlHomeEndNav(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	m = typeText(m, "hello world")
+
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyHome, Mod: tea.ModCtrl})
+	m = typeText(m, "X")
+	if got := m.prompt.Value(); got != "Xhello world" {
+		t.Fatalf("ctrl+home then X = %q, want %q", got, "Xhello world")
+	}
+
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyEnd, Mod: tea.ModCtrl})
+	m = typeText(m, "Y")
+	if got := m.prompt.Value(); got != "Xhello worldY" {
+		t.Fatalf("ctrl+end then Y = %q, want %q", got, "Xhello worldY")
+	}
+}
+
+func TestPromptHomeEndNav(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	m = typeText(m, "hello")
+
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyHome})
+	m = typeText(m, "X")
+	if got := m.prompt.Value(); got != "Xhello" {
+		t.Fatalf("home then X = %q, want %q", got, "Xhello")
+	}
+
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyEnd})
+	m = typeText(m, "Y")
+	if got := m.prompt.Value(); got != "XhelloY" {
+		t.Fatalf("end then Y = %q, want %q", got, "XhelloY")
+	}
+}
+
+func TestPromptHomeEndScrollTranscriptWhenEmpty(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	for i := 0; i < 60; i++ {
+		m.items = append(m.items, transcriptItem{kind: itemNote, text: fmt.Sprintf("line %02d", i)})
+	}
+	m.syncTranscript()
+	m.transcript.SetYOffset(10)
+
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyHome})
+	if !m.transcript.AtTop() {
+		t.Fatal("home with an empty prompt did not scroll the transcript to top")
+	}
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyEnd})
+	if !m.transcript.AtBottom() {
+		t.Fatal("end with an empty prompt did not scroll the transcript to bottom")
+	}
+}
+
+func TestAlertRowHoldsJumpBarAndAlert(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	for i := 0; i < 60; i++ {
+		m.items = append(m.items, transcriptItem{kind: itemNote, text: fmt.Sprintf("line %02d", i)})
+	}
+	m.syncTranscript()
+	mm, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	m = mm.(Model)
+	m = typeText(m, "hello")
+	m, _ = updCmd(m, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	if !m.jumpBarVisible() {
+		t.Fatal("jump bar should still be visible while scrolled up")
+	}
+	row := m.transcriptTop() + m.transcriptRenderHeight()
+	lines := strings.Split(stripANSI(viewText(m)), "\n")
+	if row >= len(lines) {
+		t.Fatalf("alert row %d out of range", row)
+	}
+	if !strings.Contains(lines[row], jumpDownArrow) {
+		t.Errorf("jump arrow missing from alert row %q", lines[row])
+	}
+	if !strings.Contains(lines[row], "Text copied") {
+		t.Errorf("copy alert missing from alert row %q", lines[row])
 	}
 }
 
@@ -772,6 +1134,12 @@ func TestReplayRestoresCacheHitMiss(t *testing.T) {
 	if !strings.Contains(v, "hit 68k") || !strings.Contains(v, "miss 790") {
 		t.Fatalf("footer missing cache stats: %q", v)
 	}
+	if !strings.Contains(v, "99%") {
+		t.Fatalf("footer missing cache hit percent: %q", v)
+	}
+	if !strings.Contains(v, "1%") {
+		t.Fatalf("footer missing cache miss percent: %q", v)
+	}
 }
 
 func TestModelsMsgRestoresMissingSessionCost(t *testing.T) {
@@ -1002,7 +1370,7 @@ func TestWorkBracketStaysAfterTurnEnds(t *testing.T) {
 	}
 	m.busy = false
 	body := stripANSI(strings.Join(m.renderedItems(), "\n"))
-	if !strings.Contains(body, workBracket+"hello"+workBracketClose) {
+	if !strings.Contains(body, "╭ hello") || !strings.Contains(body, "hello") {
 		t.Fatalf("static user bracket missing after the turn finished: %q", body)
 	}
 	if !lineHasPrefix(body, roleAssistant, workRail) || !lineHasPrefix(body, "hi back", workRail) {
@@ -1013,7 +1381,7 @@ func TestWorkBracketStaysAfterTurnEnds(t *testing.T) {
 	}
 }
 
-func TestUserPromptUsesOneBracketAndReplyUsesRail(t *testing.T) {
+func TestUserPromptBigBracketAndReplyUsesRail(t *testing.T) {
 	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
 	m.items = []transcriptItem{
 		{kind: itemUser, text: "Tell me something long\nand more"},
@@ -1021,41 +1389,34 @@ func TestUserPromptUsesOneBracketAndReplyUsesRail(t *testing.T) {
 		{kind: itemAssistant, text: "Here is a long reply\nwith two lines"},
 	}
 	body := stripANSI(strings.Join(m.renderedItems(), "\n"))
-	if !strings.Contains(body, workBracket+"Tell me something long\nand more"+workBracketClose) {
-		t.Fatalf("user prompt should sit in one bracket wrap: %q", body)
+	if !strings.Contains(body, "╭ Tell me something long") {
+		t.Fatalf("first user line should open with the top curl: %q", body)
 	}
-	var userOpens, userCloses, userLines int
+	var lastMore string
+	for _, line := range strings.Split(body, "\n") {
+		if strings.Contains(line, "and more") {
+			lastMore = line
+		}
+	}
+	if !strings.HasPrefix(strings.TrimSpace(lastMore), "╰") {
+		t.Fatalf("last user line should open with the bottom curl: %q", lastMore)
+	}
+	if strings.Contains(body, "╮") || strings.Contains(body, "╯") {
+		t.Fatalf("right-side curls should be gone: %q", body)
+	}
+	if strings.Contains(body, workBracket) || strings.Contains(body, "─") {
+		t.Fatalf("user prompt should not use per-line brackets or horizontal borders: %q", body)
+	}
+	var userLines int
 	for _, line := range strings.Split(body, "\n") {
 		plain := strings.TrimSpace(line)
 		switch {
-		case strings.Contains(line, "Tell me something long"):
+		case strings.Contains(line, "Tell me something long"), strings.Contains(line, "and more"):
 			userLines++
-			if !strings.Contains(plain, workBracket) {
-				t.Fatalf("first user line missing opening bracket: %q", line)
+			if strings.HasPrefix(plain, workRail) && strings.HasSuffix(plain, workRail) {
+				t.Fatalf("prompt edge lines should use corner curls, not rails: %q", line)
 			}
-			if strings.Contains(plain, workBracketClose) {
-				t.Fatalf("opening user line should not also close the wrap: %q", line)
-			}
-			if strings.HasPrefix(plain, workRail) {
-				t.Fatalf("user prompt should not use the reply rail: %q", line)
-			}
-			userOpens++
-		case strings.Contains(line, "and more"):
-			userLines++
-			if strings.Contains(plain, workBracket) && !strings.HasSuffix(plain, workBracketClose) {
-				t.Fatalf("continuation should not repeat the opening bracket: %q", line)
-			}
-			if !strings.HasSuffix(plain, workBracketClose) {
-				t.Fatalf("last user line missing closing bracket: %q", line)
-			}
-			if strings.HasPrefix(plain, workRail) {
-				t.Fatalf("user prompt should not use the reply rail: %q", line)
-			}
-			userCloses++
 		case strings.Contains(line, thinkingLabel) || strings.Contains(line, roleAssistant) || strings.Contains(line, "Here is a long reply") || strings.Contains(line, "with two lines"):
-			if strings.Contains(plain, workBracket) {
-				t.Fatalf("reply lines should use a vertical rail, not a square bracket: %q", line)
-			}
 			if !strings.HasPrefix(plain, workRail) {
 				t.Fatalf("thinking and assistant lines should start with the rail: %q", line)
 			}
@@ -1065,8 +1426,8 @@ func TestUserPromptUsesOneBracketAndReplyUsesRail(t *testing.T) {
 			}
 		}
 	}
-	if userLines != 2 || userOpens != 1 || userCloses != 1 {
-		t.Fatalf("want one opening and one closing bracket across the user prompt, got lines=%d opens=%d closes=%d\n%s", userLines, userOpens, userCloses, body)
+	if userLines != 2 {
+		t.Fatalf("want two bracketed user lines, got %d\n%s", userLines, body)
 	}
 }
 
@@ -1174,6 +1535,60 @@ func TestTokensPerSecUsesGeneratedNotSessionTotal(t *testing.T) {
 	v := stripANSI(viewText(m))
 	if !strings.Contains(v, "80 tps") && !strings.Contains(v, "79 tps") && !strings.Contains(v, "81 tps") {
 		t.Fatalf("footer missing turn tps: %q", v)
+	}
+}
+
+func TestFooterShowsLiveTPSWhileBusy(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	m.busy = true
+	m.turnStarted = time.Now().Add(-time.Second)
+	m.turnGenTokens = 80
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
+	m = mm.(Model)
+	v := stripANSI(viewText(m))
+	if !strings.Contains(v, "80 tps") && !strings.Contains(v, "79 tps") && !strings.Contains(v, "81 tps") {
+		t.Fatalf("busy footer missing live tps: %q", v)
+	}
+}
+
+func TestFormatCacheIncludesHitPercent(t *testing.T) {
+	if got := formatCache(80, 20); got != "hit 80 80%  miss 20 20%" {
+		t.Fatalf("formatCache(80, 20) = %q", got)
+	}
+	if got := cacheHitPercent(68000, 790); got != 99 {
+		t.Fatalf("cacheHitPercent(68000, 790) = %d, want 99", got)
+	}
+	if got := cacheHitPercent(0, 397); got != 0 {
+		t.Fatalf("cacheHitPercent(0, 397) = %d, want 0", got)
+	}
+	if got := formatCache(0, 397); got != "hit 0 0%  miss 397 100%" {
+		t.Fatalf("formatCache(0, 397) = %q", got)
+	}
+	if got := formatCache(1400, 100); got != "hit 1.4k 93%  miss 100 7%" {
+		t.Fatalf("formatCache(1400, 100) = %q", got)
+	}
+}
+
+func TestFooterShowsHitAndMissPercentsAt80(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	m.model = "deepseek-v4-flash"
+	m.modelInfos = []modelscache.Info{{ID: "deepseek-v4-flash", Context: 100000}}
+	m.tokensUsed = 1500
+	m.cacheHit = 1400
+	m.cacheMiss = 100
+	for _, width := range []int{80, 100, 120} {
+		mm, _ := m.Update(tea.WindowSizeMsg{Width: width, Height: 24})
+		got := mm.(Model)
+		v := stripANSI(viewText(got))
+		if !strings.Contains(v, "1.5k/100k") {
+			t.Fatalf("width %d missing token window: %q", width, v)
+		}
+		if !strings.Contains(v, "hit 1.4k") || !strings.Contains(v, "93%") {
+			t.Fatalf("width %d missing hit percent: %q", width, v)
+		}
+		if !strings.Contains(v, "miss 100") || !strings.Contains(v, "7%") {
+			t.Fatalf("width %d missing miss percent: %q", width, v)
+		}
 	}
 }
 

@@ -105,6 +105,16 @@ func (s *Store) InsertPart(ctx context.Context, p Part) (Part, error) {
 	return p, nil
 }
 
+// UpdatePartText replaces the text of an existing part. Used to grow
+// streamed reasoning and assistant text in place.
+func (s *Store) UpdatePartText(ctx context.Context, id, text string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE parts SET text = ? WHERE id = ?`, text, id)
+	if err != nil {
+		return fmt.Errorf("db: update part text: %w", err)
+	}
+	return nil
+}
+
 // InsertToolCall inserts a tool_calls row for an existing tool part.
 func (s *Store) InsertToolCall(ctx context.Context, tc ToolCall) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO tool_calls (`+toolCallColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,

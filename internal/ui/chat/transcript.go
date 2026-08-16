@@ -44,6 +44,7 @@ const (
 	workBracketClose = "]"
 	workRail         = "│"
 	workRailCols     = 2
+	streamCursor     = "▌"
 )
 
 func (m *Model) replay(sessionID string) {
@@ -77,14 +78,14 @@ func (m *Model) replay(sessionID string) {
 				if p.Text != nil {
 					if msg.Role == "user" {
 						m.inputHistory = append(m.inputHistory, inputHistoryItem{messageID: msg.ID, text: *p.Text})
-						m.items = append(m.items, transcriptItem{kind: itemUser, text: *p.Text, when: itemTime(msg.TimeCreated, p.TimeCreated)})
+						m.items = append(m.items, transcriptItem{kind: itemUser, text: *p.Text, when: itemTime(msg.TimeCreated, p.TimeCreated), part: p})
 					} else {
-						m.items = append(m.items, transcriptItem{kind: itemAssistant, text: *p.Text, when: itemTime(msg.TimeCreated, p.TimeCreated)})
+						m.items = append(m.items, transcriptItem{kind: itemAssistant, text: *p.Text, when: itemTime(msg.TimeCreated, p.TimeCreated), part: p})
 					}
 				}
 			case "reasoning":
 				if p.Text != nil {
-					m.items = append(m.items, transcriptItem{kind: itemReasoning, text: *p.Text, collapsed: true, when: itemTime(msg.TimeCreated, p.TimeCreated)})
+					m.items = append(m.items, transcriptItem{kind: itemReasoning, text: *p.Text, collapsed: true, when: itemTime(msg.TimeCreated, p.TimeCreated), part: p})
 				}
 			case "tool":
 				tool := db.ToolCall{PartID: p.ID}
@@ -256,7 +257,13 @@ func (m *Model) syncTranscript() {
 	m.transcript.SetHeight(max(minPaneHeight, m.transcriptRenderHeight()))
 	atBottom := m.transcript.AtBottom()
 	yOffset := m.transcript.YOffset()
-	m.transcript.SetContent(m.transcriptContent())
+	content := m.transcriptContent()
+	if c := m.renderCache; c == nil || c.content != content {
+		m.transcript.SetContent(content)
+		if c != nil {
+			c.content = content
+		}
+	}
 	if atBottom {
 		m.transcript.GotoBottom()
 		return
@@ -265,15 +272,23 @@ func (m *Model) syncTranscript() {
 }
 
 func (m Model) transcriptContent() string {
-	content := strings.Join(m.renderedItems(), "\n")
-	if !m.selection.active || !m.selection.hasRange() {
-		return content
-	}
-	rows := strings.Split(content, "\n")
+	return strings.Join(m.renderedItems(), "\n")
+}
+
+// highlightTranscriptSelection paints the drag selection onto the viewport
+// output, mapping content rows back to the visible window via the viewport
+// offset. Runs at view time so the underlying content stays stable during a
+// drag and SetContent can be skipped on every motion event.
+func (m Model) highlightTranscriptSelection(view string, yOffset int) string {
 	start, end := m.selection.bounds()
-	for row := start.row; row <= end.row && row < len(rows); row++ {
+	lines := strings.Split(view, "\n")
+	for i, line := range lines {
+		row := yOffset + i
+		if row < start.row || row > end.row {
+			continue
+		}
 		from := 0
-		to := lipgloss.Width(ansi.Strip(rows[row]))
+		to := lipgloss.Width(strings.TrimRight(ansi.Strip(line), " "))
 		if row == start.row {
 			from = start.col
 		}
@@ -281,13 +296,17 @@ func (m Model) transcriptContent() string {
 			to = end.col
 		}
 		if from < to {
-			rows[row] = lipgloss.StyleRanges(rows[row], lipgloss.NewRange(from, to, selectionStyle))
+			lines[i] = lipgloss.StyleRanges(line, lipgloss.NewRange(from, to, selectionStyle))
 		}
 	}
-	return strings.Join(rows, "\n")
+	return strings.Join(lines, "\n")
 }
 
 func (m Model) renderedItems() []string {
+	return m.renderedItemsMemo()
+}
+
+func (m Model) buildRenderedItems() []string {
 	out := make([]string, 0, len(m.items))
 	for i, it := range m.items {
 		if i > 0 && (it.kind == itemUser || it.kind == itemAssistant) {
@@ -307,7 +326,8 @@ func (m Model) renderItemCopy(idx int, it transcriptItem) string {
 	if m.itemUsesWorkRail(idx) {
 		item.railInset = workRailCols
 	}
-	return item.renderItem(it, idx == m.selectedItem)
+	streaming := m.busy && it.kind == itemReasoning && !it.collapsed && idx == m.lastReasoningIndex()
+	return item.renderItem(it, idx == m.selectedItem, streaming)
 }
 
 func (m Model) railedItem(idx int, body string) string {
@@ -380,8 +400,42 @@ func (m Model) withWorkRail(s string, live bool) string {
 	return strings.Join(lines, "\n")
 }
 
-func frameUserPrompt(text string) string {
-	return workBracket + strings.TrimRight(text, "\n") + workBracketClose
+// frameUserPrompt draws one big open bracket on the left of the sent prompt:
+// the corner curls sit on the first and last lines, and every line between
+// them carries a side rail. The right edge stays open. The width follows the
+// longest line so every line stays inside the frame, and it is capped at the
+// pane width.
+func frameUserPrompt(text string, width int) string {
+	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
+	innerW := 0
+	for _, line := range lines {
+		if w := lipgloss.Width(line); w > innerW {
+			innerW = w
+		}
+	}
+	if width > 0 {
+		innerW = min(innerW, max(minPaneWidth, width))
+	}
+	innerW = max(1, innerW)
+	row := func(line, marker string) string {
+		line = ansi.Truncate(line, innerW, "…")
+		return marker + " " + line + strings.Repeat(" ", innerW-lipgloss.Width(line))
+	}
+	b := &strings.Builder{}
+	for i, line := range lines {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		switch {
+		case i == 0:
+			b.WriteString(row(line, "╭"))
+		case i == len(lines)-1:
+			b.WriteString(row(line, "╰"))
+		default:
+			b.WriteString(row(line, workRail))
+		}
+	}
+	return b.String()
 }
 
 func itemTime(messageMS int64, partMS int64) int64 {
@@ -431,8 +485,7 @@ func (m Model) metaWidth() int {
 }
 
 func (m Model) plainTranscriptRows() []string {
-	content := ansi.Strip(strings.Join(m.renderedItems(), "\n"))
-	return strings.Split(content, "\n")
+	return m.plainRowsMemo()
 }
 
 func (m *Model) applyPart(p db.Part) {
@@ -445,15 +498,67 @@ func (m *Model) applyPart(p db.Part) {
 			m.pendingUser = ""
 			return
 		}
-		m.items = append(m.items, transcriptItem{kind: itemAssistant, text: *p.Text, when: itemTime(0, p.TimeCreated)})
+		m.collapseLiveReasoning()
+		m.upsertItem(itemAssistant, p, *p.Text, false)
 	case "reasoning":
-		if p.Text != nil {
-			m.items = append(m.items, transcriptItem{kind: itemReasoning, text: *p.Text, collapsed: !m.busy, when: itemTime(0, p.TimeCreated)})
+		if p.Text == nil {
+			return
+		}
+		if !m.upsertExisting(p, *p.Text) {
+			m.collapseLiveReasoning()
+			m.items = append(m.items, transcriptItem{
+				kind:      itemReasoning,
+				text:      *p.Text,
+				collapsed: !m.busy,
+				when:      itemTime(0, p.TimeCreated),
+				part:      p,
+			})
 		}
 	case "step-finish":
+		m.collapseLiveReasoning()
 		m.applyUsage(p)
 	}
 	m.syncTranscript()
+}
+
+func (m *Model) upsertExisting(p db.Part, text string) bool {
+	if p.ID == "" {
+		return false
+	}
+	for i := range m.items {
+		if m.items[i].part.ID != p.ID {
+			continue
+		}
+		m.items[i].text = text
+		m.items[i].part = p
+		return true
+	}
+	return false
+}
+
+func (m *Model) upsertItem(kind itemKind, p db.Part, text string, collapsed bool) {
+	if m.upsertExisting(p, text) {
+		return
+	}
+	m.items = append(m.items, transcriptItem{
+		kind:      kind,
+		text:      text,
+		collapsed: collapsed,
+		when:      itemTime(0, p.TimeCreated),
+		part:      p,
+	})
+}
+
+func (m *Model) collapseLiveReasoning() {
+	from := 0
+	if m.turnItemFrom > 0 {
+		from = m.turnItemFrom
+	}
+	for i := from; i < len(m.items); i++ {
+		if m.items[i].kind == itemReasoning {
+			m.items[i].collapsed = true
+		}
+	}
 }
 
 func (m *Model) applyTool(ev agent.Event) {
@@ -463,6 +568,7 @@ func (m *Model) applyTool(ev agent.Event) {
 	if ev.Tool.Tool == "" {
 		return
 	}
+	m.collapseLiveReasoning()
 	status := ev.Tool.Status
 	if status == "" && ev.Part.ToolStatus != nil {
 		status = *ev.Part.ToolStatus
@@ -494,10 +600,10 @@ func (m *Model) applyTool(ev agent.Event) {
 	m.syncTranscript()
 }
 
-func (m Model) renderItem(it transcriptItem, selected bool) string {
+func (m Model) renderItem(it transcriptItem, selected bool, streaming bool) string {
 	switch it.kind {
 	case itemUser:
-		return m.roleLine(roleYou, it.when) + "\n" + userStyle.Render(frameUserPrompt(it.text))
+		return m.roleLine(roleYou, it.when) + "\n" + userStyle.Render(frameUserPrompt(it.text, m.width-m.railInset))
 	case itemAssistant:
 		rendered := markdown.Render(it.text, max(minPaneWidth, m.width-m.railInset))
 		return m.roleLine(roleAssistant, it.when) + "\n" + rendered
@@ -510,7 +616,11 @@ func (m Model) renderItem(it transcriptItem, selected bool) string {
 		if it.collapsed {
 			return head
 		}
-		return head + "\n" + reasoningStyle.Render(it.text)
+		body := it.text
+		if streaming {
+			body += streamCursor
+		}
+		return head + "\n" + reasoningStyle.Width(max(minPaneWidth, m.metaWidth())).Render(body)
 	case itemTool:
 		return m.renderTool(agent.Event{Part: it.part, Tool: it.tool}, it.collapsed, it.when)
 	case itemNote:

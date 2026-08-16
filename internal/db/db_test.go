@@ -264,6 +264,34 @@ func TestSeqIncrements(t *testing.T) {
 	}
 }
 
+func TestUpdatePartText(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	sess, err := s.CreateSession(ctx, Session{Directory: "/work"})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	msg, err := s.InsertMessage(ctx, Message{SessionID: sess.ID, Role: "assistant"})
+	if err != nil {
+		t.Fatalf("InsertMessage: %v", err)
+	}
+	start := "th"
+	part, err := s.InsertPart(ctx, Part{MessageID: msg.ID, Type: "reasoning", Text: &start})
+	if err != nil {
+		t.Fatalf("InsertPart: %v", err)
+	}
+	if err := s.UpdatePartText(ctx, part.ID, "think"); err != nil {
+		t.Fatalf("UpdatePartText: %v", err)
+	}
+	parts, err := s.ListParts(ctx, msg.ID)
+	if err != nil {
+		t.Fatalf("ListParts: %v", err)
+	}
+	if len(parts) != 1 || parts[0].Text == nil || *parts[0].Text != "think" {
+		t.Fatalf("parts = %+v, want reasoning text think", parts)
+	}
+}
+
 func TestUpdateToolCall(t *testing.T) {
 	ctx := context.Background()
 	s := openTestStore(t)

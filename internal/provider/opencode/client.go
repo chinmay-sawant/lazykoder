@@ -233,10 +233,16 @@ type ChatResponse struct {
 }
 
 type wireRequest struct {
-	Model           string         `json:"model"`
-	ReasoningEffort string         `json:"reasoning_effort,omitempty"`
-	Messages        []Message      `json:"messages"`
-	Tools           []wireToolSpec `json:"tools,omitempty"`
+	Model           string             `json:"model"`
+	ReasoningEffort string             `json:"reasoning_effort,omitempty"`
+	Messages        []Message          `json:"messages"`
+	Tools           []wireToolSpec     `json:"tools,omitempty"`
+	Stream          bool               `json:"stream,omitempty"`
+	StreamOptions   *wireStreamOptions `json:"stream_options,omitempty"`
+}
+
+type wireStreamOptions struct {
+	IncludeUsage bool `json:"include_usage,omitempty"`
 }
 
 type wireToolSpec struct {
@@ -256,7 +262,26 @@ type wireResponse struct {
 }
 
 type wireChoice struct {
-	Message wireResponseMessage `json:"message"`
+	Message      wireResponseMessage `json:"message"`
+	Delta        wireStreamDelta     `json:"delta"`
+	FinishReason string              `json:"finish_reason"`
+}
+
+type wireStreamDelta struct {
+	Content          string               `json:"content"`
+	Reasoning        string               `json:"reasoning"`
+	ReasoningContent string               `json:"reasoning_content"`
+	ToolCalls        []wireStreamToolCall `json:"tool_calls"`
+}
+
+type wireStreamToolCall struct {
+	Index    int    `json:"index"`
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
 }
 
 type wireResponseMessage struct {
@@ -298,13 +323,65 @@ func firstPositive(vals ...int64) int64 {
 	return 0
 }
 
-// Chat POSTs <base>/chat/completions with Authorization: Bearer <key>.
-func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func usageFromWire(u *wireUsage) *Usage {
+	if u == nil {
+		return nil
+	}
+	cachedDetails := int64(0)
+	if u.PromptTokensDetails != nil {
+		cachedDetails = u.PromptTokensDetails.CachedTokens
+	}
+	return &Usage{
+		TokensTotal:     u.TotalTokens,
+		TokensInput:     firstPositive(u.PromptTokens, u.InputTokens),
+		TokensOutput:    u.CompletionTokens,
+		TokensReasoning: u.ReasoningTokens,
+		TokensCacheRead: firstPositive(
+			u.CacheReadTokens,
+			u.CacheRead,
+			u.CacheHitTokens,
+			u.CacheHit,
+			u.PromptCacheHitTokens,
+			cachedDetails,
+		),
+		TokensCacheWrite: firstPositive(u.CacheWriteTokens, u.CacheWrite),
+		Cost:             u.Cost,
+	}
+}
+
+func chatResponseFromWire(wire wireResponse) *ChatResponse {
+	out := &ChatResponse{}
+	if len(wire.Choices) > 0 {
+		ch := wire.Choices[0]
+		m := ch.Message
+		out.Content = m.Content
+		out.Reasoning = firstNonEmpty(m.Reasoning, m.ReasoningContent)
+		out.FinishReason = firstNonEmpty(ch.FinishReason, m.FinishReason)
+		out.ToolCalls = m.ToolCalls
+	}
+	out.Usage = usageFromWire(wire.Usage)
+	return out
+}
+
+func (c *Client) postChat(ctx context.Context, req ChatRequest, stream bool) (*http.Response, error) {
 	model := c.model
 	if req.Model != "" {
 		model = req.Model
 	}
 	payload := wireRequest{Model: model, ReasoningEffort: req.ReasoningEffort, Messages: req.Messages}
+	if stream {
+		payload.Stream = true
+		payload.StreamOptions = &wireStreamOptions{IncludeUsage: true}
+	}
 	for _, t := range req.Tools {
 		payload.Tools = append(payload.Tools, wireToolSpec{
 			Type:     "function",
@@ -325,51 +402,25 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, erro
 	if err != nil {
 		return nil, fmt.Errorf("opencode: chat request failed: %w", err)
 	}
-	defer resp.Body.Close()
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		defer resp.Body.Close()
 		return nil, statusError("chat request", resp.StatusCode, resp.Body)
 	}
+	return resp, nil
+}
+
+// Chat POSTs <base>/chat/completions with Authorization: Bearer <key>.
+func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
+	resp, err := c.postChat(ctx, req, false)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
 	var wire wireResponse
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseBytes)).Decode(&wire); err != nil {
 		return nil, fmt.Errorf("opencode: decode response: %w", err)
 	}
-	out := &ChatResponse{}
-	if len(wire.Choices) > 0 {
-		m := wire.Choices[0].Message
-		out.Content = m.Content
-		out.Reasoning = m.Reasoning
-		if out.Reasoning == "" {
-			out.Reasoning = m.ReasoningContent
-		}
-		out.FinishReason = m.FinishReason
-		out.ToolCalls = m.ToolCalls
-	}
-	if wire.Usage != nil {
-		cachedDetails := int64(0)
-		if wire.Usage.PromptTokensDetails != nil {
-			cachedDetails = wire.Usage.PromptTokensDetails.CachedTokens
-		}
-		cacheRead := firstPositive(
-			wire.Usage.CacheReadTokens,
-			wire.Usage.CacheRead,
-			wire.Usage.CacheHitTokens,
-			wire.Usage.CacheHit,
-			wire.Usage.PromptCacheHitTokens,
-			cachedDetails,
-		)
-		cacheWrite := firstPositive(wire.Usage.CacheWriteTokens, wire.Usage.CacheWrite)
-		input := firstPositive(wire.Usage.PromptTokens, wire.Usage.InputTokens)
-		out.Usage = &Usage{
-			TokensTotal:      wire.Usage.TotalTokens,
-			TokensInput:      input,
-			TokensOutput:     wire.Usage.CompletionTokens,
-			TokensReasoning:  wire.Usage.ReasoningTokens,
-			TokensCacheRead:  cacheRead,
-			TokensCacheWrite: cacheWrite,
-			Cost:             wire.Usage.Cost,
-		}
-	}
-	return out, nil
+	return chatResponseFromWire(wire), nil
 }
 
 func (c *Client) chatURL(req ChatRequest) string {

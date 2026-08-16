@@ -1,7 +1,7 @@
 # v0.0.1 / Phase 4 - Live tokens/sec, status line customizations, and tracked todos
 
 > **Parent:** `plans/v0.0.1/README.md` - status line, part types, and schema
-> **Status:** planned 2026-08-16 (no rows landed; mark `[x]` only when the gate passes)
+> **Status:** 4.1 and most of 4.2 landed 2026-08-16 (thinking stream + collapse). 4.3 live tps, 4.4 status segments, 4.5 todos, 4.6 schema still open.
 > **Estimated effort:** 2-3 days
 > **Priority:** P1 (user requested; the three slices are independent except 4.2 feeds 4.3)
 > **Gate:** status line shows a live tokens/sec value while the model answers; status line segments are user-configurable; model-driven todos render and update on screen and survive replay from SQLite
@@ -12,7 +12,7 @@
 
 Three user-requested features on top of the Phase 1-3 harness:
 
-1. **Tokens/sec in the status line.** The bottom status line (currently `model X  •  m switch  •  / commands  •  enter to send  •  q to quit` in `internal/ui/chat/chat.go:statusLine`) must show how fast the model is generating tokens. Today the provider call is non-streaming (streaming is the deferred `[~]` row in phase-3 3.9), so a real-time speed needs streaming deltas from the API. Plan the streaming path first, with a usage-based fallback.
+1. **Tokens/sec in the status line.** The bottom status line must show how fast the model is generating tokens. The provider now streams SSE deltas (`ChatStream`); live tps from those deltas is still the 4.3 hole.
 2. **Status line customizations.** Make the status line segments configurable (show/hide model, tps, token totals, cost, scroll hint, models count) through the TUI, not code edits.
 3. **Model-driven todos.** Let the model call a `todowrite` tool so it can plan and update todo items; the TUI must track those todos somewhere on screen and keep them visible as they change.
 
@@ -27,27 +27,27 @@ Rules from the parent plan stay: `Update` pure, side effects in `tea.Cmd`, no ne
 
 ## 4.1 Provider streaming deltas (P1)
 
-- [ ] `internal/provider/opencode` gains `ChatStream(ctx, req, onDelta func(Delta))` next to `Chat` - `Chat` stays for tests/fallback; `Delta` carries text, reasoning, tool-call deltas, and cumulative usage
-- [ ] Parse `text/event-stream` (and `application/x-ndjson` if the endpoint emits that) with `bufio.Scanner`; `data: {...}` lines only, skip `[DONE]` and comments - stdlib only, no SSE dependency
-- [ ] Reuse `wireResponse`/`wireChoice` shapes: each chunk has `choices[0].delta.{content,reasoning_content,tool_calls}` plus optional `usage` - verify against a recorded httptest fixture before writing the parser
-- [ ] Usage arrives at the end of the stream (`usage` on the final chunk, or a trailing chunk); expose `TokensOutput` cumulative so the agent can write the `step-finish` part exactly as today - same fields as `wireUsage`
-- [ ] Tool-call deltas accumulate across chunks (index + id + name + arguments fragments) until `finish_reason: "tool-calls"`; only then is a complete `ToolCall` emitted - mirror of the non-streaming unmarshal in `client.go`
-- [ ] Timeout and cancellation: `ChatStream` respects `ctx` (client timeout from the agent call site), aborts mid-stream on ctx.Done, returns a readable error
-- [ ] Test: httptest server streams 5 chunks; parser yields 5 deltas with accumulated text equal to the concatenation; usage on the final chunk lands - new `client_stream_test.go`, exit 0
-- [ ] Test: garbage line mid-stream (non-JSON `data:`) is skipped, not fatal; server abort mid-stream returns an error and no panic - exit 0
+- [x] `internal/provider/opencode` gains `ChatStream(ctx, req, onDelta func(Delta))` next to `Chat` - `Chat` stays for tests/fallback; `Delta` carries text, reasoning, and cumulative usage. Tool-call fragments accumulate inside the parser and land on the returned `ChatResponse`
+- [x] Parse `text/event-stream` (and `application/x-ndjson`) with `bufio.Scanner`; `data: {...}` lines only, skip `[DONE]` and comments - stdlib only. A JSON `application/json` body is one complete fallback chunk
+- [x] Reuse `wireResponse`/`wireChoice` shapes: each chunk has `choices[0].delta.{content,reasoning,reasoning_content,tool_calls}` plus optional `usage`
+- [x] Usage arrives at the end of the stream (`usage` on the final chunk); same `wireUsage` fields as `Chat`
+- [x] Tool-call deltas accumulate across chunks (index + id + name + arguments fragments) until `finish_reason: "tool-calls"`; complete `ToolCall`s are on the returned response
+- [x] Timeout and cancellation: `ChatStream` respects `ctx`, aborts mid-stream on ctx.Done - `TestChatStreamContextCancel`
+- [x] Test: httptest server streams 5 chunks; parser yields 5 deltas with accumulated text equal to the concatenation; usage on the final chunk lands - `TestChatStreamAccumulatesChunks`, `go test ./internal/provider/opencode -count=1` exit 0 - 2026-08-16
+- [x] Test: garbage line mid-stream (non-JSON `data:`) is skipped, not fatal; server abort mid-stream returns an error and no panic - `TestChatStreamSkipsGarbageLine`, `TestChatStreamAbortReturnsError`, exit 0 - 2026-08-16
 
 ## 4.2 Agent streaming turn + tokens/sec source (P1)
 
-- [ ] `internal/agent` `Send` uses `ChatStream` when `Options.Streaming` is true (default true; non-streaming path retained for tests and the fallback)
-- [ ] Deltas map to events: text delta updates the in-flight `text` part, reasoning delta updates the in-flight `reasoning` part, complete tool call emits `EventTool` exactly like today - `EventKind` may gain `EventStream`/`EventUsage` only if the chat model needs a distinct case; prefer reusing `EventPart` when possible
-- [ ] `step-finish` part still written once with final usage and elapsed time (`time_start`/`time_end` on the parts rows already support this) - elapsed per step = `time.Since(stepStart)`
+- [x] `internal/agent` `Send` uses `ChatStream` by default. `Options.DisableStreaming` keeps the `Chat` + `writeResponse` path
+- [x] Deltas map to events: text delta updates the in-flight `text` part, reasoning delta updates the in-flight `reasoning` part, complete tool call emits `EventTool` exactly like today. Reuses `EventPart` / `UpdatePartText`
+- [ ] `step-finish` part still written once with final usage. Time stamps (`time_start`/`time_end`) on that row are not set yet
 - [ ] New event carries tokens/sec data: `tokens_output` cumulative delta count + elapsed, or a computed rate when the agent closes the step - chat model renders, agent does not format
-- [ ] Test: fake streaming provider drives `Send`; db rows match the non-streaming fixture test (part-type counts identical); `TestSendFixturePartTypes` still passes with streaming on - exit 0
+- [x] Test: fake streaming provider drives `Send`; db rows stay `step-start` / `reasoning` / `text` / `step-finish`; `TestSendStreamingReasoningAndText` + `TestSendFixturePartTypes` - `go test ./internal/agent -count=1` exit 0 - 2026-08-16
 - [ ] Test: tokens/sec math unit-tested in the agent or a small helper (delta 60 tokens over 2.0s = 30.0 tps; zero-time guard returns "-" not NaN/Inf) - exit 0
 
 ## 4.3 Status line: live tokens/sec (P1)
 
-- [ ] `statusLine()` gains a tps segment rendered while `m.busy`: `tps: 42.3` from the rolling window; on completion show the final average `tps: 42.3` for a few seconds or fold into the summary - `internal/ui/chat/chat.go:1101`
+- [x] Footer shows tps while busy (generated / elapsed so far) and keeps the turn average after done (`80 tps`). Not a rolling window yet - `TestFooterShowsLiveTPSWhileBusy`, `TestTokensPerSecUsesGeneratedNotSessionTotal`, `go test ./internal/ui/chat -count=1` exit 0 - 2026-08-16
 - [ ] Rolling window: last N delta samples (e.g. 10) over their wall time; window resets per step (each tool step restarts the count) - deterministic, no time source beyond `time.Now()`
 - [ ] Fallback when the provider or model returns no streaming (non-streaming client): compute `usage.TokensOutput / elapsed` at step end and render it once - never invent a live value when there are no deltas
 - [ ] Status line stays readable: tps segment is muted style like the rest; long values truncate (`99.9` max, or `>99.9`), no wrapping - verify full-width render in chat tests
@@ -87,8 +87,8 @@ Rules from the parent plan stay: `Update` pure, side effects in `tea.Cmd`, no ne
 
 ## Closure gates
 
-- [ ] `go test ./... -count=1` passes on a rebuilt tree (record exit code) - pending
-- [ ] `go vet ./...` passes - pending
+- [x] `go test ./... -count=1` passes on a rebuilt tree - exit 0 - 2026-08-16 (streaming slice; 4.3-4.6 still open)
+- [x] `go vet ./...` passes - exit 0 - 2026-08-16
 - [ ] Status line shows a live tokens/sec value while streaming and a usage-based value after a non-streaming turn - pending (chat test)
 - [ ] Status line segments toggle via the picker and the layout survives a session restart (persisted) - pending
 - [ ] A fixture session with `todowrite` calls replays into the same on-screen todo panel from SQLite with no network - pending

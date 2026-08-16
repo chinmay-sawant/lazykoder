@@ -22,10 +22,27 @@ func (m Model) updateKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 	if key.Code != 'c' && key.Code != 'C' {
 		m = m.clearTextSelection()
 	}
+	if key.Code != 'a' && key.Code != 'A' && !(key.Mod.Contains(tea.ModCtrl) && key.Code == 'c') {
+		m.promptSelectAll = false
+	}
 	if key.Code != tea.KeyEscape {
 		m.escapePending = false
 	}
 	if key.Mod.Contains(tea.ModCtrl) {
+		switch key.Code {
+		case 'a', 'A':
+			m.promptSelectAll = true
+			m.quitConfirm = false
+			m.prompt.CursorEnd()
+			return m, nil
+		case 'c', 'C':
+			m.quitConfirm = false
+			if m.prompt.Value() == "" {
+				return m, nil
+			}
+			m.copyNotice = "Text copied"
+			return m, tea.Batch(tea.SetClipboard(m.prompt.Value()), clearCopyNotice())
+		}
 		var cmd tea.Cmd
 		m.prompt, cmd = m.prompt.Update(key)
 		return m, cmd
@@ -50,6 +67,7 @@ func (m Model) updateKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 			m.historyDraft = ""
 			m.promptUndo = nil
 			m.slashFromPaste = false
+			m.promptSelectAll = false
 			return m, nil
 		}
 		m.escapePending = true
@@ -134,9 +152,19 @@ func (m Model) updateKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.transcript.PageDown()
 		return m, nil
 	case tea.KeyHome:
+		if m.prompt.Value() != "" {
+			var cmd tea.Cmd
+			m.prompt, cmd = m.prompt.Update(key)
+			return m, cmd
+		}
 		m.transcript.GotoTop()
 		return m, nil
 	case tea.KeyEnd:
+		if m.prompt.Value() != "" {
+			var cmd tea.Cmd
+			m.prompt, cmd = m.prompt.Update(key)
+			return m, cmd
+		}
 		m.transcript.GotoBottom()
 		return m, nil
 	}
@@ -179,6 +207,7 @@ func (m Model) submit(text string) (Model, tea.Cmd) {
 	m.busy = true
 	m.err = ""
 	m.copyNotice = ""
+	m.promptSelectAll = false
 	m.pendingUser = text
 	m.historyCursor = -1
 	m.historyDraft = ""
@@ -275,7 +304,12 @@ func (m Model) undoPrompt() Model {
 	m.escapePending = false
 	m.historyCursor = -1
 	m.historyDraft = ""
+	m.promptSelectAll = false
 	return m
+}
+
+func (m Model) promptEditing() bool {
+	return !m.confirmMode && !m.askMode && !m.helpMode && !m.filePickerMode && !m.pickerMode && !m.sessionPickerMode && !m.slashMode
 }
 
 func (m Model) selectedHistoryItem() (inputHistoryItem, bool) {
@@ -305,6 +339,7 @@ func (m Model) navigateHistory(delta int) Model {
 			m.prompt.SetValue(m.historyDraft)
 			m.prompt.SetHeight(m.promptHeight())
 			m.historyDraft = ""
+			m.promptSelectAll = false
 			return m
 		}
 		m.historyCursor = next
@@ -314,6 +349,7 @@ func (m Model) navigateHistory(delta int) Model {
 	m.escapePending = false
 	m.promptUndo = nil
 	m.slashFromPaste = false
+	m.promptSelectAll = false
 	return m
 }
 
@@ -342,6 +378,7 @@ func (m Model) deleteSelectedHistory() (Model, tea.Cmd) {
 	m.prompt.SetValue(draft)
 	m.promptUndo = nil
 	m.slashFromPaste = false
+	m.promptSelectAll = false
 	m.syncTranscript()
 	if item.messageID == "" || m.store == nil {
 		return m, nil

@@ -35,7 +35,7 @@ human runs them.
 - OpenCode CLI embedding / local opencode server
 - Reading OpenCode's global `~/.local/share/opencode/opencode.db`
 - Auto-run of any `rm`, sticky tool permissions
-- Streaming token paint in the TUI
+- Live tokens/sec, status-segment toggles, and todowrite (phase 4 remainder)
 
 TUI findings from the 2026-08-16 review live in `plans/v0.0.1/findings/`
 so they stay next to the harness they audit. New product versions still

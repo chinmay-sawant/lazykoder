@@ -11,22 +11,17 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
+	"github.com/chinmay-sawant/lazykoder/internal/tips"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
 
 // View renders the picker card, slash menu, confirm overlay, or the chat layout.
 func (m Model) View() tea.View {
-	if m.quitConfirm {
-		return m.newView(m.quitScreen())
-	}
 	if m.sessionPickerMode {
 		return m.newView(m.sessionPickerScreen())
 	}
 	screen := m.chatScreen()
-	overlayH := m.height
-	if ph := lipgloss.Height(m.composerBlock()); ph > 0 && overlayH > ph {
-		overlayH -= ph
-	}
+	overlayH := m.composerTop()
 	if m.confirmMode {
 		screen = overlayOn(screen, m.width, overlayH, m.confirmOverlay())
 	}
@@ -62,6 +57,8 @@ func (m Model) chatScreen() string {
 	b.WriteString(m.headerView())
 	b.WriteString("\n")
 	b.WriteString(m.transcriptView())
+	b.WriteString("\n")
+	b.WriteString(m.alertRow())
 	b.WriteString("\n")
 	if m.slashMode {
 		b.WriteString(m.slashView())
@@ -139,15 +136,6 @@ func spliceDisplay(dst, src string, left int) string {
 	return prefix + src + suffix
 }
 
-func (m Model) quitScreen() string {
-	card := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("3")).
-		Padding(1, cardBorder).
-		Render("Press Ctrl+C again to close lazyKoder\nEsc cancel")
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, card)
-}
-
 // promptLine renders the prompt inside a subtle translucent-looking panel:
 // a dark background with bright text so the input stays clearly readable.
 // A bottom margin lifts it one row above the bottom edge.
@@ -164,6 +152,72 @@ func (m Model) liveStatusView() string {
 	return lipgloss.NewStyle().Width(max(minPaneWidth, m.width)).Render(line)
 }
 
+// jumpBarVisible reports whether the transcript is scrolled up so the
+// jump-to-latest icon should appear on the alert row above the input box.
+// Scrolling up keeps the view pinned until the user clicks the icon, so new
+// output never yanks the view to the bottom.
+func (m Model) jumpBarVisible() bool {
+	if m.pickerMode || m.slashMode || m.confirmMode || m.askMode || m.helpMode || m.filePickerMode || m.sessionPickerMode {
+		return false
+	}
+	return !m.transcript.AtBottom()
+}
+
+// alertRow is the transparent row above the input box: the jump-to-latest
+// icon sits centered, and transient alerts (copy confirmations, the quit
+// warning) appear right-aligned.
+func (m Model) alertRow() string {
+	w := max(minPaneWidth, m.width)
+	row := strings.Repeat(" ", w)
+	if m.jumpBarVisible() {
+		row = spliceDisplay(row, lipgloss.NewStyle().Faint(true).Render(jumpDownArrow), w/2)
+	}
+	if alert := m.alertText(); alert != "" {
+		row = spliceDisplay(row, alert, max(0, w-lipgloss.Width(alert)))
+	}
+	return row
+}
+
+// alertText is the transient message shown right-aligned on the alert row:
+// the red quit warning wins, then the green copy confirmation, then the
+// rotating idle tip.
+func (m Model) alertText() string {
+	switch {
+	case m.quitConfirm:
+		return lipgloss.NewStyle().Foreground(theme.ColorDanger()).Bold(true).Render("ctrl+c again to quit")
+	case m.copyNotice != "":
+		return lipgloss.NewStyle().Foreground(theme.ColorGood()).Bold(true).Render(m.copyNotice)
+	case m.tipsVisible():
+		return lipgloss.NewStyle().Bold(true).Foreground(theme.ColorMute()).Render(tipLabel) + " " + hintStyle.Render(tips.At(m.tipsIndex))
+	}
+	return ""
+}
+
+// tipsVisible reports whether the rotating usage tip should show on the
+// alert row: only while the user is doing nothing (idle, no overlay).
+func (m Model) tipsVisible() bool {
+	if m.busy || m.quitConfirm || m.copyNotice != "" {
+		return false
+	}
+	return m.promptEditing()
+}
+
+// composerTop is the first screen row of the input box panel: everything
+// above it is free for overlays.
+func (m Model) composerTop() int {
+	top := m.transcriptTop() + m.transcriptRenderHeight() + 1 // alert row
+	if m.slashMode {
+		top += 1 + lipgloss.Height(m.slashView())
+	}
+	if m.pickerMode {
+		top += 1 + lipgloss.Height(m.pickerView())
+	}
+	if m.err != "" {
+		top += 1 + lipgloss.Height(errStyle.Width(max(minPaneWidth, m.width)).Render(m.err))
+	}
+	return top
+}
+
 func (m Model) composerBlock() string {
 	if m.showLiveStatus() {
 		return m.liveStatusView() + "\n\n" + m.promptLine()
@@ -177,6 +231,12 @@ func (m Model) promptLine() string {
 	h := m.promptHeight()
 	p.SetHeight(h)
 	p.SetWidth(max(minPaneWidth, innerW-2))
+	if m.promptSelectAll {
+		st := p.Styles()
+		st.Focused.Text = selectionStyle
+		st.Focused.CursorLine = selectionStyle
+		p.SetStyles(st)
+	}
 	text := p.View()
 	if m.visualPromptLines() > h {
 		text = withScrollbar(text, p.Width(), h, p.ScrollPercent(), true)
@@ -192,42 +252,156 @@ func (m Model) promptLine() string {
 
 func (m Model) composerFooter(width int) string {
 	left := m.composerLeft()
-	right := m.modelContextLabel()
-	if m.copyNotice != "" {
-		left = lipgloss.NewStyle().Foreground(theme.ColorGood()).Bold(true).Render(m.copyNotice)
-	}
+	right := m.fitFooterRight(max(4, width-lipgloss.Width(left)-1))
 	gap := width - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 1 {
 		gap = 1
-		right = truncateRunes(right, max(4, width-lipgloss.Width(left)-1))
 	}
 	return left + strings.Repeat(" ", gap) + hintStyle.Render(right)
 }
 
 func (m Model) modelContextLabel() string {
-	label := m.modelDisplayLabel()
+	return joinFooter(m.modelDisplayLabel(), m.footerStats())
+}
+
+func (m Model) footerStats() string {
+	return strings.Join(m.footerStatParts(), "  ")
+}
+
+func (m Model) footerPieces() (tokens, cache, cost, tps string) {
 	window := modelscache.ContextOf(m.modelInfos, m.modelLabel())
-	if m.tokensUsed > 0 && window > 0 {
-		label = label + "  " + formatTokens(m.tokensUsed) + "/" + formatTokens(int64(window))
-	} else if m.tokensUsed > 0 {
-		label = label + "  " + formatTokens(m.tokensUsed)
-	} else if window > 0 {
-		label = label + "  0/" + formatTokens(int64(window))
+	switch {
+	case m.tokensUsed > 0 && window > 0:
+		tokens = formatTokens(m.tokensUsed) + "/" + formatTokens(int64(window))
+	case m.tokensUsed > 0:
+		tokens = formatTokens(m.tokensUsed)
+	case window > 0:
+		tokens = "0/" + formatTokens(int64(window))
 	}
 	if m.cacheHit > 0 || m.cacheMiss > 0 {
-		label = label + "  " + formatCache(m.cacheHit, m.cacheMiss)
+		cache = formatCache(m.cacheHit, m.cacheMiss)
 	}
 	if m.tokensUsed > 0 || m.cacheHit > 0 || m.cacheMiss > 0 || m.sessionCost > 0 {
-		label = label + "  " + formatCost(m.sessionCost)
+		cost = formatCost(m.sessionCost)
 	}
-	if m.tokensPerSec > 0 {
-		label = label + "  " + formatTPS(m.tokensPerSec)
+	if n := m.displayTPS(); n > 0 {
+		tps = formatTPS(n)
 	}
-	return label
+	return tokens, cache, cost, tps
+}
+
+func (m Model) footerStatParts() []string {
+	tokens, cache, cost, tps := m.footerPieces()
+	parts := make([]string, 0, 4)
+	for _, p := range []string{tokens, cache, cost, tps} {
+		if p != "" {
+			parts = append(parts, p)
+		}
+	}
+	return parts
+}
+
+func (m Model) fitFooterRight(budget int) string {
+	model := m.modelDisplayLabel()
+	tokens, cache, cost, tps := m.footerPieces()
+	try := func(includeModel bool, bits ...string) string {
+		parts := make([]string, 0, len(bits))
+		for _, b := range bits {
+			if b != "" {
+				parts = append(parts, b)
+			}
+		}
+		stats := strings.Join(parts, "  ")
+		if includeModel {
+			right := joinFooter(model, stats)
+			if lipgloss.Width(right) <= budget {
+				return right
+			}
+			if stats != "" {
+				modelBudget := budget - lipgloss.Width(stats) - 2
+				if modelBudget >= 4 {
+					return truncateRunes(model, modelBudget) + "  " + stats
+				}
+			}
+			return ""
+		}
+		if stats != "" && lipgloss.Width(stats) <= budget {
+			return stats
+		}
+		return ""
+	}
+	if s := try(true, tokens, cache, cost, tps); s != "" {
+		return s
+	}
+	if s := try(true, tokens, cache, cost); s != "" {
+		return s
+	}
+	if s := try(true, tokens, cache); s != "" {
+		return s
+	}
+	if s := try(true, cache); s != "" {
+		return s
+	}
+	if s := try(false, tokens, cache, cost, tps); s != "" {
+		return s
+	}
+	if s := try(false, cache); s != "" {
+		return s
+	}
+	if cache != "" {
+		return truncateRunes(cache, budget)
+	}
+	return truncateRunes(model, budget)
+}
+
+func joinFooter(model, stats string) string {
+	switch {
+	case model != "" && stats != "":
+		return model + "  " + stats
+	case stats != "":
+		return stats
+	default:
+		return model
+	}
 }
 
 func formatCache(hit, miss int64) string {
-	return "hit " + formatTokens(hit) + "  miss " + formatTokens(miss)
+	hitPct, missPct := cachePercents(hit, miss)
+	return "hit " + formatTokens(hit) + " " + formatPercent(hitPct) +
+		"  miss " + formatTokens(miss) + " " + formatPercent(missPct)
+}
+
+func cacheHitPercent(hit, miss int64) int {
+	hitPct, _ := cachePercents(hit, miss)
+	return hitPct
+}
+
+func cachePercents(hit, miss int64) (hitPct, missPct int) {
+	total := hit + miss
+	if total <= 0 {
+		return 0, 0
+	}
+	if miss <= 0 {
+		return 100, 0
+	}
+	if hit <= 0 {
+		return 0, 100
+	}
+	hitPct = int((hit*100 + total/2) / total)
+	if hitPct > 100 {
+		hitPct = 100
+	}
+	return hitPct, 100 - hitPct
+}
+
+func formatPercent(n int) string {
+	if n < 0 {
+		n = 0
+	}
+	if n > 100 {
+		n = 100
+	}
+	return fmt.Sprintf("%d%%", n)
 }
 
 func formatCost(usd float64) string {
@@ -260,7 +434,7 @@ func (m Model) composerLeft() string {
 }
 
 func (m Model) transcriptRenderHeight() int {
-	fixedRows := lipgloss.Height(m.headerView()) + 1 + 1 + lipgloss.Height(m.composerBlock())
+	fixedRows := lipgloss.Height(m.headerView()) + 1 + 1 + 1 + lipgloss.Height(m.composerBlock())
 	if m.slashMode {
 		fixedRows += 1 + lipgloss.Height(m.slashView())
 	}
@@ -301,7 +475,11 @@ func (m Model) transcriptView() string {
 		return lipgloss.NewStyle().Width(max(minPaneWidth, m.width)).Height(h).Render(empty)
 	}
 	vp := m.paintedTranscript()
-	return withScrollbar(vp.View(), vp.Width(), h, vp.ScrollPercent(), vp.TotalLineCount() > h)
+	view := vp.View()
+	if m.selection.active && m.selection.hasRange() {
+		view = m.highlightTranscriptSelection(view, vp.YOffset())
+	}
+	return withScrollbar(view, vp.Width(), h, vp.ScrollPercent(), vp.TotalLineCount() > h)
 }
 
 func (m Model) helpOverlay() string {
@@ -314,11 +492,12 @@ func (m Model) helpOverlay() string {
 		{"/variant", "reasoning effort"},
 		{"@", "mention a file"},
 		{"click model", "switch"},
-		{"t", "thinking"},
-		{"e", "expand last tool"},
+		{"t / e", "thinking / expand tool"},
 		{"esc", "cancel turn"},
-		{"ctrl+c", "quit"},
-		{"↑/↓  page", "scroll"},
+		{"ctrl+a", "select all"},
+		{"ctrl+←/→", "jump words"},
+		{"ctrl+home/end", "input start/end"},
+		{"ctrl+c", "copy / quit"},
 	}
 	keyW := 0
 	for _, row := range rows {
@@ -492,8 +671,9 @@ func (m Model) modelStatusRect() (left, top, right, bottom int, ok bool) {
 	if m.busy || m.pickerMode || m.sessionPickerMode {
 		return 0, 0, 0, 0, false
 	}
-	label := m.modelContextLabel()
-	top = lipgloss.Height(m.headerView()) + 1 + m.transcriptRenderHeight() + 1
+	leftW := lipgloss.Width(m.composerLeft())
+	label := m.fitFooterRight(max(4, max(minPaneWidth, m.width)-2-leftW-1))
+	top = lipgloss.Height(m.headerView()) + 1 + m.transcriptRenderHeight() + 1 + 1
 	if m.slashMode {
 		top += 1 + lipgloss.Height(m.slashView())
 	}
