@@ -195,6 +195,7 @@ func (m Model) submit(text string) (Model, tea.Cmd) {
 	m.pulse = 0
 	m.pulseOn = true
 	m.activity = "thinking"
+	m.turnStarted = time.Now()
 	return m, tea.Batch(sendCmd, m.watchEvents(seq), pulseTick())
 }
 

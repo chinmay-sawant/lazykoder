@@ -708,18 +708,124 @@ func TestSessionPickerEscKeepsCurrent(t *testing.T) {
 	}
 }
 
-func TestComposerShowsLiveActivity(t *testing.T) {
+func TestReplayRestoresTokensFromStepFinish(t *testing.T) {
+	st := newTestStore(t)
+	sess, err := st.CreateSession(context.Background(), db.Session{Title: "t", Directory: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	am, err := st.InsertMessage(context.Background(), db.Message{SessionID: sess.ID, Role: "assistant"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	total := int64(4321)
+	if _, err := st.InsertPart(context.Background(), db.Part{MessageID: am.ID, Type: "step-finish", TokensTotal: &total}); err != nil {
+		t.Fatal(err)
+	}
+	m := New(Options{Store: st, Client: deadClient(), Workdir: t.TempDir(), Session: &sess})
+	if m.tokensUsed != 4321 {
+		t.Fatalf("tokensUsed = %d, want 4321 after replay", m.tokensUsed)
+	}
+}
+
+func TestReplayEstimatesTokensWithoutUsage(t *testing.T) {
+	st := newTestStore(t)
+	sess, err := st.CreateSession(context.Background(), db.Session{Title: "t", Directory: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	um, err := st.InsertMessage(context.Background(), db.Message{SessionID: sess.ID, Role: "user"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := strings.Repeat("abcd", 50)
+	if _, err := st.InsertPart(context.Background(), db.Part{MessageID: um.ID, Type: "text", Text: &text}); err != nil {
+		t.Fatal(err)
+	}
+	m := New(Options{Store: st, Client: deadClient(), Workdir: t.TempDir(), Session: &sess})
+	if m.tokensUsed <= 0 {
+		t.Fatalf("tokensUsed = %d, want an estimate from stored text", m.tokensUsed)
+	}
+}
+
+func TestRefreshWritesModelsCache(t *testing.T) {
+	dir := t.TempDir()
+	cachePath := filepath.Join(dir, "models.json")
+	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
+	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: dir, CachePath: cachePath})
+	msg := m.refreshModels()
+	got, ok := msg.(modelsMsg)
+	if !ok {
+		t.Fatalf("refreshModels returned %T", msg)
+	}
+	if got.err != nil {
+		t.Fatalf("refreshModels err = %v", got.err)
+	}
+	infos, _, err := modelscache.Load(cachePath, time.Now(), modelscache.DefaultTTL)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(infos) < 1 {
+		t.Fatalf("cache not written: %+v", infos)
+	}
+	flash, ok := modelscache.InfoOf(infos, "deepseek-v4-flash")
+	if !ok || flash.Context <= 0 || flash.InputPerM <= 0 || flash.OutputPerM <= 0 {
+		t.Fatalf("cache missing context/prices: %+v", infos)
+	}
+}
+
+func TestLiveTextPaintsInstantly(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	m.busy = true
+	full := "abcdefghijklmnopqrstuvwxyz"
+	m.applyPart(db.Part{Type: "text", Text: &full})
+	if got := m.items[len(m.items)-1].text; got != full {
+		t.Fatalf("live text = %q, want instant full text", got)
+	}
+}
+
+func TestComposerHidesLiveActivity(t *testing.T) {
 	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
 	m.busy = true
 	m.activity = "bash  echo hello"
 	v := stripANSI(viewText(m))
-	if !strings.Contains(v, "bash  echo hello") {
-		t.Fatalf("footer missing live activity: %q", v)
+	if strings.Contains(v, "bash  echo hello") {
+		t.Fatalf("footer still shows live activity: %q", v)
 	}
-	if strings.Contains(v, "enter send") {
-		t.Fatalf("idle hint shown while busy: %q", v)
+	if !strings.Contains(v, "enter send") {
+		t.Fatalf("idle hint missing while busy: %q", v)
 	}
 }
+
+func TestTokensDoNotResetOnSmallerUsage(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	high := int64(8000)
+	low := int64(12)
+	m.applyPart(db.Part{Type: "step-finish", TokensTotal: &high})
+	if m.tokensUsed != 8000 {
+		t.Fatalf("tokensUsed = %d, want 8000", m.tokensUsed)
+	}
+	m.applyPart(db.Part{Type: "step-finish", TokensTotal: &low})
+	if m.tokensUsed != 8000 {
+		t.Fatalf("tokensUsed reset to %d, want to keep 8000", m.tokensUsed)
+	}
+}
+
+func TestComposerShowsCost(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	m.model = "deepseek-v4-flash"
+	m.modelInfos = []modelscache.Info{{ID: "deepseek-v4-flash", Context: 1000000, InputPerM: 0.14, OutputPerM: 0.28}}
+	in, out := int64(1_000_000), int64(1_000_000)
+	m.applyPart(db.Part{Type: "step-finish", TokensInput: &in, TokensOutput: &out, TokensTotal: ptrInt64(2_000_000)})
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	m = mm.(Model)
+	v := stripANSI(viewText(m))
+	if !strings.Contains(v, "$0.420") && !strings.Contains(v, "$0.42") {
+		t.Fatalf("footer missing session cost: %q", v)
+	}
+}
+
+func ptrInt64(n int64) *int64 { return &n }
 
 func TestComposerShowsContext(t *testing.T) {
 	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
@@ -762,6 +868,21 @@ func TestTurnShowsTimestamp(t *testing.T) {
 	v := stripANSI(viewText(m))
 	if !strings.Contains(v, roleYou) || !strings.Contains(v, "just now") {
 		t.Fatalf("user turn missing timestamp: %q", v)
+	}
+	if !stampOnRight(v, roleYou, "just now") {
+		t.Fatalf("timestamp not right-aligned on the you row: %q", v)
+	}
+}
+
+func TestThinkingTimestampIsRightAligned(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	m.items = append(m.items, transcriptItem{
+		kind: itemReasoning, text: "secret", collapsed: true, when: time.Now().UnixMilli(),
+	})
+	m.syncTranscript()
+	v := stripANSI(viewText(m))
+	if !stampOnRight(v, thinkingLabel, "just now") {
+		t.Fatalf("thinking timestamp not right-aligned: %q", v)
 	}
 }
 
@@ -971,7 +1092,7 @@ func TestEditDiffCard(t *testing.T) {
 	path := "main.go"
 	tc := db.ToolCall{
 		Tool: "edit", Status: "completed", Title: &path,
-		InputJSON: `{"filePath":"main.go","oldString":"old","newString":"new line"}`,
+		InputJSON:    `{"filePath":"main.go","oldString":"old","newString":"new line"}`,
 		MetadataJSON: &meta,
 	}
 	m.items = append(m.items, transcriptItem{kind: itemTool, collapsed: true, tool: tc})

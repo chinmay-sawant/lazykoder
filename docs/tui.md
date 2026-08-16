@@ -9,18 +9,25 @@ pickers are centered cards.
 - Header: `lazykoder`, the session title (or `new session`), and the project
   directory basename.
 - Transcript: user turns labeled `you`, assistant turns labeled `assistant`,
-  each with a relative timestamp (`just now`, `2m ago`). Reasoning starts
-  collapsed as `▸ thinking`; `t` expands it when the prompt is empty. Tool
-  runs are full-width cards that start collapsed
-  (`◆  bash  title  ·  just now  ·  completed`). The diamond stays on the
+  each with a relative timestamp (`just now`, `2m ago`) on the far right of
+  the row. Reasoning starts collapsed as `▸ thinking` with its timestamp on
+  the far right; `t` expands it when the prompt is empty. Tool runs are
+  full-width cards that start collapsed (`◆  ▸  bash  title` on the left,
+  `just now  ·  completed` on the far right). The diamond stays on the
   card after the turn ends: white while pending or running, green on
-  success, red on error or deny. `e` expands the last run.
+  success, red on error or deny. `e` expands the last run. Clicks on a
+  thinking or tool header toggle that item.
 - Composer: a rounded input box on the solid black layer. Typed text uses
   the same black background as the rest of the screen (no cursor-line
-  highlight). The footer shows live activity on the left (`thinking`, the
-  current command, or a writing snippet) and `model  used/window` on the
-  right (click the model to switch). Context windows come from GET /models
-  and are stored in `.lazykoder/models.json`.
+  highlight). The footer left side stays idle (`enter send`). Live thinking
+  and commands stay in the transcript. The right side shows
+  `model  used/window  $cost  tps` (click the model to switch). Context
+  windows and list prices come from GET /models, filled from the OpenCode
+  Go catalog when the API omits them, and are stored in
+  `.lazykoder/models.json`. Reopening a session restores used tokens from
+  stored step-finish usage, or estimates them from the transcript. Session
+  token totals never drop when a later step reports smaller usage. `/refresh`
+  always rewrites that cache. Live text is painted instantly.
 - Session list (`/sessions` or `ctrl+s`) groups runs as `just now`,
   `recently`, and `older`.
 - Session picker: `/sessions` or `ctrl+s` lists sessions for the project

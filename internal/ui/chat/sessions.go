@@ -243,6 +243,9 @@ func (m Model) loadSession(sess *db.Session) Model {
 	m.promptUndo = nil
 	m.slashFromPaste = false
 	m.err = ""
+	m.tokensUsed = 0
+	m.sessionCost = 0
+	m.tokensPerSec = 0
 	m.prompt.SetValue("")
 	m.session = sess
 	if sess != nil {

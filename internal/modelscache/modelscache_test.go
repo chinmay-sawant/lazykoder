@@ -3,6 +3,7 @@ package modelscache
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -63,6 +64,15 @@ func TestLoadCorruptFile(t *testing.T) {
 	}
 }
 
+func TestHasContext(t *testing.T) {
+	if HasContext([]Info{{ID: "a"}}) {
+		t.Fatal("HasContext true without windows")
+	}
+	if !HasContext([]Info{{ID: "a", Context: 1000}}) {
+		t.Fatal("HasContext false with a window")
+	}
+}
+
 func TestLoadLegacyStringArray(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "models.json")
 	raw := `{"fetched_at":1,"models":["deepseek-v4-flash","claude-4"]}`
@@ -75,5 +85,36 @@ func TestLoadLegacyStringArray(t *testing.T) {
 	}
 	if len(models) != 2 || models[0].ID != "deepseek-v4-flash" || models[1].ID != "claude-4" {
 		t.Errorf("legacy models = %+v", models)
+	}
+	if models[0].Context != 1000000 || models[0].InputPerM != 0.14 || models[0].OutputPerM != 0.28 {
+		t.Errorf("legacy enrich = %+v, want catalog context and prices", models[0])
+	}
+}
+
+func TestEnrichFillsCatalog(t *testing.T) {
+	got := Enrich(Info{ID: "deepseek-v4-flash"})
+	if got.Context != 1000000 || got.InputPerM != 0.14 || got.OutputPerM != 0.28 {
+		t.Fatalf("Enrich = %+v, want catalog row", got)
+	}
+	kept := Enrich(Info{ID: "deepseek-v4-flash", Context: 128000, InputPerM: 1, OutputPerM: 2})
+	if kept.Context != 128000 || kept.InputPerM != 1 || kept.OutputPerM != 2 {
+		t.Fatalf("Enrich overwrote live values: %+v", kept)
+	}
+}
+
+func TestSaveWritesCatalogPrices(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "models.json")
+	if err := Save(path, []Info{{ID: "deepseek-v4-flash"}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(raw)
+	for _, want := range []string{`"context": 1000000`, `"input_per_million": 0.14`, `"output_per_million": 0.28`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("cache missing %s:\n%s", want, body)
+		}
 	}
 }

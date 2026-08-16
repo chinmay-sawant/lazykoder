@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 
 	"github.com/chinmay-sawant/lazykoder/internal/db"
 )
@@ -42,7 +41,7 @@ func TestTranscriptDragSelectsAndCopiesText(t *testing.T) {
 	)
 	m.syncTranscript()
 
-	top := lipgloss.Height(m.headerView()) + 1
+	top := m.transcriptTop()
 	mm, _ := m.Update(tea.MouseClickMsg(tea.Mouse{
 		X:      0,
 		Y:      top,
@@ -92,7 +91,8 @@ func TestScrollbarClickJumpAndDrag(t *testing.T) {
 	}
 
 	col := m.width - 1
-	mm, _ := m.Update(tea.MouseClickMsg(tea.Mouse{X: col, Y: 4, Button: tea.MouseLeft}))
+	top := m.transcriptTop()
+	mm, _ := m.Update(tea.MouseClickMsg(tea.Mouse{X: col, Y: top + 3, Button: tea.MouseLeft}))
 	m = mm.(Model)
 	if !m.dragOn {
 		t.Fatal("click on scrollbar did not start a drag")
@@ -101,19 +101,19 @@ func TestScrollbarClickJumpAndDrag(t *testing.T) {
 		t.Error("click-jump did not scroll up")
 	}
 
-	mm, _ = m.Update(tea.MouseMotionMsg(tea.Mouse{X: col, Y: 2, Button: tea.MouseLeft}))
+	mm, _ = m.Update(tea.MouseMotionMsg(tea.Mouse{X: col, Y: top, Button: tea.MouseLeft}))
 	m = mm.(Model)
 	topPct := m.transcript.ScrollPercent()
 	if !m.transcript.AtTop() {
 		t.Errorf("drag to top row did not reach top (pct %.2f)", topPct)
 	}
 
-	mm, _ = m.Update(tea.MouseReleaseMsg(tea.Mouse{X: col, Y: 2}))
+	mm, _ = m.Update(tea.MouseReleaseMsg(tea.Mouse{X: col, Y: top}))
 	m = mm.(Model)
 	if m.dragOn {
 		t.Error("release did not end the drag")
 	}
-	mm, _ = m.Update(tea.MouseMotionMsg(tea.Mouse{X: col, Y: 2, Button: tea.MouseLeft}))
+	mm, _ = m.Update(tea.MouseMotionMsg(tea.Mouse{X: col, Y: top, Button: tea.MouseLeft}))
 	m = mm.(Model)
 	if !m.transcript.AtTop() {
 		t.Error("drag continued after release")
@@ -145,16 +145,12 @@ func TestClickTogglesToolCard(t *testing.T) {
 		t.Fatal("tool should start collapsed")
 	}
 
-	top := lipgloss.Height(m.headerView()) + 1
-	y := -1
-	for row := top; row < top+m.transcriptRenderHeight(); row++ {
-		if idx, ok := m.itemIndexAtScreenY(row); ok && idx == 0 {
-			y = row
-			break
-		}
-	}
+	y := viewLineIndex(m, "bash")
 	if y < 0 {
-		t.Fatal("could not map a screen row to the tool card")
+		t.Fatal("could not find the bash header in the view")
+	}
+	if idx, ok := m.itemIndexAtScreenY(y); !ok || idx != 0 {
+		t.Fatalf("header row %d maps to item %d ok=%v, want 0", y, idx, ok)
 	}
 
 	mm, _ := m.Update(tea.MouseClickMsg(tea.Mouse{X: 2, Y: y, Button: tea.MouseLeft}))
@@ -173,6 +169,31 @@ func TestClickTogglesToolCard(t *testing.T) {
 	m = mm.(Model)
 	if !m.items[0].collapsed {
 		t.Fatal("second click did not collapse the tool card")
+	}
+}
+
+func TestClickTogglesThinkingHeader(t *testing.T) {
+	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
+	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
+	m.items = append(m.items,
+		transcriptItem{kind: itemUser, text: "hi", when: 1},
+		transcriptItem{kind: itemReasoning, text: "secret thought", collapsed: true, when: 1},
+	)
+	m.syncTranscript()
+	y := viewLineIndex(m, thinkingLabel)
+	if y < 0 {
+		t.Fatal("could not find the thinking header in the view")
+	}
+	if idx, ok := m.itemIndexAtScreenY(y); !ok || idx != 1 {
+		t.Fatalf("thinking row %d maps to item %d ok=%v, want 1", y, idx, ok)
+	}
+	mm, _ := m.Update(tea.MouseClickMsg(tea.Mouse{X: 1, Y: y, Button: tea.MouseLeft}))
+	m = mm.(Model)
+	if m.items[1].collapsed {
+		t.Fatal("click on thinking header did not expand")
+	}
+	if !strings.Contains(stripANSI(viewText(m)), "secret thought") {
+		t.Fatal("expanded thinking missing from view")
 	}
 }
 

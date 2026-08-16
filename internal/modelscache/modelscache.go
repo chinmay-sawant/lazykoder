@@ -19,10 +19,12 @@ const DefaultTTL = 15 * time.Minute
 // responses, so it is not world-readable.
 const cacheMode = 0o600
 
-// Info is one cached model and its advertised context window.
+// Info is one cached model: context window and USD per million tokens.
 type Info struct {
-	ID      string `json:"id"`
-	Context int    `json:"context,omitempty"`
+	ID         string  `json:"id"`
+	Context    int     `json:"context,omitempty"`
+	InputPerM  float64 `json:"input_per_million,omitempty"`
+	OutputPerM float64 `json:"output_per_million,omitempty"`
 }
 
 // file is the on-disk cache shape.
@@ -45,14 +47,37 @@ func IDs(infos []Info) []string {
 	return out
 }
 
-// ContextOf returns the cached context window for id, or 0 if unknown.
-func ContextOf(infos []Info, id string) int {
+// HasContext reports whether any cached model has a context window.
+func HasContext(infos []Info) bool {
 	for _, m := range infos {
-		if m.ID == id {
-			return m.Context
+		if m.Context > 0 {
+			return true
 		}
 	}
-	return 0
+	return false
+}
+
+// ContextOf returns the cached context window for id, or 0 if unknown.
+func ContextOf(infos []Info, id string) int {
+	if info, ok := InfoOf(infos, id); ok {
+		return info.Context
+	}
+	return Lookup(id).Context
+}
+
+// InfoOf returns the cached row for id.
+func InfoOf(infos []Info, id string) (Info, bool) {
+	for _, m := range infos {
+		if m.ID == id {
+			return Enrich(m), true
+		}
+	}
+	fb := Lookup(id)
+	if fb.Context > 0 || fb.InputPerM > 0 {
+		fb.ID = id
+		return fb, true
+	}
+	return Info{}, false
 }
 
 // Load returns the cached model list. fresh is true when the cache is younger
@@ -73,6 +98,9 @@ func Load(path string, now time.Time, ttl time.Duration) (models []Info, fresh b
 	}
 	if len(f.Models) == 0 {
 		return nil, false, nil
+	}
+	for i := range f.Models {
+		f.Models[i] = Enrich(f.Models[i])
 	}
 	return f.Models, now.Sub(time.UnixMilli(f.FetchedAt)) < ttl, nil
 }
@@ -100,14 +128,18 @@ func unmarshalCache(raw []byte, f *file) error {
 	}
 	f.Models = make([]Info, 0, len(ids))
 	for _, id := range ids {
-		f.Models = append(f.Models, Info{ID: id})
+		f.Models = append(f.Models, Enrich(Info{ID: id}))
 	}
 	return nil
 }
 
 // Save writes the model list and fetch time to the cache file.
 func Save(path string, models []Info, now time.Time) error {
-	raw, err := json.Marshal(file{FetchedAt: now.UnixMilli(), Models: models})
+	enriched := make([]Info, len(models))
+	for i, m := range models {
+		enriched[i] = Enrich(m)
+	}
+	raw, err := json.MarshalIndent(file{FetchedAt: now.UnixMilli(), Models: enriched}, "", "  ")
 	if err != nil {
 		return err
 	}

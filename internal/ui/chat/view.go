@@ -166,25 +166,33 @@ func (m Model) composerFooter(width int) string {
 func (m Model) modelContextLabel() string {
 	label := m.modelLabel()
 	window := modelscache.ContextOf(m.modelInfos, label)
-	if m.tokensUsed <= 0 && window <= 0 {
-		return label
+	if m.tokensUsed > 0 && window > 0 {
+		label = label + "  " + formatTokens(m.tokensUsed) + "/" + formatTokens(int64(window))
+	} else if m.tokensUsed > 0 {
+		label = label + "  " + formatTokens(m.tokensUsed)
+	} else if window > 0 {
+		label = label + "  0/" + formatTokens(int64(window))
 	}
-	used := formatTokens(m.tokensUsed)
-	if window > 0 {
-		return label + "  " + used + "/" + formatTokens(int64(window))
+	if m.sessionCost > 0 {
+		label = label + "  " + formatCost(m.sessionCost)
 	}
-	return label + "  " + used
+	if m.tokensPerSec > 0 {
+		label = label + "  " + fmt.Sprintf("%.1f tps", m.tokensPerSec)
+	}
+	return label
+}
+
+func formatCost(usd float64) string {
+	if usd < 0.01 {
+		return fmt.Sprintf("$%.4f", usd)
+	}
+	return fmt.Sprintf("$%.3f", usd)
 }
 
 func (m Model) composerLeft() string {
 	switch {
 	case m.err != "":
 		return errStyle.Render("error")
-	case m.busy:
-		if m.activity != "" {
-			return busyStyle.Render(m.activity)
-		}
-		return busyStyle.Render("thinking")
 	default:
 		if _, ok := m.selectedHistoryItem(); ok {
 			return hintStyle.Render("history: ↑/↓ previous/next")
@@ -317,7 +325,7 @@ func (m Model) scrollbarRect(target int) (top, bottom, col int, ok bool) {
 		if m.transcript.TotalLineCount() <= h {
 			return 0, 0, 0, false
 		}
-		headerH := lipgloss.Height(m.headerView()) + 1
+		headerH := m.transcriptTop()
 		return headerH, headerH + h, m.width - 1, true
 	}
 	vpH := m.pickerVPHeight()

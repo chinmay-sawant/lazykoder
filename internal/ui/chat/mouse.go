@@ -132,7 +132,9 @@ func (m Model) applyJump(target, y int) Model {
 }
 
 func (m Model) transcriptTop() int {
-	return lipgloss.Height(m.headerView()) + 1
+	// headerView has no trailing newline; the \n after it in chatScreen
+	// only ends that row, it does not insert a blank line.
+	return lipgloss.Height(m.headerView())
 }
 
 func (m Model) transcriptPosition(mu tea.Mouse) (textPosition, bool) {

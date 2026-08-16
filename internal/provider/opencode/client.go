@@ -283,8 +283,10 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, erro
 
 // ModelInfo is one entry from GET /models.
 type ModelInfo struct {
-	ID      string
-	Context int
+	ID         string
+	Context    int
+	InputPerM  float64
+	OutputPerM float64
 }
 
 // Models GETs <base>/models and returns the model ids.
@@ -327,7 +329,12 @@ func (c *Client) ModelInfos(ctx context.Context) ([]ModelInfo, error) {
 		if m.ID == "" {
 			continue
 		}
-		out = append(out, ModelInfo{ID: m.ID, Context: m.contextWindow()})
+		out = append(out, ModelInfo{
+			ID:         m.ID,
+			Context:    m.contextWindow(),
+			InputPerM:  m.inputPrice(),
+			OutputPerM: m.outputPrice(),
+		})
 	}
 	return out, nil
 }
@@ -340,11 +347,23 @@ type wireModel struct {
 	MaxInputTokens int    `json:"max_input_tokens"`
 	Context        int    `json:"context"`
 	Limit          struct {
-		Context int `json:"context"`
+		Context int     `json:"context"`
+		Input   float64 `json:"input"`
+		Output  float64 `json:"output"`
 	} `json:"limit"`
 	Info struct {
 		Context int `json:"context"`
 	} `json:"info"`
+	Pricing *struct {
+		Input      float64 `json:"input"`
+		Prompt     float64 `json:"prompt"`
+		Output     float64 `json:"output"`
+		Completion float64 `json:"completion"`
+	} `json:"pricing"`
+	Cost *struct {
+		Input  float64 `json:"input"`
+		Output float64 `json:"output"`
+	} `json:"cost"`
 }
 
 func (m wireModel) contextWindow() int {
@@ -352,6 +371,42 @@ func (m wireModel) contextWindow() int {
 		if n > 0 {
 			return n
 		}
+	}
+	return 0
+}
+
+func (m wireModel) inputPrice() float64 {
+	if m.Pricing != nil {
+		if m.Pricing.Input > 0 {
+			return m.Pricing.Input
+		}
+		if m.Pricing.Prompt > 0 {
+			return m.Pricing.Prompt
+		}
+	}
+	if m.Cost != nil && m.Cost.Input > 0 {
+		return m.Cost.Input
+	}
+	if m.Limit.Input > 0 {
+		return m.Limit.Input
+	}
+	return 0
+}
+
+func (m wireModel) outputPrice() float64 {
+	if m.Pricing != nil {
+		if m.Pricing.Output > 0 {
+			return m.Pricing.Output
+		}
+		if m.Pricing.Completion > 0 {
+			return m.Pricing.Completion
+		}
+	}
+	if m.Cost != nil && m.Cost.Output > 0 {
+		return m.Cost.Output
+	}
+	if m.Limit.Output > 0 {
+		return m.Limit.Output
 	}
 	return 0
 }

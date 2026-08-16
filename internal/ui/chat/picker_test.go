@@ -311,7 +311,7 @@ func TestPickerCardFitsAndScrollbarDrags(t *testing.T) {
 func TestModelsLoadedFromCacheSkipsAPI(t *testing.T) {
 	dir := t.TempDir()
 	cachePath := filepath.Join(dir, "models.json")
-	if err := modelscache.Save(cachePath, []modelscache.Info{{ID: "deepseek-v4-flash"}, {ID: "claude-4"}}, time.Now()); err != nil {
+	if err := modelscache.Save(cachePath, []modelscache.Info{{ID: "deepseek-v4-flash", Context: 128000}, {ID: "claude-4", Context: 200000}}, time.Now()); err != nil {
 		t.Fatalf("seed cache: %v", err)
 	}
 	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: dir, CachePath: cachePath})
@@ -362,7 +362,7 @@ func TestModelsCacheRefreshedWhenStale(t *testing.T) {
 func TestModelsRefreshKeyReloadsFromAPI(t *testing.T) {
 	dir := t.TempDir()
 	cachePath := filepath.Join(dir, "models.json")
-	if err := modelscache.Save(cachePath, []modelscache.Info{{ID: "deepseek-v4-flash"}}, time.Now()); err != nil {
+	if err := modelscache.Save(cachePath, []modelscache.Info{{ID: "deepseek-v4-flash", Context: 128000}}, time.Now()); err != nil {
 		t.Fatalf("seed cache: %v", err)
 	}
 	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))

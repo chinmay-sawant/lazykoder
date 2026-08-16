@@ -82,7 +82,7 @@ const (
 	pickerFixedRows = 7
 	// pulseInterval and pulseSteps drive the thinking glow.
 	pulseInterval = 90 * time.Millisecond
-	pulseSteps    = 16
+	pulseSteps    = 100
 )
 
 var (
@@ -92,7 +92,7 @@ var (
 	userStyle      = lipgloss.NewStyle().Foreground(theme.ColorAccent())
 	roleStyle      = lipgloss.NewStyle().Foreground(theme.ColorMute()).Bold(true)
 	reasoningStyle = lipgloss.NewStyle().Foreground(theme.ColorMute())
-	toolCardStyle = lipgloss.NewStyle().
+	toolCardStyle  = lipgloss.NewStyle().
 			Background(theme.ColorBg()).
 			Foreground(theme.ColorText())
 	toolOutputStyle = lipgloss.NewStyle().
@@ -151,6 +151,9 @@ type Model struct {
 	cachePath    string
 	activity     string
 	tokensUsed   int64
+	sessionCost  float64
+	tokensPerSec float64
+	turnStarted  time.Time
 
 	confirmCh   chan confirmRequest
 	askCh       chan askRequest
@@ -172,8 +175,8 @@ type Model struct {
 	filePickerFilter string
 	filePickerAt     int
 
-	pulse     int
-	pulseOn   bool
+	pulse   int
+	pulseOn bool
 
 	pickerVp        viewport.Model
 	pickerItems     []string
@@ -249,6 +252,7 @@ type modelsMsg struct {
 	infos     []modelscache.Info
 	err       error
 	fromCache bool
+	notice    string
 }
 
 type confirmRequest struct {
@@ -318,7 +322,7 @@ func (m Model) Init() tea.Cmd {
 
 func (m Model) fetchModels() tea.Msg {
 	if m.cachePath != "" {
-		if infos, fresh, err := modelscache.Load(m.cachePath, time.Now(), modelscache.DefaultTTL); err == nil && fresh && len(infos) > 0 {
+		if infos, fresh, err := modelscache.Load(m.cachePath, time.Now(), modelscache.DefaultTTL); err == nil && fresh && len(infos) > 0 && modelscache.HasContext(infos) {
 			return modelsMsg{list: modelscache.IDs(infos), infos: infos, fromCache: true}
 		}
 	}
@@ -333,12 +337,17 @@ func (m Model) refreshModels() tea.Msg {
 	infos, err := m.client.ModelInfos(ctx)
 	cached := toCacheInfos(infos)
 	list := modelscache.IDs(cached)
-	if err == nil && m.cachePath != "" {
-		_ = modelscache.Save(m.cachePath, cached, time.Now())
+	if err == nil {
+		if m.cachePath != "" {
+			if serr := modelscache.Save(m.cachePath, cached, time.Now()); serr != nil {
+				return modelsMsg{list: list, infos: cached, err: fmt.Errorf("models cache: %w", serr)}
+			}
+		}
+		return modelsMsg{list: list, infos: cached, notice: fmt.Sprintf("models updated (%d)", len(list))}
 	}
-	if err != nil && m.cachePath != "" {
+	if m.cachePath != "" {
 		if stale, _, lerr := modelscache.Load(m.cachePath, time.Now(), modelscache.DefaultTTL); lerr == nil && len(stale) > 0 {
-			return modelsMsg{list: modelscache.IDs(stale), infos: stale, fromCache: true}
+			return modelsMsg{list: modelscache.IDs(stale), infos: stale, fromCache: true, err: err}
 		}
 	}
 	return modelsMsg{list: list, infos: cached, err: err}
@@ -347,7 +356,12 @@ func (m Model) refreshModels() tea.Msg {
 func toCacheInfos(infos []opencode.ModelInfo) []modelscache.Info {
 	out := make([]modelscache.Info, 0, len(infos))
 	for _, info := range infos {
-		out = append(out, modelscache.Info{ID: info.ID, Context: info.Context})
+		out = append(out, modelscache.Enrich(modelscache.Info{
+			ID:         info.ID,
+			Context:    info.Context,
+			InputPerM:  info.InputPerM,
+			OutputPerM: info.OutputPerM,
+		}))
 	}
 	return out
 }
@@ -398,6 +412,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.modelsErr = msg.err.Error()
 		} else {
 			m.modelsErr = ""
+		}
+		if msg.notice != "" {
+			m.copyNotice = msg.notice
+			return m, clearCopyNotice()
 		}
 		return m, nil
 	case errMsg:
@@ -566,6 +584,13 @@ func (m Model) finishTurn(err error) Model {
 	m.errCh = nil
 	m.pulseOn = false
 	m.activity = ""
+	if !m.turnStarted.IsZero() {
+		elapsed := time.Since(m.turnStarted).Seconds()
+		if elapsed > 0 && m.tokensUsed > 0 {
+			m.tokensPerSec = float64(m.tokensUsed) / elapsed
+		}
+	}
+	m.bumpTokenFloor()
 	return m
 }
 
@@ -584,21 +609,6 @@ func (m Model) noteActivityFromPart(p db.Part) Model {
 	case "step-start":
 		if m.activity == "" {
 			m.activity = "thinking"
-		}
-	case "step-finish":
-		if p.TokensTotal != nil && *p.TokensTotal > 0 {
-			m.tokensUsed = *p.TokensTotal
-		} else if p.TokensInput != nil || p.TokensOutput != nil {
-			var n int64
-			if p.TokensInput != nil {
-				n += *p.TokensInput
-			}
-			if p.TokensOutput != nil {
-				n += *p.TokensOutput
-			}
-			if n > 0 {
-				m.tokensUsed = n
-			}
 		}
 	}
 	return m

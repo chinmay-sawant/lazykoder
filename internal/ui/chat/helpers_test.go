@@ -214,7 +214,7 @@ func (p *pump) drainUntil(m Model, want string) Model {
 }
 
 func (p *pump) drainIdle(m Model) Model {
-	for i := 0; i < 300; i++ {
+	for i := 0; i < 2000; i++ {
 		if !m.busy && !strings.Contains(stripANSI(viewText(m)), "sending...") {
 			return m
 		}
@@ -239,6 +239,31 @@ func typeText(m Model, s string) Model {
 		m = upd(m, tea.KeyPressMsg{Code: r, Text: string(r)})
 	}
 	return m
+}
+
+func viewLineIndex(m Model, needle string) int {
+	for i, line := range strings.Split(stripANSI(viewText(m)), "\n") {
+		if strings.Contains(line, needle) {
+			return i
+		}
+	}
+	return -1
+}
+
+func stampOnRight(view, left, stamp string) bool {
+	for _, line := range strings.Split(view, "\n") {
+		if !strings.Contains(line, left) || !strings.Contains(line, stamp) {
+			continue
+		}
+		trimmed := strings.TrimRight(line, " ")
+		idxLeft := strings.Index(trimmed, left)
+		idxStamp := strings.LastIndex(trimmed, stamp)
+		if idxLeft < 0 || idxStamp <= idxLeft {
+			return false
+		}
+		return strings.HasSuffix(trimmed, stamp)
+	}
+	return false
 }
 
 func clickModelStatus(t *testing.T, m Model) Model {

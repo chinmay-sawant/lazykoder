@@ -11,6 +11,7 @@ import (
 
 	"github.com/chinmay-sawant/lazykoder/internal/agent"
 	"github.com/chinmay-sawant/lazykoder/internal/db"
+	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/markdown"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
@@ -99,10 +100,67 @@ func (m *Model) replay(sessionID string) {
 					when = *tool.TimeStart
 				}
 				m.items = append(m.items, transcriptItem{kind: itemTool, collapsed: true, when: when, tool: tool, part: p})
+			case "step-finish":
+				m.applyUsage(p)
 			}
 		}
 	}
+	m.bumpTokenFloor()
 	m.syncTranscript()
+}
+
+func (m *Model) applyUsage(p db.Part) {
+	var in, out, total int64
+	if p.TokensInput != nil {
+		in = *p.TokensInput
+	}
+	if p.TokensOutput != nil {
+		out = *p.TokensOutput
+	}
+	if p.TokensTotal != nil {
+		total = *p.TokensTotal
+	}
+	if total == 0 {
+		total = in + out
+	}
+	// Never drop the session total when a later step reports a smaller
+	// (or empty) usage blob.
+	if total > m.tokensUsed {
+		m.tokensUsed = total
+	}
+	if in > 0 || out > 0 {
+		m.addCost(in, out)
+	} else if total > 0 {
+		m.addCost(0, total)
+	}
+}
+
+func (m *Model) bumpTokenFloor() {
+	if est := estimateTokens(m.items); est > m.tokensUsed {
+		m.tokensUsed = est
+	}
+}
+
+func (m *Model) addCost(inputTokens, outputTokens int64) {
+	info, ok := modelscache.InfoOf(m.modelInfos, m.modelLabel())
+	if !ok {
+		return
+	}
+	m.sessionCost += (float64(inputTokens)/1_000_000)*info.InputPerM + (float64(outputTokens)/1_000_000)*info.OutputPerM
+}
+
+func estimateTokens(items []transcriptItem) int64 {
+	var n int
+	for _, it := range items {
+		n += len([]rune(it.text))
+		if it.kind == itemTool && it.tool.Output != nil {
+			n += len([]rune(*it.tool.Output))
+		}
+	}
+	if n == 0 {
+		return 0
+	}
+	return int64(n / 4)
 }
 
 func (m *Model) syncTranscript() {
@@ -160,12 +218,36 @@ func itemTime(messageMS int64, partMS int64) int64 {
 	return time.Now().UnixMilli()
 }
 
-func roleLine(label string, when int64) string {
-	stamp := formatSessionAge(when)
+func (m Model) roleLine(label string, when int64) string {
+	return m.alignMeta(roleStyle.Render(label), formatSessionAge(when))
+}
+
+func (m Model) alignMeta(left, stamp string) string {
 	if stamp == "" {
-		return roleStyle.Render(label)
+		return left
 	}
-	return roleStyle.Render(label) + hintStyle.Render("  ·  "+stamp)
+	right := hintStyle.Render(stamp)
+	width := m.metaWidth()
+	rw := lipgloss.Width(right)
+	maxLeft := width - rw - 1
+	if maxLeft < 1 {
+		return right
+	}
+	if lipgloss.Width(left) > maxLeft {
+		left = ansi.Cut(left, 0, max(1, maxLeft-1)) + "…"
+	}
+	gap := width - lipgloss.Width(left) - rw
+	if gap < 1 {
+		gap = 1
+	}
+	return left + strings.Repeat(" ", gap) + right
+}
+
+func (m Model) metaWidth() int {
+	if w := m.transcript.Width(); w > 0 {
+		return max(minPaneWidth, w)
+	}
+	return max(minPaneWidth, m.width)
 }
 
 func (m Model) plainTranscriptRows() []string {
@@ -189,9 +271,7 @@ func (m *Model) applyPart(p db.Part) {
 			m.items = append(m.items, transcriptItem{kind: itemReasoning, text: *p.Text, collapsed: !m.busy, when: itemTime(0, p.TimeCreated)})
 		}
 	case "step-finish":
-		if p.TokensTotal != nil && *p.TokensTotal > 0 {
-			m.tokensUsed = *p.TokensTotal
-		}
+		m.applyUsage(p)
 	}
 	m.syncTranscript()
 }
@@ -237,16 +317,16 @@ func (m *Model) applyTool(ev agent.Event) {
 func (m Model) renderItem(it transcriptItem, selected bool) string {
 	switch it.kind {
 	case itemUser:
-		return roleLine(roleYou, it.when) + "\n" + userStyle.Render(it.text)
+		return m.roleLine(roleYou, it.when) + "\n" + userStyle.Render(it.text)
 	case itemAssistant:
 		rendered := markdown.Render(it.text, m.width)
-		return roleLine(roleAssistant, it.when) + "\n" + rendered
+		return m.roleLine(roleAssistant, it.when) + "\n" + rendered
 	case itemReasoning:
 		marker := "▸"
 		if !it.collapsed {
 			marker = "▾"
 		}
-		head := reasoningStyle.Render(marker+" "+thinkingLabel) + hintStyle.Render(ageSuffix(it.when))
+		head := m.alignMeta(reasoningStyle.Render(marker+" "+thinkingLabel), formatSessionAge(it.when))
 		if it.collapsed {
 			return head
 		}
@@ -260,13 +340,6 @@ func (m Model) renderItem(it transcriptItem, selected bool) string {
 		return it.text
 	}
 	return it.text
-}
-
-func ageSuffix(when int64) string {
-	if stamp := formatSessionAge(when); stamp != "" {
-		return "  ·  " + stamp
-	}
-	return ""
 }
 
 func (m Model) renderTool(ev agent.Event, collapsed bool, when int64) string {
@@ -299,8 +372,12 @@ func (m Model) renderTool(ev agent.Event, collapsed bool, when int64) string {
 		diamondColor = theme.PulseAccent(m.pulseT())
 	}
 	diamond := lipgloss.NewStyle().Foreground(diamondColor).Render(theme.StatusDiamond)
-	rest := chevron + "  " + label + ageSuffix(when) + "  ·  " + status
-	header := diamond + "  " + lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).Render(rest)
+	left := diamond + "  " + lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).Render(chevron+"  "+label)
+	rightBits := status
+	if stamp := formatSessionAge(when); stamp != "" {
+		rightBits = stamp + "  ·  " + status
+	}
+	header := m.alignMeta(left, rightBits)
 	card := toolCardStyle.Width(m.toolCardWidth()).Background(theme.ColorBg())
 	if collapsed {
 		return card.Render(header)
