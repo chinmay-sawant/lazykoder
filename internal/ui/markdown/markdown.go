@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
@@ -16,6 +17,11 @@ const (
 	emphasisMarkerSize = 1
 	boldTokenLength    = 4
 	singleTokenLength  = 2
+
+	tableHeaderOffset   = 2
+	tableSideBorders    = 2
+	tableMinColumnWidth = 3
+	tableCellPadding    = 2
 )
 
 var (
@@ -40,12 +46,18 @@ var (
 			BorderLeft(true).
 			BorderForeground(theme.ColorBorder()).
 			PaddingLeft(1)
+	tableBorderStyle = lipgloss.NewStyle().
+				Foreground(theme.ColorBorder())
+	tableHeaderStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(theme.ColorText())
+	tableBodyStyle = lipgloss.NewStyle()
 )
 
 // Render formats common assistant Markdown without adding a new renderer
 // dependency. Fenced code blocks sit on the same solid black layer as the
-// rest of the TUI. When width is greater than zero the block spans that
-// many columns.
+// rest of the TUI. GFM pipe tables are aligned into bordered columns. When
+// width is greater than zero blocks span at most that many columns.
 func Render(input string, width int) string {
 	input = strings.ReplaceAll(input, "\r\n", "\n")
 	source := strings.Split(input, "\n")
@@ -59,8 +71,8 @@ func Render(input string, width int) string {
 		codeLines = []string{}
 	}
 
-	for _, line := range source {
-		trimmed := strings.TrimSpace(line)
+	for i := 0; i < len(source); i++ {
+		trimmed := strings.TrimSpace(source[i])
 		if strings.HasPrefix(trimmed, "```") {
 			if inCode {
 				flushCode()
@@ -72,15 +84,180 @@ func Render(input string, width int) string {
 			continue
 		}
 		if inCode {
-			codeLines = append(codeLines, line)
+			codeLines = append(codeLines, source[i])
 			continue
 		}
-		output = append(output, renderLine(line))
+		if rows, ok := tableRows(source, i); ok {
+			output = append(output, renderTable(rows, width))
+			i += len(rows)
+			continue
+		}
+		output = append(output, renderLine(source[i]))
 	}
 	if inCode {
 		flushCode()
 	}
 	return strings.Join(output, "\n")
+}
+
+// tableRows parses a GFM pipe table starting at source[i]: a header row
+// followed by a separator row (`| --- | :---: |`) and any body rows. It
+// reports the parsed rows and whether a table was found. Cells are trimmed;
+// escaped pipes (`\|`) are unescaped.
+func tableRows(source []string, i int) ([][]string, bool) {
+	header, ok := splitTableRow(source[i])
+	if !ok || i+1 >= len(source) {
+		return nil, false
+	}
+	sep, ok := splitTableRow(source[i+1])
+	if !ok || !isTableSeparator(sep) {
+		return nil, false
+	}
+	rows := [][]string{header}
+	j := i + tableHeaderOffset
+	for j < len(source) {
+		row, ok := splitTableRow(source[j])
+		if !ok {
+			break
+		}
+		rows = append(rows, row)
+		j++
+	}
+	return rows, true
+}
+
+func splitTableRow(line string) ([]string, bool) {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" || !strings.Contains(trimmed, "|") {
+		return nil, false
+	}
+	protected := strings.ReplaceAll(trimmed, `\|`, "\x00")
+	trimmed = strings.Trim(protected, "|")
+	parts := strings.Split(trimmed, "|")
+	cells := make([]string, 0, len(parts))
+	for _, part := range parts {
+		cells = append(cells, strings.ReplaceAll(strings.TrimSpace(part), "\x00", "|"))
+	}
+	if len(cells) == 0 {
+		return nil, false
+	}
+	return cells, true
+}
+
+func isTableSeparator(cells []string) bool {
+	if len(cells) == 0 {
+		return false
+	}
+	for _, cell := range cells {
+		if !isSeparatorCell(cell) {
+			return false
+		}
+	}
+	return true
+}
+
+func isSeparatorCell(cell string) bool {
+	cell = strings.TrimSpace(cell)
+	if strings.HasPrefix(cell, ":") {
+		cell = strings.TrimPrefix(cell, ":")
+	}
+	if strings.HasSuffix(cell, ":") {
+		cell = strings.TrimSuffix(cell, ":")
+	}
+	return cell != "" && strings.Trim(cell, "-") == ""
+}
+
+// renderTable lays the parsed rows out as a bordered, column-aligned grid
+// bounded by width (when greater than zero). The header row is bold.
+func renderTable(rows [][]string, width int) string {
+	cols := 0
+	for _, row := range rows {
+		if len(row) > cols {
+			cols = len(row)
+		}
+	}
+	if cols == 0 {
+		return ""
+	}
+	widths := make([]int, cols)
+	for _, row := range rows {
+		for c, cell := range row {
+			if w := lipgloss.Width(renderInline(cell)); w > widths[c] {
+				widths[c] = w
+			}
+		}
+	}
+	if width > 0 {
+		fitTableWidths(widths, width)
+	}
+	lines := []string{
+		joinTableBorder("╭", "─", "┬", "╮", widths),
+		renderTableRow(rows[0], widths, tableHeaderStyle),
+	}
+	if len(rows) > 1 {
+		lines = append(lines, joinTableBorder("├", "─", "┼", "┤", widths))
+		for _, row := range rows[1:] {
+			lines = append(lines, renderTableRow(row, widths, tableBodyStyle))
+		}
+	}
+	lines = append(lines, joinTableBorder("╰", "─", "┴", "╯", widths))
+	return strings.Join(lines, "\n")
+}
+
+// fitTableWidths shrinks the widest columns until the bordered table fits in
+// the available width. Columns never drop below three cells so truncation
+// stays legible.
+func fitTableWidths(widths []int, available int) {
+	cols := len(widths)
+	total := func() int {
+		t := tableSideBorders + cols - 1
+		for _, w := range widths {
+			t += w + tableCellPadding
+		}
+		return t
+	}
+	for total() > available {
+		widest := 0
+		for c := 1; c < cols; c++ {
+			if widths[c] > widths[widest] {
+				widest = c
+			}
+		}
+		if widths[widest] < tableMinColumnWidth {
+			break
+		}
+		widths[widest]--
+	}
+}
+
+func renderTableRow(row []string, widths []int, style lipgloss.Style) string {
+	var b strings.Builder
+	b.WriteString(tableBorderStyle.Render("│"))
+	for c, w := range widths {
+		cell := ""
+		if c < len(row) {
+			cell = row[c]
+		}
+		rendered := renderInline(cell)
+		rendered = ansi.Truncate(rendered, w, "…")
+		b.WriteString(style.Render(" " + rendered))
+		b.WriteString(strings.Repeat(" ", w-lipgloss.Width(rendered)))
+		b.WriteString(tableBorderStyle.Render(" │"))
+	}
+	return b.String()
+}
+
+func joinTableBorder(left, fill, mid, right string, widths []int) string {
+	var b strings.Builder
+	b.WriteString(left)
+	for c, w := range widths {
+		b.WriteString(strings.Repeat(fill, w+tableCellPadding))
+		if c < len(widths)-1 {
+			b.WriteString(mid)
+		}
+	}
+	b.WriteString(right)
+	return b.String()
 }
 
 func renderCodeBlock(language string, lines []string, width int) string {
