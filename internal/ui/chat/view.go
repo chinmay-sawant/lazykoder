@@ -68,6 +68,10 @@ func (m Model) chatScreen() string {
 		b.WriteString(m.pickerView())
 		b.WriteString("\n")
 	}
+	if m.settingsMode {
+		b.WriteString(m.settingsView())
+		b.WriteString("\n")
+	}
 	if m.err != "" {
 		b.WriteString(errStyle.Width(max(minPaneWidth, m.width)).Render(m.err))
 		b.WriteString("\n")
@@ -157,7 +161,7 @@ func (m Model) liveStatusView() string {
 // Scrolling up keeps the view pinned until the user clicks the icon, so new
 // output never yanks the view to the bottom.
 func (m Model) jumpBarVisible() bool {
-	if m.pickerMode || m.slashMode || m.confirmMode || m.askMode || m.helpMode || m.filePickerMode || m.sessionPickerMode {
+	if m.pickerMode || m.slashMode || m.confirmMode || m.askMode || m.helpMode || m.settingsMode || m.filePickerMode || m.sessionPickerMode {
 		return false
 	}
 	return !m.transcript.AtBottom()
@@ -211,6 +215,9 @@ func (m Model) composerTop() int {
 	}
 	if m.pickerMode {
 		top += 1 + lipgloss.Height(m.pickerView())
+	}
+	if m.settingsMode {
+		top += 1 + lipgloss.Height(m.settingsView())
 	}
 	if m.err != "" {
 		top += 1 + lipgloss.Height(errStyle.Width(max(minPaneWidth, m.width)).Render(m.err))
@@ -440,6 +447,9 @@ func (m Model) transcriptRenderHeight() int {
 	}
 	if m.pickerMode {
 		fixedRows += 1 + lipgloss.Height(m.pickerView())
+	}
+	if m.settingsMode {
+		fixedRows += 1 + lipgloss.Height(m.settingsView())
 	}
 	if m.err != "" {
 		fixedRows += lipgloss.Height(errStyle.Width(max(minPaneWidth, m.width)).Render(m.err))

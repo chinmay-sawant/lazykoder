@@ -19,6 +19,7 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
 	"github.com/chinmay-sawant/lazykoder/internal/policy"
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
+	"github.com/chinmay-sawant/lazykoder/internal/settings"
 	"github.com/chinmay-sawant/lazykoder/internal/tips"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/question"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/confirm"
@@ -114,22 +115,26 @@ var (
 
 // Options configures the chat model.
 type Options struct {
-	Store      *db.Store
-	Client     *opencode.Client
-	Workdir    string
-	Session    *db.Session
-	MaxSteps   int
-	InitialErr string
-	CachePath  string // optional models cache file; empty disables caching
+	Store        *db.Store
+	Client       *opencode.Client
+	Workdir      string
+	Session      *db.Session
+	MaxSteps     int // ignored when Settings is set; kept for tests
+	InitialErr   string
+	CachePath    string // optional models cache file; empty disables caching
+	SettingsPath string // .lazykoder/settings.json; empty skips persistence
+	Settings     *settings.Settings
 }
 
 // Model is the chat screen: title, transcript, prompt, status and confirm flow.
 type Model struct {
-	store    *db.Store
-	client   *opencode.Client
-	workdir  string
-	session  *db.Session
-	maxSteps int
+	store        *db.Store
+	client       *opencode.Client
+	workdir      string
+	session      *db.Session
+	maxSteps     int
+	settingsPath string
+	slotSettings settings.Slot
 
 	width  int
 	height int
@@ -180,6 +185,10 @@ type Model struct {
 	askCursor   int
 
 	helpMode bool
+
+	settingsMode   bool
+	settingsCursor int
+	stepLimitHit   bool // last turn stopped on agent step limit
 
 	filePickerMode   bool
 	filePickerItems  []string
@@ -267,6 +276,8 @@ var slashCommands = []slashCmd{
 	{name: "/model", description: "search and switch the chat model"},
 	{name: "/variant", description: "switch the model variant (low, medium, high)"},
 	{name: "/refresh", description: "reload the model list from the server"},
+	{name: "/settings", description: "slot settings (step limit)", aliases: []string{"slot"}},
+	{name: "/continue", description: "continue after a step limit or keep going"},
 	{name: "/help", description: "show the keyboard shortcuts"},
 }
 
@@ -313,12 +324,22 @@ type tipsTickMsg struct{}
 
 // New returns a chat model for the given options.
 func New(opts Options) Model {
+	slot := settings.Default().Slot
+	if opts.Settings != nil {
+		slot = opts.Settings.Slot
+	} else if opts.MaxSteps > 0 {
+		slot.MaxSteps = opts.MaxSteps
+		slot.LimitEnabled = true
+	}
+	eff := settings.Settings{Slot: slot}.EffectiveMaxSteps()
 	m := Model{
 		store:               opts.Store,
 		client:              opts.Client,
 		workdir:             opts.Workdir,
 		session:             opts.Session,
-		maxSteps:            opts.MaxSteps,
+		maxSteps:            eff,
+		settingsPath:        opts.SettingsPath,
+		slotSettings:        slot,
 		err:                 opts.InitialErr,
 		width:               defaultWidth,
 		height:              defaultHeight,
@@ -555,6 +576,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.helpMode {
 			return m.updateHelpKey(msg)
 		}
+		if m.settingsMode {
+			return m.updateSettingsKey(msg)
+		}
 		if m.filePickerMode {
 			return m.updateFilePickerKey(msg)
 		}
@@ -630,6 +654,10 @@ func (m Model) applyEvent(ev agent.Event) Model {
 	case agent.EventError:
 		if ev.Err != nil && !isCancelErr(ev.Err) {
 			m.err = ev.Err.Error()
+			if isStepLimitErr(ev.Err) {
+				m.stepLimitHit = true
+				m.err = fmt.Sprintf("%s  ·  /continue to keep going", ev.Err.Error())
+			}
 		}
 	}
 	return m
@@ -652,6 +680,14 @@ func (m Model) finishTurn(err error) Model {
 	if err != nil && m.err == "" && !isCancelErr(err) {
 		m.err = err.Error()
 	}
+	if isStepLimitErr(err) {
+		m.stepLimitHit = true
+		if !strings.Contains(m.err, "/continue") {
+			m.err = fmt.Sprintf("%s  ·  /continue to keep going", err.Error())
+		}
+	} else if err == nil {
+		m.stepLimitHit = false
+	}
 	if m.turnCancel != nil {
 		m.turnCancel()
 		m.turnCancel = nil
@@ -673,6 +709,10 @@ func (m Model) finishTurn(err error) Model {
 	}
 	m.bumpTokenFloor()
 	return m
+}
+
+func isStepLimitErr(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "step limit reached")
 }
 
 func tokensPerSec(generated int64, elapsed time.Duration) float64 {

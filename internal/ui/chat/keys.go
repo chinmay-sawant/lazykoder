@@ -206,6 +206,7 @@ func (m Model) submit(text string) (Model, tea.Cmd) {
 	m.prompt.SetValue("")
 	m.busy = true
 	m.err = ""
+	m.stepLimitHit = false
 	m.copyNotice = ""
 	m.promptSelectAll = false
 	m.pendingUser = text
@@ -239,6 +240,65 @@ func (m Model) submit(text string) (Model, tea.Cmd) {
 	eventCh, errCh := m.eventCh, m.errCh
 	sendCmd := func() tea.Msg {
 		go func() { errCh <- ag.Send(ctx, text, eventCh) }()
+		return nil
+	}
+	m.pulse = 0
+	m.pulseOn = true
+	m.activity = "thinking"
+	m.turnStarted = time.Now()
+	return m, tea.Batch(sendCmd, m.watchEvents(seq), pulseTick())
+}
+
+// runContinue resumes after a step-limit stop, or sends a normal "continue"
+// user turn when the session was not step-limited.
+func (m Model) runContinue() (Model, tea.Cmd) {
+	if m.busy {
+		return m, nil
+	}
+	if m.stepLimitHit && m.session != nil {
+		return m.resumeAfterLimit()
+	}
+	return m.submit("continue")
+}
+
+// resumeAfterLimit runs another MaxSteps budget without a new user message.
+func (m Model) resumeAfterLimit() (Model, tea.Cmd) {
+	m.prompt.SetValue("")
+	m.busy = true
+	m.err = ""
+	m.stepLimitHit = false
+	m.copyNotice = ""
+	m.promptSelectAll = false
+	m.pendingUser = ""
+	m.historyCursor = -1
+	m.historyDraft = ""
+	m.promptUndo = nil
+	m.slashFromPaste = false
+	m.pendingHistoryIndex = -1
+	m.items = append(m.items, transcriptItem{kind: itemNote, text: "continuing…"})
+	m.turnItemFrom = len(m.items)
+	m.turnGenTokens = 0
+	m.tokensPerSec = 0
+	m.syncTranscript()
+	m.turnSeq++
+	seq := m.turnSeq
+	ctx, cancel := context.WithCancel(context.Background())
+	m.turnCancel = cancel
+	m.turnCtx = ctx
+	m.eventCh = make(chan agent.Event, eventChanBuffer)
+	m.errCh = make(chan error, 1)
+	ag := agent.New(m.store, m.client, m.workdir, agent.Options{
+		Session:  m.session,
+		MaxSteps: m.maxSteps,
+		Model:    m.model,
+		Endpoint: m.modelEndpoint(),
+		Variant:  m.variant,
+		Confirm:  m.confirmHook,
+		Ask:      m.askHook,
+	})
+	eventCh, errCh := m.eventCh, m.errCh
+	sendCmd := func() tea.Msg {
+		go func() { errCh <- ag.Continue(ctx, eventCh) }()
 		return nil
 	}
 	m.pulse = 0
@@ -309,7 +369,7 @@ func (m Model) undoPrompt() Model {
 }
 
 func (m Model) promptEditing() bool {
-	return !m.confirmMode && !m.askMode && !m.helpMode && !m.filePickerMode && !m.pickerMode && !m.sessionPickerMode && !m.slashMode
+	return !m.confirmMode && !m.askMode && !m.helpMode && !m.settingsMode && !m.filePickerMode && !m.pickerMode && !m.sessionPickerMode && !m.slashMode
 }
 
 func (m Model) selectedHistoryItem() (inputHistoryItem, bool) {

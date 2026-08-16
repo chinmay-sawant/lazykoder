@@ -141,6 +141,35 @@ model box.
 from `models.json`. The choice is stored in `sessions.variant` and sent
 as `reasoning_effort` on later turns.
 
+## Slot settings
+
+`/settings` (alias `/slot`) opens a full-width drawer above the prompt
+(same placement as `/model`). The drawer is the Slot settings panel:
+step-limit on/off and max agent steps per user turn. Changes persist in
+`<cwd>/.lazykoder/settings.json`.
+
+| Control | Action |
+| --- | --- |
+| `j`/`k` or arrows | move between rows |
+| `←`/`→` or `h`/`l` | adjust the focused control |
+| space / enter | toggle step limit (or bump max steps) |
+| left click | toggle limit row, or click `◂` / `▸` / the number on max steps |
+| right click | same as left on the limit row; on the number, increases max steps |
+| click `[x]` (top right) | close |
+| `esc` / `x` / `q` | close |
+
+Default is limit on, 16 steps (range 1-128). When the limit is off the
+agent still has a large safety bound so a runaway loop cannot run forever.
+
+## Continue
+
+`/continue` keeps the session going after a step-limit stop: it resumes
+the agent loop on the existing history for another MaxSteps budget and
+does not write a new user message. When the last turn did not hit the
+limit, `/continue` sends a normal user message of `continue` instead.
+After a step-limit error the status line also hints `/continue to keep
+going`.
+
 Typing `/` in the chat prompt opens a full-width command popover above the
 prompt. Each row shows the command name on the left and its description after
 it. `↑`/`↓` select, `enter` or a click runs the command, `esc` closes and

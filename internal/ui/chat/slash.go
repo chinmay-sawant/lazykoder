@@ -109,6 +109,10 @@ func (m Model) runSlash(name string) (Model, tea.Cmd) {
 		return m.openVariantPicker(), nil
 	case "/refresh":
 		return m, m.refreshModels
+	case "/settings", "/slot":
+		return m.openSettings(), nil
+	case "/continue":
+		return m.runContinue()
 	case "/help":
 		m.helpMode = true
 	}

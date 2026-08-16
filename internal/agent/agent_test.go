@@ -235,6 +235,17 @@ func sendAndCollect(t *testing.T, a *Agent, userText string) ([]Event, error) {
 	return got, err
 }
 
+func continueAndCollect(t *testing.T, a *Agent) ([]Event, error) {
+	t.Helper()
+	events := make(chan Event, 256)
+	err := a.Continue(context.Background(), events)
+	var got []Event
+	for ev := range events {
+		got = append(got, ev)
+	}
+	return got, err
+}
+
 func hasEventKind(events []Event, kind EventKind) bool {
 	for _, ev := range events {
 		if ev.Kind == kind {
@@ -659,6 +670,38 @@ func TestSendMaxSteps(t *testing.T) {
 	}
 	if n := queryCount(t, path, `SELECT count(*) FROM tool_calls`); n != 3 {
 		t.Errorf("tool_calls rows = %d, want 3", n)
+	}
+}
+
+func TestContinueAfterStepLimit(t *testing.T) {
+	tc := fakeToolCall{ID: "call_c", Name: "bash", Args: `{"command":"echo loop"}`}
+	// Three tool-call steps then a final text reply for Continue.
+	fake := newFakeProvider(t,
+		respBody("", "", "tool-calls", []fakeToolCall{tc}, testUsage),
+		respBody("", "", "tool-calls", []fakeToolCall{tc}, testUsage),
+		respBody("", "", "tool-calls", []fakeToolCall{tc}, testUsage),
+		respBody("done", "stop", "", nil, testUsage),
+	)
+	st, path := newTestEnv(t)
+	a := New(st, newClient(t, fake.srv), t.TempDir(), Options{MaxSteps: 3})
+
+	if _, err := sendAndCollect(t, a, "loop"); err == nil {
+		t.Fatal("Send succeeded, want step limit error")
+	}
+	beforeUsers := queryCount(t, path, `SELECT count(*) FROM messages WHERE role='user'`)
+	events, err := continueAndCollect(t, a)
+	if err != nil {
+		t.Fatalf("Continue: %v", err)
+	}
+	if !hasEventKind(events, EventDone) {
+		t.Errorf("events missing EventDone: %+v", events)
+	}
+	afterUsers := queryCount(t, path, `SELECT count(*) FROM messages WHERE role='user'`)
+	if afterUsers != beforeUsers {
+		t.Errorf("Continue wrote a user message: users %d -> %d", beforeUsers, afterUsers)
+	}
+	if n := fake.requestCount(); n != 4 {
+		t.Errorf("provider calls = %d, want 4 (3 limit + 1 continue)", n)
 	}
 }
 

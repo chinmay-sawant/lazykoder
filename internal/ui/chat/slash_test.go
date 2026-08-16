@@ -21,7 +21,7 @@ func TestSlashMenuOpensAndDivides(t *testing.T) {
 		t.Fatal("slash mode not opened on /")
 	}
 	v := stripANSI(viewText(m))
-	if !strings.Contains(v, "/new") || !strings.Contains(v, "/model") || !strings.Contains(v, "/variant") || !strings.Contains(v, "/help") || !strings.Contains(v, "/resume") {
+	if !strings.Contains(v, "/new") || !strings.Contains(v, "/model") || !strings.Contains(v, "/variant") || !strings.Contains(v, "/help") || !strings.Contains(v, "/resume") || !strings.Contains(v, "/settings") || !strings.Contains(v, "/continue") {
 		t.Errorf("slash menu missing commands: %q", v)
 	}
 	if strings.Contains(v, "/sessions") {

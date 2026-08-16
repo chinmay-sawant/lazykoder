@@ -22,6 +22,11 @@ func (m Model) jumpBarRow() int {
 func (m Model) mousePress(msg tea.MouseClickMsg) (Model, tea.Cmd) {
 	mu := msg.Mouse()
 	m.copyNotice = ""
+	if m.settingsMode {
+		if next, cmd, hit := m.settingsHit(mu.X, mu.Y, mu.Button); hit {
+			return next, cmd
+		}
+	}
 	if mu.Button == tea.MouseLeft && m.jumpBarVisible() && mu.Y == m.jumpBarRow() {
 		m = m.clearTextSelection()
 		m.transcript.GotoBottom()

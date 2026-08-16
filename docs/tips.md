@@ -23,6 +23,8 @@ the readable reference; keep the two in sync when adding or editing a tip.
 - `/resume` or `ctrl+s` continues a past session
 - `/model` switches the chat model
 - `/variant` sets the reasoning effort
+- `/settings` opens slot settings (step limit)
+- `/continue` resumes after a step limit (or sends continue)
 - `/refresh` reloads the model list
 - `/help` or `?` shows every shortcut
 

@@ -132,6 +132,31 @@ func (a *Agent) Send(ctx context.Context, userText string, events chan<- Event) 
 	if err = a.writeUserTurn(ctx, userText, events); err != nil {
 		return err
 	}
+	return a.runSteps(ctx, events)
+}
+
+// Continue resumes the agent loop on the current session history without
+// writing a new user message. Used after a step-limit stop so the model
+// can keep working with another MaxSteps budget.
+func (a *Agent) Continue(ctx context.Context, events chan<- Event) (err error) {
+	if events != nil {
+		defer close(events)
+		defer func() {
+			if err == nil {
+				a.emit(events, Event{Kind: EventDone, SessionID: a.sessionID()})
+			}
+		}()
+	}
+	if a.sess == nil && a.opts.Session != nil {
+		a.sess = a.opts.Session
+	}
+	if a.sessionID() == "" {
+		return a.fail(events, fmt.Errorf("agent: continue requires an existing session"))
+	}
+	return a.runSteps(ctx, events)
+}
+
+func (a *Agent) runSteps(ctx context.Context, events chan<- Event) error {
 	maxSteps := a.opts.MaxSteps
 	if maxSteps <= 0 {
 		maxSteps = defaultMaxSteps

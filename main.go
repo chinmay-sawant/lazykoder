@@ -12,12 +12,10 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/db"
 	"github.com/chinmay-sawant/lazykoder/internal/envfile"
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
+	"github.com/chinmay-sawant/lazykoder/internal/settings"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/chat"
 	"github.com/chinmay-sawant/lazykoder/internal/workspace"
 )
-
-// defaultMaxSteps is the fallback when the user does not configure a step limit.
-const defaultMaxSteps = 16
 
 func main() {
 	cwd, err := os.Getwd()
@@ -49,14 +47,26 @@ func main() {
 		sess = &sessions[0]
 	}
 
+	settingsPath := settings.Path(env.Dir)
+	cfg, err := settings.LoadFile(settingsPath)
+	if err != nil {
+		// Non-fatal: fall back to defaults and surface the parse error.
+		cfg = settings.Default()
+		if initial == "" {
+			initial = err.Error()
+		}
+	}
+
 	p := tea.NewProgram(chat.New(chat.Options{
-		Store:      env.DB,
-		Client:     client,
-		Workdir:    cwd,
-		Session:    sess,
-		MaxSteps:   defaultMaxSteps,
-		InitialErr: initial,
-		CachePath:  filepath.Join(env.Dir, "models.json"),
+		Store:        env.DB,
+		Client:       client,
+		Workdir:      cwd,
+		Session:      sess,
+		MaxSteps:     cfg.EffectiveMaxSteps(),
+		InitialErr:   initial,
+		CachePath:    filepath.Join(env.Dir, "models.json"),
+		SettingsPath: settingsPath,
+		Settings:     &cfg,
 	}))
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "lazykoder:", err)
