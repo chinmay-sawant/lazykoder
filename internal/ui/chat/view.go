@@ -160,11 +160,8 @@ func (m Model) liveStatusView() string {
 	if label == "" {
 		label = thinkingLabel
 	}
-	style := reasoningStyle
-	if m.busy {
-		style = lipgloss.NewStyle().Foreground(theme.PulseAccent(m.pulseT()))
-	}
-	return lipgloss.NewStyle().Width(max(minPaneWidth, m.width)).Render(style.Render("◆  " + label))
+	line := m.workRailMark() + " " + hintStyle.Render(label)
+	return lipgloss.NewStyle().Width(max(minPaneWidth, m.width)).Render(line)
 }
 
 func (m Model) composerBlock() string {

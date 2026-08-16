@@ -81,9 +81,9 @@ const (
 	pickerDrawerChrome = 2
 	pickerKindModel    = "model"
 	pickerKindVariant  = "variant"
-	// pulseInterval and pulseSteps drive the thinking glow.
-	pulseInterval = 90 * time.Millisecond
-	pulseSteps    = 100
+	// pulseInterval and pulseSteps throb the in-progress reply rail.
+	pulseInterval = 70 * time.Millisecond
+	pulseSteps    = 16
 )
 
 var (
@@ -181,8 +181,9 @@ type Model struct {
 	filePickerFilter string
 	filePickerAt     int
 
-	pulse   int
-	pulseOn bool
+	pulse     int
+	pulseOn   bool
+	railInset int
 
 	pickerVp         viewport.Model
 	pickerItems      []string

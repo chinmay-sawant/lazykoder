@@ -23,7 +23,11 @@ pickers are centered cards.
   stays there instead of jumping to a previous message. After browsing
   history, down restores the draft you were typing. While a turn is
   running, a thinking/loading line sits just above the box with a blank
-  row on each side. Typed text uses
+  row on each side. The sent prompt sits in one square-bracket wrap,
+  even when it spans several lines. A light vertical line then runs
+  from thinking through the assistant reply. It throbs while that
+  turn is running and stays as a static line after the turn ends and
+  when the session is reopened. Typed text uses
   the same black background as the rest of the screen (no cursor-line
   highlight). The footer left side stays idle (`enter send`). The right side shows
   `model  used/window  hit/miss  $cost  tps` (click the model to switch).

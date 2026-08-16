@@ -36,10 +36,14 @@ type transcriptItem struct {
 }
 
 const (
-	roleYou       = "you"
-	roleAssistant = "assistant"
-	thinkingLabel = "thinking"
-	maxToolTitle  = 72
+	roleYou          = "you"
+	roleAssistant    = "assistant"
+	thinkingLabel    = "thinking"
+	maxToolTitle     = 72
+	workBracket      = "["
+	workBracketClose = "]"
+	workRail         = "│"
+	workRailCols     = 2
 )
 
 func (m *Model) replay(sessionID string) {
@@ -287,11 +291,97 @@ func (m Model) renderedItems() []string {
 	out := make([]string, 0, len(m.items))
 	for i, it := range m.items {
 		if i > 0 && (it.kind == itemUser || it.kind == itemAssistant) {
-			out = append(out, "")
+			if it.kind == itemUser {
+				out = append(out, "")
+			} else {
+				out = append(out, m.railedItem(i, " "))
+			}
 		}
-		out = append(out, m.renderItem(it, i == m.selectedItem))
+		out = append(out, m.railedItem(i, m.renderItemCopy(i, it)))
 	}
 	return out
+}
+
+func (m Model) renderItemCopy(idx int, it transcriptItem) string {
+	item := m
+	if m.itemUsesWorkRail(idx) {
+		item.railInset = workRailCols
+	}
+	return item.renderItem(it, idx == m.selectedItem)
+}
+
+func (m Model) railedItem(idx int, body string) string {
+	if !m.itemUsesWorkRail(idx) {
+		return body
+	}
+	return m.withWorkRail(body, m.itemInLiveTurn(idx))
+}
+
+func (m Model) itemUsesWorkRail(idx int) bool {
+	if idx < 0 || idx >= len(m.items) {
+		return false
+	}
+	if m.items[idx].kind == itemUser || m.items[idx].kind == itemNote {
+		return false
+	}
+	return m.turnOwner(idx) >= 0
+}
+
+func (m Model) turnOwner(idx int) int {
+	for i := idx; i >= 0; i-- {
+		if m.items[i].kind == itemUser {
+			return i
+		}
+	}
+	return -1
+}
+
+func (m Model) itemInLiveTurn(idx int) bool {
+	if !m.busy {
+		return false
+	}
+	owner := m.turnOwner(idx)
+	if owner < 0 {
+		return false
+	}
+	liveUser := m.turnItemFrom - 1
+	if liveUser < 0 {
+		for i := len(m.items) - 1; i >= 0; i-- {
+			if m.items[i].kind == itemUser {
+				liveUser = i
+				break
+			}
+		}
+	}
+	return owner == liveUser
+}
+
+func (m Model) workRailMark() string {
+	return m.workRailLive(m.busy && m.pulseOn)
+}
+
+func (m Model) workRailLive(throb bool) string {
+	style := lipgloss.NewStyle().Foreground(theme.ColorAccent())
+	if throb {
+		style = lipgloss.NewStyle().Foreground(theme.PulseAccent(m.pulseT()))
+	}
+	return style.Render(workRail)
+}
+
+func (m Model) withWorkRail(s string, live bool) string {
+	rail := m.workRailLive(live && m.busy && m.pulseOn) + " "
+	if s == "" {
+		return rail
+	}
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		lines[i] = rail + line
+	}
+	return strings.Join(lines, "\n")
+}
+
+func frameUserPrompt(text string) string {
+	return workBracket + strings.TrimRight(text, "\n") + workBracketClose
 }
 
 func itemTime(messageMS int64, partMS int64) int64 {
@@ -330,10 +420,14 @@ func (m Model) alignMeta(left, stamp string) string {
 }
 
 func (m Model) metaWidth() int {
-	if w := m.transcript.Width(); w > 0 {
-		return max(minPaneWidth, w)
+	w := m.width
+	if tw := m.transcript.Width(); tw > 0 {
+		w = tw
 	}
-	return max(minPaneWidth, m.width)
+	if m.railInset > 0 {
+		w -= m.railInset
+	}
+	return max(minPaneWidth, w)
 }
 
 func (m Model) plainTranscriptRows() []string {
@@ -403,9 +497,9 @@ func (m *Model) applyTool(ev agent.Event) {
 func (m Model) renderItem(it transcriptItem, selected bool) string {
 	switch it.kind {
 	case itemUser:
-		return m.roleLine(roleYou, it.when) + "\n" + userStyle.Render(it.text)
+		return m.roleLine(roleYou, it.when) + "\n" + userStyle.Render(frameUserPrompt(it.text))
 	case itemAssistant:
-		rendered := markdown.Render(it.text, m.width)
+		rendered := markdown.Render(it.text, max(minPaneWidth, m.width-m.railInset))
 		return m.roleLine(roleAssistant, it.when) + "\n" + rendered
 	case itemReasoning:
 		marker := "▸"
@@ -454,9 +548,6 @@ func (m Model) renderTool(ev agent.Event, collapsed bool, when int64) string {
 		label = name + "  " + title
 	}
 	diamondColor := theme.StatusColor(status)
-	if (status == "pending" || status == "running") && (m.busy || m.pulseOn) {
-		diamondColor = theme.PulseAccent(m.pulseT())
-	}
 	diamond := lipgloss.NewStyle().Foreground(diamondColor).Render(theme.StatusDiamond)
 	left := diamond + "  " + lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).Render(chevron+"  "+label)
 	header := m.alignMeta(left, formatClock(when))

@@ -89,6 +89,21 @@ func TestReplayNoNetwork(t *testing.T) {
 	if strings.Contains(v, "hmm") {
 		t.Errorf("collapsed reasoning leaked body: %q", v)
 	}
+	if !strings.Contains(v, workBracket+"hello there"+workBracketClose) {
+		t.Fatalf("resumed session lost the user prompt bracket: %q", v)
+	}
+	if !lineHasPrefix(v, roleAssistant, workRail) && !lineHasPrefix(v, thinkingLabel, workRail) {
+		t.Fatalf("resumed session lost the reply rail: %q", v)
+	}
+}
+
+func lineHasPrefix(view, needle, prefix string) bool {
+	for _, line := range strings.Split(view, "\n") {
+		if strings.Contains(line, needle) && strings.HasPrefix(strings.TrimSpace(line), prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestBashCommandAndOutputRendered(t *testing.T) {
@@ -963,11 +978,95 @@ func TestLiveActivitySitsAbovePrompt(t *testing.T) {
 			}
 		}
 	}
+	m.pulseOn = true
+	m.pulse = 0
+	dim := stripANSI(m.liveStatusView())
+	m.pulse = pulseSteps / 2
+	lit := stripANSI(m.liveStatusView())
+	if !strings.Contains(dim, workRail) || !strings.Contains(lit, workRail) {
+		t.Fatalf("throbbing reply rail missing: dim=%q lit=%q", dim, lit)
+	}
 	if thinkAt < 0 || promptAt < 0 || thinkAt >= promptAt {
 		t.Fatalf("thinking should sit above the input box: think=%d prompt=%d\n%s", thinkAt, promptAt, v)
 	}
 	if promptAt-thinkAt < 2 {
 		t.Fatalf("need a blank row between thinking and the input box: think=%d prompt=%d\n%s", thinkAt, promptAt, v)
+	}
+}
+
+func TestWorkBracketStaysAfterTurnEnds(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	m.items = []transcriptItem{
+		{kind: itemUser, text: "hello"},
+		{kind: itemAssistant, text: "hi back"},
+	}
+	m.busy = false
+	body := stripANSI(strings.Join(m.renderedItems(), "\n"))
+	if !strings.Contains(body, workBracket+"hello"+workBracketClose) {
+		t.Fatalf("static user bracket missing after the turn finished: %q", body)
+	}
+	if !lineHasPrefix(body, roleAssistant, workRail) || !lineHasPrefix(body, "hi back", workRail) {
+		t.Fatalf("static reply rail missing after the turn finished: %q", body)
+	}
+	if !strings.Contains(body, "hello") || !strings.Contains(body, "hi back") {
+		t.Fatalf("turn text missing: %q", body)
+	}
+}
+
+func TestUserPromptUsesOneBracketAndReplyUsesRail(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	m.items = []transcriptItem{
+		{kind: itemUser, text: "Tell me something long\nand more"},
+		{kind: itemReasoning, text: "planning", collapsed: true},
+		{kind: itemAssistant, text: "Here is a long reply\nwith two lines"},
+	}
+	body := stripANSI(strings.Join(m.renderedItems(), "\n"))
+	if !strings.Contains(body, workBracket+"Tell me something long\nand more"+workBracketClose) {
+		t.Fatalf("user prompt should sit in one bracket wrap: %q", body)
+	}
+	var userOpens, userCloses, userLines int
+	for _, line := range strings.Split(body, "\n") {
+		plain := strings.TrimSpace(line)
+		switch {
+		case strings.Contains(line, "Tell me something long"):
+			userLines++
+			if !strings.Contains(plain, workBracket) {
+				t.Fatalf("first user line missing opening bracket: %q", line)
+			}
+			if strings.Contains(plain, workBracketClose) {
+				t.Fatalf("opening user line should not also close the wrap: %q", line)
+			}
+			if strings.HasPrefix(plain, workRail) {
+				t.Fatalf("user prompt should not use the reply rail: %q", line)
+			}
+			userOpens++
+		case strings.Contains(line, "and more"):
+			userLines++
+			if strings.Contains(plain, workBracket) && !strings.HasSuffix(plain, workBracketClose) {
+				t.Fatalf("continuation should not repeat the opening bracket: %q", line)
+			}
+			if !strings.HasSuffix(plain, workBracketClose) {
+				t.Fatalf("last user line missing closing bracket: %q", line)
+			}
+			if strings.HasPrefix(plain, workRail) {
+				t.Fatalf("user prompt should not use the reply rail: %q", line)
+			}
+			userCloses++
+		case strings.Contains(line, thinkingLabel) || strings.Contains(line, roleAssistant) || strings.Contains(line, "Here is a long reply") || strings.Contains(line, "with two lines"):
+			if strings.Contains(plain, workBracket) {
+				t.Fatalf("reply lines should use a vertical rail, not a square bracket: %q", line)
+			}
+			if !strings.HasPrefix(plain, workRail) {
+				t.Fatalf("thinking and assistant lines should start with the rail: %q", line)
+			}
+		case strings.Contains(line, roleYou):
+			if strings.Contains(plain, workBracket) || strings.HasPrefix(plain, workRail) {
+				t.Fatalf("you label should stay unmarked: %q", line)
+			}
+		}
+	}
+	if userLines != 2 || userOpens != 1 || userCloses != 1 {
+		t.Fatalf("want one opening and one closing bracket across the user prompt, got lines=%d opens=%d closes=%d\n%s", userLines, userOpens, userCloses, body)
 	}
 }
 
@@ -1403,10 +1502,15 @@ func TestHelpOverlayBordersAlign(t *testing.T) {
 	if start < 0 || end <= start {
 		t.Fatalf("help card borders missing: %q", v)
 	}
+	cardLeft := strings.Index(lines[start], "╭")
+	if cardLeft < 0 {
+		t.Fatalf("help card top border missing: %q", lines[start])
+	}
+	minCol := lipgloss.Width(lines[start][:cardLeft])
 	var lefts []int
 	for _, line := range lines[start : end+1] {
-		if i := strings.Index(line, "│"); i >= 0 {
-			lefts = append(lefts, lipgloss.Width(line[:i]))
+		if col := indexAtDisplayCol(line, "│", minCol); col >= 0 {
+			lefts = append(lefts, col)
 		}
 	}
 	if len(lefts) < 3 {
@@ -1423,6 +1527,23 @@ func TestHelpOverlayBordersAlign(t *testing.T) {
 	if !strings.Contains(v, "switch model") || !strings.Contains(v, "ctrl+c") {
 		t.Fatalf("help rows missing: %q", v)
 	}
+}
+
+func indexAtDisplayCol(s, sep string, minCol int) int {
+	col := 0
+	for s != "" {
+		i := strings.Index(s, sep)
+		if i < 0 {
+			return -1
+		}
+		col += lipgloss.Width(s[:i])
+		if col >= minCol {
+			return col
+		}
+		col += lipgloss.Width(sep)
+		s = s[i+len(sep):]
+	}
+	return -1
 }
 
 func TestSpliceDisplayUsesCellsNotRunes(t *testing.T) {

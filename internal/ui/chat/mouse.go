@@ -177,7 +177,7 @@ func (m Model) itemIndexAtScreenY(y int) (int, bool) {
 	ri := 0
 	for i, it := range m.items {
 		if i > 0 && (it.kind == itemUser || it.kind == itemAssistant) {
-			if ri < len(rendered) && rendered[ri] == "" {
+			if ri < len(rendered) && isTurnGap(rendered[ri]) {
 				if target == row {
 					return -1, false
 				}
@@ -199,6 +199,11 @@ func (m Model) itemIndexAtScreenY(y int) (int, bool) {
 		ri++
 	}
 	return -1, false
+}
+
+func isTurnGap(s string) bool {
+	t := strings.TrimSpace(ansi.Strip(s))
+	return t == "" || t == workBracket || t == workRail
 }
 
 // slashIndexAtScreenY maps a screen row to a visible slash command.
