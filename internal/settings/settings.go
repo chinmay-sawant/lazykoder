@@ -6,11 +6,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 const (
 	// FileName is the settings file under .lazykoder/.
 	FileName = "settings.json"
+	// DefaultModelID is the built-in chat model when none is configured.
+	DefaultModelID = "deepseek-v4-flash"
 	// DefaultMaxSteps matches the agent default when no file exists.
 	DefaultMaxSteps = 16
 	// MinMaxSteps is the lowest configurable step budget.
@@ -34,17 +37,32 @@ type Slot struct {
 	LimitEnabled bool `json:"limit_enabled"`
 }
 
-// Settings is the on-disk project config under .lazykoder/settings.json.
-type Settings struct {
-	Slot Slot `json:"slot"`
+// Model holds default model and reasoning preferences for new turns.
+type Model struct {
+	// Default is the model id used for new sessions and when the live
+	// chat model has not been chosen yet.
+	Default string `json:"default"`
+	// Variant is the default reasoning effort (low, medium, high, max).
+	// Empty means the provider default.
+	Variant string `json:"variant"`
 }
 
-// Default returns the built-in defaults (step limit on, 16 steps).
+// Settings is the on-disk project config under .lazykoder/settings.json.
+type Settings struct {
+	Slot  Slot  `json:"slot"`
+	Model Model `json:"model"`
+}
+
+// Default returns the built-in defaults.
 func Default() Settings {
 	return Settings{
 		Slot: Slot{
 			MaxSteps:     DefaultMaxSteps,
 			LimitEnabled: true,
+		},
+		Model: Model{
+			Default: DefaultModelID,
+			Variant: "",
 		},
 	}
 }
@@ -97,6 +115,16 @@ func (s Settings) EffectiveMaxSteps() int {
 	return s.Slot.MaxSteps
 }
 
+// EffectiveModel is the default model id (never empty after normalize).
+func (s Settings) EffectiveModel() string {
+	return s.normalized().Model.Default
+}
+
+// EffectiveVariant is the default reasoning variant (may be empty).
+func (s Settings) EffectiveVariant() string {
+	return s.normalized().Model.Variant
+}
+
 func (s Settings) normalized() Settings {
 	if s.Slot.MaxSteps < MinMaxSteps {
 		s.Slot.MaxSteps = DefaultMaxSteps
@@ -104,48 +132,50 @@ func (s Settings) normalized() Settings {
 	if s.Slot.MaxSteps > MaxMaxSteps {
 		s.Slot.MaxSteps = MaxMaxSteps
 	}
-	// json zero-value for bool is false; treat missing file via Default().
-	// After load, keep LimitEnabled as unmarshaled (explicit false is ok).
-	// If MaxSteps was present but LimitEnabled omitted and max_steps set,
-	// callers using Default() first then overlay are fine. For a file that
-	// only has {"slot":{"max_steps":8}}, LimitEnabled is false - wrong.
-	// Prefer: if the file exists with max_steps but never set limit_enabled,
-	// we cannot distinguish. Document that limit_enabled defaults to true
-	// only when the whole file is missing. When present, use the bool.
+	s.Model.Default = strings.TrimSpace(s.Model.Default)
+	if s.Model.Default == "" {
+		s.Model.Default = DefaultModelID
+	}
+	s.Model.Variant = strings.TrimSpace(s.Model.Variant)
 	return s
 }
 
 // NormalizeAfterLoad fixes zero MaxSteps from partial files and defaults
-// LimitEnabled to true when MaxSteps is set but the file had no slot block.
-// Call this after Load when you want "missing limit_enabled" => true.
+// LimitEnabled to true when the key is omitted.
 func NormalizeAfterLoad(s Settings, raw []byte) Settings {
 	s = s.normalized()
 	if len(raw) == 0 {
 		return Default()
 	}
-	// If limit_enabled key is absent, default it to true so partial files
-	// that only set max_steps still keep the limit on.
-	if !jsonHasKey(raw, "limit_enabled") {
+	if !jsonHasKey(raw, "slot", "limit_enabled") {
 		s.Slot.LimitEnabled = true
+	}
+	if !jsonHasKey(raw, "model", "default") && s.Model.Default == DefaultModelID {
+		// keep default; already set by normalized
+	}
+	if s.Model.Default == "" {
+		s.Model.Default = DefaultModelID
 	}
 	return s.normalized()
 }
 
-func jsonHasKey(raw []byte, key string) bool {
-	var top map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &top); err != nil {
+func jsonHasKey(raw []byte, path ...string) bool {
+	var cur any
+	if err := json.Unmarshal(raw, &cur); err != nil {
 		return false
 	}
-	slotRaw, ok := top["slot"]
-	if !ok {
-		return false
+	for _, key := range path {
+		obj, ok := cur.(map[string]any)
+		if !ok {
+			return false
+		}
+		next, ok := obj[key]
+		if !ok {
+			return false
+		}
+		cur = next
 	}
-	var slot map[string]json.RawMessage
-	if err := json.Unmarshal(slotRaw, &slot); err != nil {
-		return false
-	}
-	_, ok = slot[key]
-	return ok
+	return true
 }
 
 // LoadFile is Load with default-true LimitEnabled when the key is omitted.

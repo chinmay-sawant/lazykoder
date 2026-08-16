@@ -20,6 +20,9 @@ func (m Model) View() tea.View {
 	if m.sessionPickerMode {
 		return m.newView(m.sessionPickerScreen())
 	}
+	if m.settingsMode {
+		return m.newView(m.settingsScreen())
+	}
 	screen := m.chatScreen()
 	overlayH := m.composerTop()
 	if m.confirmMode {
@@ -66,10 +69,6 @@ func (m Model) chatScreen() string {
 	}
 	if m.pickerMode {
 		b.WriteString(m.pickerView())
-		b.WriteString("\n")
-	}
-	if m.settingsMode {
-		b.WriteString(m.settingsView())
 		b.WriteString("\n")
 	}
 	if m.err != "" {
@@ -215,9 +214,6 @@ func (m Model) composerTop() int {
 	}
 	if m.pickerMode {
 		top += 1 + lipgloss.Height(m.pickerView())
-	}
-	if m.settingsMode {
-		top += 1 + lipgloss.Height(m.settingsView())
 	}
 	if m.err != "" {
 		top += 1 + lipgloss.Height(errStyle.Width(max(minPaneWidth, m.width)).Render(m.err))
@@ -447,9 +443,6 @@ func (m Model) transcriptRenderHeight() int {
 	}
 	if m.pickerMode {
 		fixedRows += 1 + lipgloss.Height(m.pickerView())
-	}
-	if m.settingsMode {
-		fixedRows += 1 + lipgloss.Height(m.settingsView())
 	}
 	if m.err != "" {
 		fixedRows += lipgloss.Height(errStyle.Width(max(minPaneWidth, m.width)).Render(m.err))
@@ -681,7 +674,7 @@ func splitPaneWidths(total int) (left, right int) {
 }
 
 func (m Model) modelStatusRect() (left, top, right, bottom int, ok bool) {
-	if m.busy || m.pickerMode || m.sessionPickerMode {
+	if m.busy || m.pickerMode || m.sessionPickerMode || m.settingsMode {
 		return 0, 0, 0, 0, false
 	}
 	leftW := lipgloss.Width(m.composerLeft())

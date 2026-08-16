@@ -141,25 +141,33 @@ model box.
 from `models.json`. The choice is stored in `sessions.variant` and sent
 as `reasoning_effort` on later turns.
 
-## Slot settings
+## Project settings
 
-`/settings` (alias `/slot`) opens a full-width drawer above the prompt
-(same placement as `/model`). The drawer is the Slot settings panel:
-step-limit on/off and max agent steps per user turn. Changes persist in
-`<cwd>/.lazykoder/settings.json`.
+`/settings` (alias `/slot`) opens a **centered full-screen card** in the
+same family as `/resume` and `/help`: a bordered panel over the chat with
+a `SETTINGS` header and a clickable `[x]` on the top right. Changes
+persist in `<cwd>/.lazykoder/settings.json`.
+
+| Row | What it controls |
+| --- | --- |
+| default model | model for new sessions (default `deepseek-v4-flash`) |
+| default variant | default reasoning effort (`default` / low / medium / high / max) |
+| step limit | on/off for the per-turn tool-step budget |
+| max steps | tool-calling rounds per user turn when the limit is on (1-128, default 16) |
 
 | Control | Action |
 | --- | --- |
 | `j`/`k` or arrows | move between rows |
-| `←`/`→` or `h`/`l` | adjust the focused control |
-| space / enter | toggle step limit (or bump max steps) |
-| left click | toggle limit row, or click `◂` / `▸` / the number on max steps |
-| right click | same as left on the limit row; on the number, increases max steps |
-| click `[x]` (top right) | close |
+| `←`/`→` or `h`/`l` | adjust the focused control (cycle model/variant, toggle limit, nudge steps) |
+| enter | open the model or variant picker for that row; toggle/bump for slot rows |
+| space | toggle limit or cycle model/variant |
+| click `[x]` | close |
+| click a row / `◂` / `▸` | adjust that control |
 | `esc` / `x` / `q` | close |
 
-Default is limit on, 16 steps (range 1-128). When the limit is off the
-agent still has a large safety bound so a runaway loop cannot run forever.
+When the step limit is off the agent still has a large safety bound so a
+runaway loop cannot run forever. `/model` and `/variant` still change only
+the **current session**; the settings card is the project default.
 
 ## Continue
 

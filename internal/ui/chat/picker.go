@@ -238,6 +238,16 @@ func (m Model) selectPickerItem(idx int) (Model, tea.Cmd) {
 	if !m.pickerBuilt || idx < 0 || idx >= len(m.pickerItems) {
 		return m, nil
 	}
+	if m.settingsPickDefault {
+		if m.pickerKind == pickerKindVariant {
+			m = m.setDefaultVariant(m.pickerItems[idx])
+		} else {
+			m = m.setDefaultModel(m.pickerItems[idx])
+		}
+		m = m.finishPickerSelection()
+		m.settingsPickDefault = false
+		return m.openSettings(), nil
+	}
 	if m.pickerKind == pickerKindVariant {
 		m.variant = m.pickerItems[idx]
 		m.syncSessionVariant()
@@ -263,11 +273,16 @@ func (m Model) finishPickerSelection() Model {
 }
 
 func (m Model) closePicker() Model {
+	reopenSettings := m.settingsPickDefault
 	m.pickerMode = false
 	m.pickerFiltering = false
 	m.pickerFromPrompt = false
 	m.pickerKind = pickerKindModel
 	m.dragOn = false
+	m.settingsPickDefault = false
+	if reopenSettings {
+		return m.openSettings()
+	}
 	return m
 }
 

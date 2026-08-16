@@ -14,6 +14,9 @@ func TestDefault(t *testing.T) {
 	if !s.Slot.LimitEnabled {
 		t.Fatal("LimitEnabled want true")
 	}
+	if s.Model.Default != DefaultModelID {
+		t.Fatalf("Default model = %q, want %q", s.Model.Default, DefaultModelID)
+	}
 }
 
 func TestLoadMissingReturnsDefault(t *testing.T) {
@@ -25,11 +28,17 @@ func TestLoadMissingReturnsDefault(t *testing.T) {
 	if s.Slot.MaxSteps != DefaultMaxSteps || !s.Slot.LimitEnabled {
 		t.Fatalf("got %+v", s)
 	}
+	if s.Model.Default != DefaultModelID {
+		t.Fatalf("model = %q", s.Model.Default)
+	}
 }
 
 func TestSaveLoadRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.json")
-	want := Settings{Slot: Slot{MaxSteps: 8, LimitEnabled: false}}
+	want := Settings{
+		Slot:  Slot{MaxSteps: 8, LimitEnabled: false},
+		Model: Model{Default: "claude-4", Variant: "high"},
+	}
 	if err := Save(path, want); err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +47,10 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got.Slot.MaxSteps != 8 || got.Slot.LimitEnabled {
-		t.Fatalf("got %+v, want %+v", got, want)
+		t.Fatalf("slot %+v", got.Slot)
+	}
+	if got.Model.Default != "claude-4" || got.Model.Variant != "high" {
+		t.Fatalf("model %+v", got.Model)
 	}
 }
 
@@ -56,6 +68,9 @@ func TestLoadPartialMaxStepsKeepsLimitOn(t *testing.T) {
 	}
 	if !got.Slot.LimitEnabled {
 		t.Fatal("LimitEnabled should default true when omitted")
+	}
+	if got.Model.Default != DefaultModelID {
+		t.Fatalf("model default = %q", got.Model.Default)
 	}
 }
 
@@ -81,5 +96,12 @@ func TestEffectiveMaxSteps(t *testing.T) {
 	off := Settings{Slot: Slot{MaxSteps: 5, LimitEnabled: false}}
 	if off.EffectiveMaxSteps() != unlimitedMaxSteps {
 		t.Fatalf("disabled = %d, want %d", off.EffectiveMaxSteps(), unlimitedMaxSteps)
+	}
+}
+
+func TestEmptyModelNormalizes(t *testing.T) {
+	s := Settings{Model: Model{Default: "  "}}.normalized()
+	if s.Model.Default != DefaultModelID {
+		t.Fatalf("got %q", s.Model.Default)
 	}
 }

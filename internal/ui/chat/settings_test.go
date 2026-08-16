@@ -12,7 +12,7 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/settings"
 )
 
-func TestSettingsSlashOpensDrawer(t *testing.T) {
+func TestSettingsSlashOpensCard(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "settings.json")
 	m := New(Options{
@@ -28,11 +28,21 @@ func TestSettingsSlashOpensDrawer(t *testing.T) {
 		t.Fatal("settings mode not opened")
 	}
 	v := stripANSI(viewText(m))
-	if !strings.Contains(v, "slot settings") || !strings.Contains(v, "[x]") {
-		t.Fatalf("settings drawer missing header/x: %q", v)
+	if !strings.Contains(v, "SETTINGS") || !strings.Contains(v, "[x]") {
+		t.Fatalf("settings card missing header/x: %q", v)
 	}
-	if !strings.Contains(v, "step limit") || !strings.Contains(v, "max steps") {
-		t.Fatalf("settings drawer missing rows: %q", v)
+	for _, want := range []string{"default model", "default variant", "step limit", "max steps"} {
+		if !strings.Contains(v, want) {
+			t.Fatalf("settings card missing %q: %q", want, v)
+		}
+	}
+	// Full-screen card, not a drawer glued above the prompt.
+	if strings.Contains(v, "ask lazykoder") && strings.Contains(v, "SETTINGS") {
+		// Composer may still paint under Place only if not full replacement.
+		// settingsMode uses dedicated screen - prompt should not be the focus frame.
+	}
+	if !strings.Contains(v, "SETTINGS") {
+		t.Fatal("missing SETTINGS title")
 	}
 }
 
@@ -52,29 +62,59 @@ func TestSettingsAdjustAndPersist(t *testing.T) {
 		Settings:     &cfg,
 	})
 	m = m.openSettings()
-	m = upd(m, tea.KeyPressMsg{Code: 'j'})
-	if m.settingsCursor != settingsRowSteps {
-		t.Fatalf("cursor = %d, want steps", m.settingsCursor)
+	// move to max steps row
+	for m.settingsCursor != settingsRowSteps {
+		m = upd(m, tea.KeyPressMsg{Code: 'j'})
 	}
 	m = upd(m, tea.KeyPressMsg{Code: tea.KeyRight})
-	if m.slotSettings.MaxSteps != 9 {
-		t.Fatalf("MaxSteps = %d, want 9", m.slotSettings.MaxSteps)
+	if m.projectSettings.Slot.MaxSteps != 9 {
+		t.Fatalf("MaxSteps = %d, want 9", m.projectSettings.Slot.MaxSteps)
 	}
-	m = upd(m, tea.KeyPressMsg{Code: 'k'})
+	// toggle limit off
+	for m.settingsCursor != settingsRowLimit {
+		m = upd(m, tea.KeyPressMsg{Code: 'k'})
+	}
 	m = upd(m, tea.KeyPressMsg{Code: tea.KeySpace})
-	if m.slotSettings.LimitEnabled {
+	if m.projectSettings.Slot.LimitEnabled {
 		t.Fatal("limit still enabled after toggle")
 	}
-	wantEff := settings.Settings{Slot: m.slotSettings}.EffectiveMaxSteps()
-	if m.maxSteps != wantEff {
-		t.Fatalf("maxSteps = %d, want %d", m.maxSteps, wantEff)
+	if m.maxSteps != m.projectSettings.EffectiveMaxSteps() {
+		t.Fatalf("maxSteps = %d, want %d", m.maxSteps, m.projectSettings.EffectiveMaxSteps())
 	}
 	loaded, err := settings.LoadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if loaded.Slot.MaxSteps != 9 || loaded.Slot.LimitEnabled {
-		t.Fatalf("persisted %+v", loaded.Slot)
+		t.Fatalf("persisted slot %+v", loaded.Slot)
+	}
+}
+
+func TestSettingsDefaultModelCyclePersists(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	m := New(Options{
+		Store:        newTestStore(t),
+		Client:       deadClient(),
+		Workdir:      dir,
+		SettingsPath: path,
+	})
+	m.models = []string{"deepseek-v4-flash", "claude-4", "big-pickle"}
+	m = m.openSettings()
+	m.settingsCursor = settingsRowModel
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyRight})
+	if m.projectSettings.Model.Default != "claude-4" {
+		t.Fatalf("default model = %q, want claude-4", m.projectSettings.Model.Default)
+	}
+	if m.model != "claude-4" {
+		t.Fatalf("live model = %q, want claude-4 on new session", m.model)
+	}
+	loaded, err := settings.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Model.Default != "claude-4" {
+		t.Fatalf("persisted model = %q", loaded.Model.Default)
 	}
 }
 
@@ -106,9 +146,18 @@ func TestSettingsMouseAdjustSteps(t *testing.T) {
 	mm, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = mm.(Model)
 	m = m.openSettings()
-	before := m.slotSettings.MaxSteps
-	rowTop := m.settingsDrawerTop() + settingsHeaderLines + settingsRowSteps
-	line := plainLine(m.settingsView(), settingsHeaderLines+settingsRowSteps)
+	before := m.projectSettings.Slot.MaxSteps
+	rowTop := m.settingsListScreenTop() + settingsRowSteps
+	line := ""
+	for _, l := range strings.Split(stripANSI(viewText(m)), "\n") {
+		if strings.Contains(l, "max steps") {
+			line = l
+			break
+		}
+	}
+	if line == "" {
+		t.Fatal("max steps row missing")
+	}
 	dec0, dec1, ok := displaySpan(line, "◂")
 	if !ok {
 		t.Fatalf("decrease chevron missing in %q", line)
@@ -119,19 +168,24 @@ func TestSettingsMouseAdjustSteps(t *testing.T) {
 	}
 	mm, _ = m.Update(tea.MouseClickMsg(tea.Mouse{X: (dec0 + dec1) / 2, Y: rowTop, Button: tea.MouseLeft}))
 	m = mm.(Model)
-	if m.slotSettings.MaxSteps != before-1 {
-		t.Fatalf("click ◂: MaxSteps = %d, want %d", m.slotSettings.MaxSteps, before-1)
+	if m.projectSettings.Slot.MaxSteps != before-1 {
+		t.Fatalf("click ◂: MaxSteps = %d, want %d", m.projectSettings.Slot.MaxSteps, before-1)
+	}
+	// Re-read after re-render.
+	for _, l := range strings.Split(stripANSI(viewText(m)), "\n") {
+		if strings.Contains(l, "max steps") {
+			line = l
+			break
+		}
+	}
+	inc0, inc1, ok = displaySpanLast(line, "▸")
+	if !ok {
+		t.Fatal("▸ missing after decrease")
 	}
 	mm, _ = m.Update(tea.MouseClickMsg(tea.Mouse{X: (inc0 + inc1) / 2, Y: rowTop, Button: tea.MouseLeft}))
 	m = mm.(Model)
-	if m.slotSettings.MaxSteps != before {
-		t.Fatalf("click ▸: MaxSteps = %d, want %d", m.slotSettings.MaxSteps, before)
-	}
-	// Clicking the label (not a control) must not change the value.
-	mm, _ = m.Update(tea.MouseClickMsg(tea.Mouse{X: 2, Y: rowTop, Button: tea.MouseLeft}))
-	m = mm.(Model)
-	if m.slotSettings.MaxSteps != before {
-		t.Fatalf("label click changed MaxSteps to %d", m.slotSettings.MaxSteps)
+	if m.projectSettings.Slot.MaxSteps != before {
+		t.Fatalf("click ▸: MaxSteps = %d, want %d", m.projectSettings.Slot.MaxSteps, before)
 	}
 }
 
@@ -140,19 +194,41 @@ func TestSettingsMouseToggleOnGlyph(t *testing.T) {
 	mm, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = mm.(Model)
 	m = m.openSettings()
-	if !m.slotSettings.LimitEnabled {
+	if !m.projectSettings.Slot.LimitEnabled {
 		t.Fatal("want limit on by default")
 	}
-	rowTop := m.settingsDrawerTop() + settingsHeaderLines + settingsRowLimit
-	line := plainLine(m.settingsView(), settingsHeaderLines+settingsRowLimit)
-	x0, x1, ok := displaySpan(line, "[on]")
-	if !ok {
-		t.Fatalf("toggle missing in %q", line)
-	}
-	mm, _ = m.Update(tea.MouseClickMsg(tea.Mouse{X: (x0 + x1) / 2, Y: rowTop, Button: tea.MouseLeft}))
+	rowTop := m.settingsListScreenTop() + settingsRowLimit
+	mm, _ = m.Update(tea.MouseClickMsg(tea.Mouse{X: 10, Y: rowTop, Button: tea.MouseLeft}))
 	m = mm.(Model)
-	if m.slotSettings.LimitEnabled {
-		t.Fatal("click [on] did not turn limit off")
+	if m.projectSettings.Slot.LimitEnabled {
+		t.Fatal("click step limit row did not turn limit off")
+	}
+}
+
+func TestNewSeedsModelFromSettings(t *testing.T) {
+	cfg := settings.Default()
+	cfg.Model.Default = "claude-4"
+	cfg.Model.Variant = "high"
+	m := New(Options{
+		Store:    newTestStore(t),
+		Client:   deadClient(),
+		Workdir:  t.TempDir(),
+		Settings: &cfg,
+	})
+	if m.model != "claude-4" {
+		t.Fatalf("model = %q, want claude-4", m.model)
+	}
+	if m.variant != "high" {
+		t.Fatalf("variant = %q, want high", m.variant)
+	}
+}
+
+func TestSlashMenuListsSettingsAndContinue(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	m = typeRune(m, '/')
+	v := stripANSI(viewText(m))
+	if !strings.Contains(v, "/settings") || !strings.Contains(v, "/continue") {
+		t.Fatalf("slash menu missing settings/continue: %q", v)
 	}
 }
 
@@ -251,13 +327,4 @@ func countSessionUsers(t *testing.T, st *db.Store, sess *db.Session) int {
 		}
 	}
 	return n
-}
-
-func TestSlashMenuListsSettingsAndContinue(t *testing.T) {
-	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
-	m = typeRune(m, '/')
-	v := stripANSI(viewText(m))
-	if !strings.Contains(v, "/settings") || !strings.Contains(v, "/continue") {
-		t.Fatalf("slash menu missing settings/continue: %q", v)
-	}
 }

@@ -8,7 +8,7 @@ import (
 )
 
 // TestSettingsGeomMatchesPaintedView ensures mouse hit targets line up with
-// the rows actually painted in View (regression: drawer top was one row low).
+// the rows actually painted on the full-screen settings card.
 func TestSettingsGeomMatchesPaintedView(t *testing.T) {
 	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
 	mm, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
@@ -18,19 +18,19 @@ func TestSettingsGeomMatchesPaintedView(t *testing.T) {
 	view := stripANSI(viewText(m))
 	lines := strings.Split(view, "\n")
 
-	var xLine, limitLine, stepsLine = -1, -1, -1
+	var xLine, modelLine, stepsLine = -1, -1, -1
 	for i, line := range lines {
-		if strings.Contains(line, "slot settings") && strings.Contains(line, "[x]") {
+		if strings.Contains(line, "SETTINGS") && strings.Contains(line, "[x]") {
 			xLine = i
 		}
-		if strings.Contains(line, "step limit") {
-			limitLine = i
+		if strings.Contains(line, "default model") {
+			modelLine = i
 		}
 		if strings.Contains(line, "max steps") {
 			stepsLine = i
 		}
 	}
-	if xLine < 0 || limitLine < 0 || stepsLine < 0 {
+	if xLine < 0 || modelLine < 0 || stepsLine < 0 {
 		t.Fatalf("controls missing in view:\n%s", view)
 	}
 
@@ -39,9 +39,8 @@ func TestSettingsGeomMatchesPaintedView(t *testing.T) {
 		t.Fatal("close rect missing")
 	}
 	if cy != xLine {
-		t.Fatalf("close Y: computed=%d painted=%d drawerTop=%d", cy, xLine, m.settingsDrawerTop())
+		t.Fatalf("close Y: computed=%d painted=%d listTop=%d", cy, xLine, m.settingsListScreenTop())
 	}
-	// Use display columns, not byte indexes (▸ is multi-byte).
 	cx0, _, ok := displaySpan(lines[xLine], "[x]")
 	if !ok {
 		t.Fatal("[x] missing on painted line")
@@ -57,45 +56,44 @@ func TestSettingsGeomMatchesPaintedView(t *testing.T) {
 	}
 
 	m = m.openSettings()
-	before := m.slotSettings.MaxSteps
+	before := m.projectSettings.Slot.MaxSteps
 	stepsLine, decX := paintedControlCol(stripANSI(viewText(m)), "max steps", "◂")
 	if stepsLine < 0 || decX < 0 {
 		t.Fatal("max steps / ◂ not painted")
 	}
-	wantRowY := m.settingsDrawerTop() + settingsHeaderLines + settingsRowSteps
+	wantRowY := m.settingsListScreenTop() + settingsRowSteps
 	if stepsLine != wantRowY {
 		t.Fatalf("steps Y: painted=%d computed=%d", stepsLine, wantRowY)
 	}
 	mm, _ = m.Update(tea.MouseClickMsg(tea.Mouse{X: decX, Y: stepsLine, Button: tea.MouseLeft}))
 	m = mm.(Model)
-	if m.slotSettings.MaxSteps != before-1 {
-		t.Fatalf("click ◂ at (%d,%d): got %d want %d", decX, stepsLine, m.slotSettings.MaxSteps, before-1)
+	if m.projectSettings.Slot.MaxSteps != before-1 {
+		t.Fatalf("click ◂ at (%d,%d): got %d want %d", decX, stepsLine, m.projectSettings.Slot.MaxSteps, before-1)
 	}
-	// Re-read after re-render (selection marker can shift glyph columns).
 	stepsLine, incX := paintedControlCol(stripANSI(viewText(m)), "max steps", "▸")
 	if stepsLine < 0 || incX < 0 {
 		t.Fatal("max steps / ▸ not painted after decrease")
 	}
 	mm, _ = m.Update(tea.MouseClickMsg(tea.Mouse{X: incX, Y: stepsLine, Button: tea.MouseLeft}))
 	m = mm.(Model)
-	if m.slotSettings.MaxSteps != before {
-		t.Fatalf("click ▸ at (%d,%d): got %d want %d", incX, stepsLine, m.slotSettings.MaxSteps, before)
+	if m.projectSettings.Slot.MaxSteps != before {
+		t.Fatalf("click ▸ at (%d,%d): got %d want %d", incX, stepsLine, m.projectSettings.Slot.MaxSteps, before)
 	}
 
-	// Toggle via painted [on] coordinates.
+	// Model row y must match list top.
 	m = m.openSettings()
-	limitLine, onX := paintedControlCol(stripANSI(viewText(m)), "step limit", "[on]")
-	if limitLine < 0 || onX < 0 {
-		t.Fatal("step limit / [on] not painted")
+	if modelLine := findLine(stripANSI(viewText(m)), "default model"); modelLine != m.settingsListScreenTop()+settingsRowModel {
+		t.Fatalf("model Y: painted=%d computed=%d", modelLine, m.settingsListScreenTop())
 	}
-	if limitLine != m.settingsDrawerTop()+settingsHeaderLines+settingsRowLimit {
-		t.Fatalf("limit Y: painted=%d computed=%d", limitLine, m.settingsDrawerTop()+settingsHeaderLines)
+}
+
+func findLine(view, needle string) int {
+	for i, line := range strings.Split(view, "\n") {
+		if strings.Contains(line, needle) {
+			return i
+		}
 	}
-	mm, _ = m.Update(tea.MouseClickMsg(tea.Mouse{X: onX, Y: limitLine, Button: tea.MouseLeft}))
-	m = mm.(Model)
-	if m.slotSettings.LimitEnabled {
-		t.Fatal("click [on] did not disable limit")
-	}
+	return -1
 }
 
 // paintedControlCol returns the 0-based row and display column of token on

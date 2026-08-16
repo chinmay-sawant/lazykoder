@@ -21,7 +21,7 @@ const (
 	SessionsPicker      = "/resume or ctrl+s continues a past session"
 	ModelPicker         = "/model switches the chat model"
 	VariantPicker       = "/variant sets the reasoning effort"
-	SlotSettings        = "/settings opens slot settings (step limit)"
+	SlotSettings        = "/settings opens project settings (model, steps)"
 	ContinueSession     = "/continue resumes after a step limit"
 	RefreshModels       = "/refresh reloads the model list"
 	HelpOverlay         = "/help or ? shows every shortcut"

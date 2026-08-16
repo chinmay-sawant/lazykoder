@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/chinmay-sawant/lazykoder/internal/settings"
 )
 
 const (
@@ -26,7 +28,7 @@ func (s *Store) CreateSession(ctx context.Context, sess Session) (Session, error
 		sess.Provider = "opencode-go"
 	}
 	if sess.Model == "" {
-		sess.Model = "deepseek-v4-flash"
+		sess.Model = settings.DefaultModelID
 	}
 	if sess.Status == "" {
 		sess.Status = "active"

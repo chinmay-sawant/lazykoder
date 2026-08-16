@@ -132,9 +132,10 @@ type Model struct {
 	client       *opencode.Client
 	workdir      string
 	session      *db.Session
-	maxSteps     int
-	settingsPath string
-	slotSettings settings.Slot
+	maxSteps              int
+	settingsPath          string
+	projectSettings       settings.Settings
+	settingsPickDefault   bool // model/variant picker is setting the project default
 
 	width  int
 	height int
@@ -276,7 +277,7 @@ var slashCommands = []slashCmd{
 	{name: "/model", description: "search and switch the chat model"},
 	{name: "/variant", description: "switch the model variant (low, medium, high)"},
 	{name: "/refresh", description: "reload the model list from the server"},
-	{name: "/settings", description: "slot settings (step limit)", aliases: []string{"slot"}},
+	{name: "/settings", description: "project settings (model, steps)", aliases: []string{"slot"}},
 	{name: "/continue", description: "continue after a step limit or keep going"},
 	{name: "/help", description: "show the keyboard shortcuts"},
 }
@@ -324,14 +325,15 @@ type tipsTickMsg struct{}
 
 // New returns a chat model for the given options.
 func New(opts Options) Model {
-	slot := settings.Default().Slot
+	cfg := settings.Default()
 	if opts.Settings != nil {
-		slot = opts.Settings.Slot
+		cfg = *opts.Settings
 	} else if opts.MaxSteps > 0 {
-		slot.MaxSteps = opts.MaxSteps
-		slot.LimitEnabled = true
+		cfg.Slot.MaxSteps = opts.MaxSteps
+		cfg.Slot.LimitEnabled = true
 	}
-	eff := settings.Settings{Slot: slot}.EffectiveMaxSteps()
+	// Effective* helpers normalize clamps and empty model ids.
+	eff := cfg.EffectiveMaxSteps()
 	m := Model{
 		store:               opts.Store,
 		client:              opts.Client,
@@ -339,7 +341,7 @@ func New(opts Options) Model {
 		session:             opts.Session,
 		maxSteps:            eff,
 		settingsPath:        opts.SettingsPath,
-		slotSettings:        slot,
+		projectSettings:     cfg,
 		err:                 opts.InitialErr,
 		width:               defaultWidth,
 		height:              defaultHeight,
@@ -367,6 +369,10 @@ func New(opts Options) Model {
 			m.variant = *m.session.Variant
 		}
 		m.replay(m.session.ID)
+	} else {
+		// New run: seed live model/variant from project defaults.
+		m.model = cfg.EffectiveModel()
+		m.variant = cfg.EffectiveVariant()
 	}
 	return m
 }
