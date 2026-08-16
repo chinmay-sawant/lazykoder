@@ -18,7 +18,7 @@ const (
 	EscTwiceClears      = "press esc twice to clear the prompt"
 	SlashCommands       = "type / to list commands"
 	NewSession          = "/new starts a fresh session"
-	SessionsPicker      = "/sessions or ctrl+s opens past sessions"
+	SessionsPicker      = "/resume or ctrl+s continues a past session"
 	ModelPicker         = "/model switches the chat model"
 	VariantPicker       = "/variant sets the reasoning effort"
 	RefreshModels       = "/refresh reloads the model list"

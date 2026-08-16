@@ -20,7 +20,7 @@ the readable reference; keep the two in sync when adding or editing a tip.
 
 - type `/` to list commands
 - `/new` starts a fresh session
-- `/sessions` or `ctrl+s` opens past sessions
+- `/resume` or `ctrl+s` continues a past session
 - `/model` switches the chat model
 - `/variant` sets the reasoning effort
 - `/refresh` reloads the model list
