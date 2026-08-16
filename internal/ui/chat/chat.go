@@ -20,11 +20,15 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/policy"
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 	"github.com/chinmay-sawant/lazykoder/internal/settings"
+	"github.com/chinmay-sawant/lazykoder/internal/subagent"
 	"github.com/chinmay-sawant/lazykoder/internal/tips"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/question"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/confirm"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
+
+// confirmQueueSize buffers concurrent child/parent confirm requests.
+const confirmQueueSize = 32
 
 const (
 	idleHint      = "enter to send  •  q to quit"
@@ -237,6 +241,9 @@ type Model struct {
 	turnCtx    context.Context
 	eventCh    chan agent.Event
 	errCh      chan error
+
+	// subMgr owns in-process sub-agent jobs for this chat model.
+	subMgr *subagent.Manager
 }
 
 // slashCmd is one entry of the slash command menu. aliases are extra
@@ -345,8 +352,8 @@ func New(opts Options) Model {
 		err:                 opts.InitialErr,
 		width:               defaultWidth,
 		height:              defaultHeight,
-		confirmCh:           make(chan confirmRequest, 1),
-		askCh:               make(chan askRequest, 1),
+		confirmCh:           make(chan confirmRequest, confirmQueueSize),
+		askCh:               make(chan askRequest, confirmQueueSize),
 		doneCh:              make(chan struct{}),
 		lastTool:            -1,
 		selectedItem:        -1,
@@ -357,6 +364,10 @@ func New(opts Options) Model {
 		prompt:              newPromptArea(defaultWidth),
 		renderCache:         &renderCache{},
 	}
+	m.subMgr = subagent.NewManager(subagent.ConfigFromSettings(cfg), subagent.AgentRunner{
+		Store:  opts.Store,
+		Client: opts.Client,
+	})
 	if m.cachePath != "" {
 		if infos, _, err := modelscache.Load(m.cachePath, time.Now(), 0); err == nil && len(infos) > 0 {
 			m.modelInfos = infos

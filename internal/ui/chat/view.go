@@ -295,13 +295,28 @@ func (m Model) footerPieces() (tokens, cache, cost, tps string) {
 
 func (m Model) footerStatParts() []string {
 	tokens, cache, cost, tps := m.footerPieces()
-	parts := make([]string, 0, 4)
+	parts := make([]string, 0, 5)
 	for _, p := range []string{tokens, cache, cost, tps} {
 		if p != "" {
 			parts = append(parts, p)
 		}
 	}
+	if s := m.subsStatusLabel(); s != "" {
+		parts = append(parts, s)
+	}
 	return parts
+}
+
+// subsStatusLabel is "subs:N/M" when the subagent manager has active jobs.
+func (m Model) subsStatusLabel() string {
+	if m.subMgr == nil {
+		return ""
+	}
+	active := m.subMgr.Active()
+	if active <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("subs:%d/%d", active, m.subMgr.MaxConcurrent())
 }
 
 func (m Model) fitFooterRight(budget int) string {

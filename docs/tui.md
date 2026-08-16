@@ -154,6 +154,12 @@ persist in `<cwd>/.lazykoder/settings.json`.
 | default variant | default reasoning effort (`default` / low / medium / high / max) |
 | step limit | on/off for the per-turn tool-step budget |
 | max steps | tool-calling rounds per user turn when the limit is on (1-128, default 16) |
+| sub-agents | on/off for parent `task` tools |
+| max concurrent | concurrent child agents (1-20, default 4) |
+| child max steps | step budget for each child agent (default 12) |
+
+When sub-agents are running, the footer may show `subs:N/M` (active / max
+concurrent). Cancelling the parent turn also cancels child jobs.
 
 | Control | Action |
 | --- | --- |

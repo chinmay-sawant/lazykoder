@@ -29,10 +29,8 @@ func (a *Agent) streamStep(ctx context.Context, events chan<- Event, req opencod
 	if err := a.ensurePartText(ctx, events, m.ID, "text", resp.Content, &textPart); err != nil {
 		return nil, err
 	}
-	for _, tc := range resp.ToolCalls {
-		if err := a.runTool(ctx, events, m.ID, tc); err != nil {
-			return nil, err
-		}
+	if err := a.runTools(ctx, events, m.ID, resp.ToolCalls); err != nil {
+		return nil, err
 	}
 	if err := a.writeStepFinish(ctx, events, m.ID, resp); err != nil {
 		return nil, err
@@ -44,6 +42,7 @@ func (a *Agent) beginAssistant(ctx context.Context, events chan<- Event) (db.Mes
 	m, err := a.store.InsertMessage(ctx, db.Message{
 		SessionID: a.sessionID(),
 		Role:      "assistant",
+		Agent:     a.opts.AgentName,
 		ModelID:   a.opts.Model,
 		Variant:   strPtr(a.opts.Variant),
 	})

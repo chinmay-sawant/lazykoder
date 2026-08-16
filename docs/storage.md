@@ -7,16 +7,21 @@ messages, parts and tool runs.
 
 ## Pragmas and migrations
 
-- `journal_mode = WAL`, `foreign_keys = ON`, `busy_timeout = 5000` on every
-  connection (DSN pragmas + one WAL exec).
+- `journal_mode = WAL`, `foreign_keys = ON`, `busy_timeout = 30000`,
+  `synchronous = NORMAL` on open.
+- **`SetMaxOpenConns(1)`** (and max idle 1): SQLite allows one writer; a
+  multi-connection pool is what produced `database is locked (SQLITE_BUSY)`
+  when parent and sub-agents wrote in parallel. One connection serializes
+  all store access safely for concurrent agents.
 - Numbered migrations recorded in `schema_migrations` (version 1 creates the
-  full schema). `Migrate` is idempotent.
+  full schema; later versions alter). `Migrate` is idempotent.
 
 ## Schema
 
 ```sql
 sessions(id TEXT PK, title, directory, provider, model, variant,
-         time_created, time_updated, status)
+         time_created, time_updated, status,
+         parent_session_id TEXT, kind TEXT NOT NULL DEFAULT 'main')
 messages(id TEXT PK, session_id -> sessions ON DELETE CASCADE,
          role, agent, provider_id, model_id, variant, time_created, seq)
 parts(id TEXT PK, message_id -> messages ON DELETE CASCADE,
@@ -31,7 +36,12 @@ tool_calls(part_id TEXT PK -> parts ON DELETE CASCADE,
 
 Indexes: `messages(session_id, seq)`, `parts(message_id, seq)`,
 `parts(type)`, `parts(tool_name)` (partial), `tool_calls(tool)`,
-`tool_calls(status)`, `sessions(time_updated DESC)`.
+`tool_calls(status)`, `sessions(time_updated DESC)`,
+`sessions(parent_session_id)` (partial), `sessions(kind)`.
+
+`kind=subagent` sessions are hidden from `ListSessionsByDir` / resume.
+Deleting a parent session also deletes its child sessions. Child messages
+set `messages.agent` to the sub-agent name.
 
 ## Conventions
 

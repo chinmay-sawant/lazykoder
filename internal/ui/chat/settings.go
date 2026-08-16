@@ -10,6 +10,7 @@ import (
 
 	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
 	"github.com/chinmay-sawant/lazykoder/internal/settings"
+	"github.com/chinmay-sawant/lazykoder/internal/subagent"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
 
@@ -19,6 +20,9 @@ const (
 	settingsRowVariant
 	settingsRowLimit
 	settingsRowSteps
+	settingsRowAgentsEnabled
+	settingsRowAgentsConcurrent
+	settingsRowAgentsChildSteps
 	settingsRowCount
 
 	// settingsCardChromeRows: top border, header, footer, bottom border.
@@ -114,11 +118,20 @@ func (m Model) settingsRows(innerW int) []string {
 	if !m.projectSettings.Slot.LimitEnabled {
 		stepsVal = fmt.Sprintf("%d (off)", m.projectSettings.Slot.MaxSteps)
 	}
+	agentsOn := "off"
+	if m.projectSettings.Agents.Enabled {
+		agentsOn = "on"
+	}
+	concurrentVal := fmt.Sprintf("◂ %d ▸", m.projectSettings.Agents.MaxConcurrent)
+	childStepsVal := fmt.Sprintf("◂ %d ▸", m.projectSettings.Agents.ChildMaxSteps)
 	return []string{
 		settingsKVRow(m.settingsCursor == settingsRowModel, "default model", "◂ "+modelVal+" ▸", innerW),
 		settingsKVRow(m.settingsCursor == settingsRowVariant, "default variant", "◂ "+variantVal+" ▸", innerW),
 		settingsKVRow(m.settingsCursor == settingsRowLimit, "step limit", "["+limitOn+"]", innerW),
 		settingsKVRow(m.settingsCursor == settingsRowSteps, "max steps", stepsVal, innerW),
+		settingsKVRow(m.settingsCursor == settingsRowAgentsEnabled, "sub-agents", "["+agentsOn+"]", innerW),
+		settingsKVRow(m.settingsCursor == settingsRowAgentsConcurrent, "max concurrent", concurrentVal, innerW),
+		settingsKVRow(m.settingsCursor == settingsRowAgentsChildSteps, "child max steps", childStepsVal, innerW),
 	}
 }
 
@@ -189,6 +202,12 @@ func (m Model) activateSettingsRow() (Model, tea.Cmd) {
 		if m.projectSettings.Slot.LimitEnabled {
 			return m.setMaxSteps(m.projectSettings.Slot.MaxSteps + 1), nil
 		}
+	case settingsRowAgentsEnabled:
+		return m.setAgentsEnabled(!m.projectSettings.Agents.Enabled), nil
+	case settingsRowAgentsConcurrent:
+		return m.setAgentsConcurrent(m.projectSettings.Agents.MaxConcurrent + 1), nil
+	case settingsRowAgentsChildSteps:
+		return m.setAgentsChildSteps(m.projectSettings.Agents.ChildMaxSteps + 1), nil
 	}
 	return m, nil
 }
@@ -205,6 +224,14 @@ func (m Model) adjustSettings(delta int) Model {
 		}
 	case settingsRowSteps:
 		return m.setMaxSteps(m.projectSettings.Slot.MaxSteps + delta)
+	case settingsRowAgentsEnabled:
+		if delta != 0 {
+			return m.setAgentsEnabled(!m.projectSettings.Agents.Enabled)
+		}
+	case settingsRowAgentsConcurrent:
+		return m.setAgentsConcurrent(m.projectSettings.Agents.MaxConcurrent + delta)
+	case settingsRowAgentsChildSteps:
+		return m.setAgentsChildSteps(m.projectSettings.Agents.ChildMaxSteps + delta)
 	}
 	return m
 }
@@ -217,6 +244,12 @@ func (m Model) toggleSettingsRow() Model {
 		if m.projectSettings.Slot.LimitEnabled {
 			return m.setMaxSteps(m.projectSettings.Slot.MaxSteps + 1)
 		}
+	case settingsRowAgentsEnabled:
+		return m.setAgentsEnabled(!m.projectSettings.Agents.Enabled)
+	case settingsRowAgentsConcurrent:
+		return m.setAgentsConcurrent(m.projectSettings.Agents.MaxConcurrent + 1)
+	case settingsRowAgentsChildSteps:
+		return m.setAgentsChildSteps(m.projectSettings.Agents.ChildMaxSteps + 1)
 	case settingsRowModel:
 		return m.cycleDefaultModel(1)
 	case settingsRowVariant:
@@ -340,6 +373,50 @@ func (m Model) setMaxSteps(n int) Model {
 	m.projectSettings.Slot.MaxSteps = n
 	m.maxSteps = m.projectSettings.EffectiveMaxSteps()
 	m = m.persistSettings()
+	return m
+}
+
+func (m Model) setAgentsEnabled(on bool) Model {
+	m.projectSettings.Agents.Enabled = on
+	m = m.rebuildSubMgr()
+	m = m.persistSettings()
+	return m
+}
+
+func (m Model) setAgentsConcurrent(n int) Model {
+	if n < settings.MinMaxConcurrent {
+		n = settings.MinMaxConcurrent
+	}
+	if n > settings.MaxMaxConcurrent {
+		n = settings.MaxMaxConcurrent
+	}
+	m.projectSettings.Agents.MaxConcurrent = n
+	m = m.rebuildSubMgr()
+	m = m.persistSettings()
+	return m
+}
+
+func (m Model) setAgentsChildSteps(n int) Model {
+	if n < settings.MinMaxSteps {
+		n = settings.MinMaxSteps
+	}
+	if n > settings.MaxMaxSteps {
+		n = settings.MaxMaxSteps
+	}
+	m.projectSettings.Agents.ChildMaxSteps = n
+	m = m.rebuildSubMgr()
+	m = m.persistSettings()
+	return m
+}
+
+func (m Model) rebuildSubMgr() Model {
+	if m.store == nil || m.client == nil {
+		return m
+	}
+	m.subMgr = subagent.NewManager(subagent.ConfigFromSettings(m.projectSettings), subagent.AgentRunner{
+		Store:  m.store,
+		Client: m.client,
+	})
 	return m
 }
 

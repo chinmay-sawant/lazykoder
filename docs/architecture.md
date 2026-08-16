@@ -17,8 +17,10 @@ owns the tool loop: it is not a wrapper around the OpenCode CLI or its global
 | `internal/db` | numbered migrations + session/message/part/tool store |
 | `internal/provider/opencode` | HTTP client for the OpenCode Go API |
 | `internal/agent` | turn loop: user text -> provider -> parts, tool dispatch |
+| `internal/subagent` | Manager + Host + AgentRunner for concurrent children |
 | `internal/policy` | bash classifier returning Allow/Ask/Deny |
-| `internal/tools` | bash, read, write, edit, question, webfetch |
+| `internal/tools` | bash, read, write, edit, question, webfetch, task schemas |
+| `internal/settings` | project settings including `agents` caps |
 | `internal/ui/chat` | transcript, prompt, status line, model picker |
 | `internal/ui/confirm` | the y/n confirm view (rm and question flows) |
 | `internal/envfile` | stdlib-only `.env` loader |
@@ -82,16 +84,27 @@ One user turn runs in `internal/agent.Send` with a hard step bound (default
 
 1. Persist the user message + text part (create or resume a session).
 2. Rebuild provider history from the store (messages, parts, tool calls).
-3. Call the provider (bash tool advertised).
+3. Call the provider with the advertised tool set (base tools + task tools
+   when a `SubagentHost` is wired).
 4. Write parts: `step-start`, `reasoning` (when present), `text` (when
    present), `tool` + `tool_calls` rows, `step-finish` (when usage is
    present).
 5. For each tool call, classify and execute (see safety + tools docs).
+   Task-family tools in one step run concurrently under the subagent
+   semaphore; other tools stay sequential.
 6. Tool results go back to the model for the next step; loop until
    `finish_reason` is not `tool-calls`.
 
 Everything the loop needs for a resumed session lives in the store; there is
-no in-memory tool state.
+no in-memory tool state for the parent transcript.
+
+## Sub-agents
+
+Parent turns may call `task` tools. `internal/subagent.Manager` caps
+concurrency (default 4, hard max 20), runs each child as `agent.Agent` on a
+hidden child session (`kind=subagent`), and returns only a final summary to
+the parent model. Settings live under `agents` in
+`.lazykoder/settings.json`. Depth is 1: children cannot spawn further tasks.
 
 ## Module identity
 

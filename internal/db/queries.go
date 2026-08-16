@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	sessionColumns       = `id, title, directory, provider, model, variant, time_created, time_updated, status`
+	sessionColumns       = `id, title, directory, provider, model, variant, time_created, time_updated, status, parent_session_id, kind`
 	messageColumns       = `id, session_id, role, agent, provider_id, model_id, variant, time_created, seq, visible`
 	messageInsertColumns = `id, session_id, role, agent, provider_id, model_id, variant, time_created, seq`
 	partColumns          = `id, message_id, type, time_created, seq, text, time_start, time_end, finish_reason, ` +
@@ -33,15 +33,22 @@ func (s *Store) CreateSession(ctx context.Context, sess Session) (Session, error
 	if sess.Status == "" {
 		sess.Status = "active"
 	}
+	if sess.Kind == "" {
+		if sess.ParentSessionID != nil && *sess.ParentSessionID != "" {
+			sess.Kind = SessionKindSubagent
+		} else {
+			sess.Kind = SessionKindMain
+		}
+	}
 	if sess.TimeCreated == 0 {
 		sess.TimeCreated = time.Now().UnixMilli()
 	}
 	if sess.TimeUpdated == 0 {
 		sess.TimeUpdated = sess.TimeCreated
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO sessions (`+sessionColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	_, err := s.db.ExecContext(ctx, `INSERT INTO sessions (`+sessionColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		sess.ID, sess.Title, sess.Directory, sess.Provider, sess.Model, sess.Variant,
-		sess.TimeCreated, sess.TimeUpdated, sess.Status)
+		sess.TimeCreated, sess.TimeUpdated, sess.Status, sess.ParentSessionID, sess.Kind)
 	if err != nil {
 		return Session{}, fmt.Errorf("db: create session: %w", err)
 	}
@@ -281,17 +288,20 @@ func (s *Store) GetSession(ctx context.Context, id string) (Session, error) {
 	var sess Session
 	err := s.db.QueryRowContext(ctx, `SELECT `+sessionColumns+` FROM sessions WHERE id = ?`, id).
 		Scan(&sess.ID, &sess.Title, &sess.Directory, &sess.Provider, &sess.Model,
-			&sess.Variant, &sess.TimeCreated, &sess.TimeUpdated, &sess.Status)
+			&sess.Variant, &sess.TimeCreated, &sess.TimeUpdated, &sess.Status,
+			&sess.ParentSessionID, &sess.Kind)
 	if err != nil {
 		return Session{}, fmt.Errorf("db: get session: %w", err)
 	}
 	return sess, nil
 }
 
-// ListSessionsByDir returns the sessions of a directory ordered by
-// time_updated DESC.
+// ListSessionsByDir returns main sessions of a directory ordered by
+// time_updated DESC. Sub-agent child sessions are omitted from resume lists.
 func (s *Store) ListSessionsByDir(ctx context.Context, directory string) ([]Session, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+sessionColumns+` FROM sessions WHERE directory = ? ORDER BY time_updated DESC`, directory)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+sessionColumns+` FROM sessions
+WHERE directory = ? AND (kind = 'main' OR kind = '' OR kind IS NULL)
+ORDER BY time_updated DESC`, directory)
 	if err != nil {
 		return nil, fmt.Errorf("db: list sessions: %w", err)
 	}
@@ -300,7 +310,8 @@ func (s *Store) ListSessionsByDir(ctx context.Context, directory string) ([]Sess
 	for rows.Next() {
 		var sess Session
 		if err := rows.Scan(&sess.ID, &sess.Title, &sess.Directory, &sess.Provider, &sess.Model,
-			&sess.Variant, &sess.TimeCreated, &sess.TimeUpdated, &sess.Status); err != nil {
+			&sess.Variant, &sess.TimeCreated, &sess.TimeUpdated, &sess.Status,
+			&sess.ParentSessionID, &sess.Kind); err != nil {
 			return nil, fmt.Errorf("db: scan session: %w", err)
 		}
 		out = append(out, sess)
@@ -311,11 +322,22 @@ func (s *Store) ListSessionsByDir(ctx context.Context, directory string) ([]Sess
 	return out, nil
 }
 
-// DeleteSession removes a session; messages and parts cascade via
-// foreign_keys=ON.
+// DeleteSession removes a session and any child sub-agent sessions; messages
+// and parts cascade via foreign_keys=ON.
 func (s *Store) DeleteSession(ctx context.Context, id string) error {
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE id = ?`, id); err != nil {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("db: begin delete session: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE parent_session_id = ?`, id); err != nil {
+		return fmt.Errorf("db: delete child sessions: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE id = ?`, id); err != nil {
 		return fmt.Errorf("db: delete session: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("db: commit delete session: %w", err)
 	}
 	return nil
 }

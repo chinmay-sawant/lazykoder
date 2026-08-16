@@ -14,18 +14,44 @@ type Store struct {
 	db *sql.DB
 }
 
-// Open opens (creating if missing) the sqlite file and sets per-connection
-// pragmas: journal_mode=WAL, foreign_keys=ON, busy_timeout=5000. Returned
-// Store is safe for concurrent use.
+// busyTimeoutMS is how long a connection waits for a write lock before
+// returning SQLITE_BUSY. Sub-agents share one Store and need headroom.
+const busyTimeoutMS = 30_000
+
+// Open opens (creating if missing) the sqlite file and configures it for
+// concurrent agent/sub-agent use. SQLite allows only one writer: MaxOpenConns(1)
+// serializes all access through a single connection so parent + child agents
+// never hit "database is locked" under parallel task tools. WAL + busy_timeout
+// remain for robustness if the pool setting is ever relaxed.
 func Open(path string) (*Store, error) {
-	dsn := "file:" + path + "?_pragma=foreign_keys=on&_pragma=busy_timeout=5000"
+	// _pragma values apply to each new connection from the pool.
+	dsn := fmt.Sprintf(
+		"file:%s?_pragma=foreign_keys(1)&_pragma=busy_timeout(%d)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)",
+		path, busyTimeoutMS,
+	)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("db: open %s: %w", path, err)
 	}
+	// Most important for concurrent sub-agents: one connection, no multi-conn lock fights.
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	// Re-assert pragmas on the live connection (covers DSN variants).
+	if _, err := db.Exec(fmt.Sprintf("PRAGMA busy_timeout = %d", busyTimeoutMS)); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("db: busy_timeout: %w", err)
+	}
+	if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("db: foreign_keys: %w", err)
+	}
 	if _, err := db.Exec("PRAGMA journal_mode = WAL"); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("db: enable WAL: %w", err)
+	}
+	if _, err := db.Exec("PRAGMA synchronous = NORMAL"); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("db: synchronous: %w", err)
 	}
 	return &Store{db: db}, nil
 }
@@ -108,6 +134,13 @@ var schemaMigrations = [][]string{
 		// Sessions created before findings 1.2 stored <project>/.lazykoder
 		// as directory. Strip that suffix so ListSessionsByDir(project) finds them.
 		`UPDATE sessions SET directory = substr(directory, 1, length(directory) - 11) WHERE directory LIKE '%/.lazykoder'`,
+	},
+	{
+		// Sub-agent child sessions: parent link + kind (main|subagent).
+		`ALTER TABLE sessions ADD COLUMN parent_session_id TEXT`,
+		`ALTER TABLE sessions ADD COLUMN kind TEXT NOT NULL DEFAULT 'main'`,
+		`CREATE INDEX idx_sessions_parent ON sessions(parent_session_id) WHERE parent_session_id IS NOT NULL`,
+		`CREATE INDEX idx_sessions_kind ON sessions(kind)`,
 	},
 }
 

@@ -10,6 +10,7 @@ import (
 
 	"github.com/chinmay-sawant/lazykoder/internal/agent"
 	"github.com/chinmay-sawant/lazykoder/internal/policy"
+	"github.com/chinmay-sawant/lazykoder/internal/subagent"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/question"
 )
 
@@ -228,15 +229,7 @@ func (m Model) submit(text string) (Model, tea.Cmd) {
 	m.turnCtx = ctx
 	m.eventCh = make(chan agent.Event, eventChanBuffer)
 	m.errCh = make(chan error, 1)
-	ag := agent.New(m.store, m.client, m.workdir, agent.Options{
-		Session:  m.session,
-		MaxSteps: m.maxSteps,
-		Model:    m.model,
-		Endpoint: m.modelEndpoint(),
-		Variant:  m.variant,
-		Confirm:  m.confirmHook,
-		Ask:      m.askHook,
-	})
+	ag := agent.New(m.store, m.client, m.workdir, m.agentOptions())
 	eventCh, errCh := m.eventCh, m.errCh
 	sendCmd := func() tea.Msg {
 		go func() { errCh <- ag.Send(ctx, text, eventCh) }()
@@ -287,15 +280,7 @@ func (m Model) resumeAfterLimit() (Model, tea.Cmd) {
 	m.turnCtx = ctx
 	m.eventCh = make(chan agent.Event, eventChanBuffer)
 	m.errCh = make(chan error, 1)
-	ag := agent.New(m.store, m.client, m.workdir, agent.Options{
-		Session:  m.session,
-		MaxSteps: m.maxSteps,
-		Model:    m.model,
-		Endpoint: m.modelEndpoint(),
-		Variant:  m.variant,
-		Confirm:  m.confirmHook,
-		Ask:      m.askHook,
-	})
+	ag := agent.New(m.store, m.client, m.workdir, m.agentOptions())
 	eventCh, errCh := m.eventCh, m.errCh
 	sendCmd := func() tea.Msg {
 		go func() { errCh <- ag.Continue(ctx, eventCh) }()
@@ -329,6 +314,15 @@ func (m Model) cancelTurn() Model {
 	if m.turnCancel != nil {
 		m.turnCancel()
 	}
+	if m.subMgr != nil {
+		parentID := ""
+		if m.session != nil {
+			parentID = m.session.ID
+		}
+		if parentID != "" {
+			_ = m.subMgr.CancelAll(parentID)
+		}
+	}
 	m.turnSeq++
 	m.busy = false
 	m.pendingUser = ""
@@ -337,6 +331,36 @@ func (m Model) cancelTurn() Model {
 	m.syncTranscript()
 	m.turnCancel = nil
 	return m
+}
+
+// agentOptions builds Options for the parent agent, including the subagent Host.
+func (m Model) agentOptions() agent.Options {
+	opts := agent.Options{
+		Session:  m.session,
+		MaxSteps: m.maxSteps,
+		Model:    m.model,
+		Endpoint: m.modelEndpoint(),
+		Variant:  m.variant,
+		Confirm:  m.confirmHook,
+		Ask:      m.askHook,
+	}
+	if m.subMgr == nil || !m.projectSettings.EffectiveAgents().Enabled {
+		return opts
+	}
+	m.subMgr.SetRunner(subagent.AgentRunner{Store: m.store, Client: m.client})
+	m.subMgr.SetRuntime(subagent.Runtime{
+		Workdir:  m.workdir,
+		Model:    m.model,
+		Endpoint: m.modelEndpoint(),
+		Variant:  m.variant,
+		Confirm:  m.confirmHook,
+	})
+	host := subagent.NewHost(m.subMgr)
+	if m.session != nil {
+		host.ParentSessionID = m.session.ID
+	}
+	opts.Host = host
+	return opts
 }
 
 func (m Model) rememberPrompt() Model {
@@ -471,7 +495,9 @@ func (m Model) confirmHook(dec policy.Decision, subject string) (bool, error) {
 	req := confirmRequest{dec: dec, subject: subject, resp: resp}
 	select {
 	case m.confirmCh <- req:
-	default:
+	case <-m.doneCh:
+		return false, nil
+	case <-turnCtxDone(m.turnCtx):
 		return false, nil
 	}
 	select {
@@ -489,8 +515,10 @@ func (m Model) askHook(q question.Question) (int, error) {
 	req := askRequest{q: q, resp: resp}
 	select {
 	case m.askCh <- req:
-	default:
-		return 0, errors.New("chat: ask channel busy")
+	case <-m.doneCh:
+		return 0, errors.New("chat: cancelled")
+	case <-turnCtxDone(m.turnCtx):
+		return 0, errors.New("chat: cancelled")
 	}
 	select {
 	case idx := <-resp:

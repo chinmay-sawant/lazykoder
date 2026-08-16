@@ -31,7 +31,7 @@ func TestSettingsSlashOpensCard(t *testing.T) {
 	if !strings.Contains(v, "SETTINGS") || !strings.Contains(v, "[x]") {
 		t.Fatalf("settings card missing header/x: %q", v)
 	}
-	for _, want := range []string{"default model", "default variant", "step limit", "max steps"} {
+	for _, want := range []string{"default model", "default variant", "step limit", "max steps", "sub-agents", "max concurrent", "child max steps"} {
 		if !strings.Contains(v, want) {
 			t.Fatalf("settings card missing %q: %q", want, v)
 		}

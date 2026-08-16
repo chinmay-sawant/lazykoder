@@ -5,17 +5,25 @@ import (
 	"encoding/hex"
 )
 
+// Session kind values.
+const (
+	SessionKindMain     = "main"
+	SessionKindSubagent = "subagent"
+)
+
 // Session is one conversation stored per working directory.
 type Session struct {
-	ID          string
-	Title       string
-	Directory   string
-	Provider    string
-	Model       string
-	Variant     *string
-	TimeCreated int64
-	TimeUpdated int64
-	Status      string
+	ID              string
+	Title           string
+	Directory       string
+	Provider        string
+	Model           string
+	Variant         *string
+	TimeCreated     int64
+	TimeUpdated     int64
+	Status          string
+	ParentSessionID *string // set for kind=subagent
+	Kind            string  // main | subagent; empty treated as main
 }
 
 // Message is one provider round-trip within a session.

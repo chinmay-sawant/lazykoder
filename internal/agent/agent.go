@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/chinmay-sawant/lazykoder/internal/db"
@@ -52,6 +53,13 @@ type Options struct {
 	// DisableStreaming forces the non-streaming Chat path. Streaming is
 	// the default so reasoning and text can paint as they arrive.
 	DisableStreaming bool
+	// Host enables task-family tools for parent agents. Nil denies them.
+	Host SubagentHost
+	// ToolNames is the base-tool allowlist (bash/read/...). Empty uses
+	// DefaultParentTools. Task tools are never granted via this list alone.
+	ToolNames []string
+	// AgentName is written to messages.agent (empty = main parent agent).
+	AgentName string
 }
 
 // Agent runs user turns against a store and provider client.
@@ -96,19 +104,6 @@ type Event struct {
 	Part      db.Part
 	Tool      db.ToolCall
 	Err       error
-}
-
-var bashToolSpec = opencode.ToolSpec{
-	Name:        "bash",
-	Description: "Run a shell command. Dangerous commands are gated by a human confirm.",
-	Parameters: map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"command": map[string]any{"type": "string", "description": "shell command to run"},
-			"workdir": map[string]any{"type": "string", "description": "working directory"},
-		},
-		"required": []string{"command"},
-	},
 }
 
 type bashArgs struct {
@@ -171,7 +166,7 @@ func (a *Agent) runSteps(ctx context.Context, events chan<- Event) error {
 			Endpoint:        a.opts.Endpoint,
 			ReasoningEffort: a.opts.Variant,
 			Messages:        history,
-			Tools:           []opencode.ToolSpec{bashToolSpec},
+			Tools:           toolSpecsFor(a.opts.ToolNames, a.opts.Host),
 		}
 		var resp *opencode.ChatResponse
 		if a.opts.DisableStreaming {
@@ -239,7 +234,11 @@ func (a *Agent) ensureSession(ctx context.Context, userText string, events chan<
 }
 
 func (a *Agent) writeUserTurn(ctx context.Context, userText string, events chan<- Event) error {
-	m, err := a.store.InsertMessage(ctx, db.Message{SessionID: a.sessionID(), Role: "user"})
+	m, err := a.store.InsertMessage(ctx, db.Message{
+		SessionID: a.sessionID(),
+		Role:      "user",
+		Agent:     a.opts.AgentName,
+	})
 	if err != nil {
 		return fmt.Errorf("agent: insert user message: %w", err)
 	}
@@ -366,12 +365,52 @@ func (a *Agent) writeResponse(ctx context.Context, events chan<- Event, resp *op
 			return err
 		}
 	}
-	for _, tc := range resp.ToolCalls {
-		if err := a.runTool(ctx, events, m.ID, tc); err != nil {
+	if err := a.runTools(ctx, events, m.ID, resp.ToolCalls); err != nil {
+		return err
+	}
+	return a.writeStepFinish(ctx, events, m.ID, resp)
+}
+
+// runTools executes non-task tools sequentially, then task-family tools in parallel.
+func (a *Agent) runTools(ctx context.Context, events chan<- Event, msgID string, toolCalls []opencode.ToolCall) error {
+	var sequential, parallel []opencode.ToolCall
+	for _, tc := range toolCalls {
+		if isTaskToolName(tc.Name) {
+			parallel = append(parallel, tc)
+		} else {
+			sequential = append(sequential, tc)
+		}
+	}
+	for _, tc := range sequential {
+		if err := a.runTool(ctx, events, msgID, tc); err != nil {
 			return err
 		}
 	}
-	return a.writeStepFinish(ctx, events, m.ID, resp)
+	if len(parallel) == 0 {
+		return nil
+	}
+	if len(parallel) == 1 {
+		return a.runTool(ctx, events, msgID, parallel[0])
+	}
+	errCh := make(chan error, len(parallel))
+	var wg sync.WaitGroup
+	for _, tc := range parallel {
+		wg.Add(1)
+		go func(tc opencode.ToolCall) {
+			defer wg.Done()
+			if err := a.runTool(ctx, events, msgID, tc); err != nil {
+				errCh <- err
+			}
+		}(tc)
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (a *Agent) runTool(ctx context.Context, events chan<- Event, msgID string, tc opencode.ToolCall) error {
@@ -433,28 +472,66 @@ func toolTitle(tc opencode.ToolCall) string {
 		if raw, ok := args["questions"]; ok && json.Unmarshal(raw, &qs) == nil && len(qs) > 0 && qs[0].Question != "" {
 			return truncateRunes(qs[0].Question, maxToolTitle)
 		}
+	case toolTask, toolTaskList, toolTaskStatus, toolTaskWait, toolTaskCancel:
+		if n := first("name"); n != "" {
+			return n
+		}
+		if p := first("prompt"); p != "" {
+			return truncateRunes(p, maxToolTitle)
+		}
+		if id := first("id"); id != "" {
+			return id
+		}
 	}
 	return tc.Name
 }
 
 func (a *Agent) executeTool(ctx context.Context, events chan<- Event, partID, title string, tc opencode.ToolCall) (string, error) {
+	if isTaskToolName(tc.Name) {
+		return a.execTaskTool(ctx, events, partID, title, tc)
+	}
+	if _, known := allBaseToolSpecs[tc.Name]; known && !toolAllowed(a.opts.ToolNames, tc.Name) {
+		out := "tool not allowed: " + tc.Name
+		return a.updateTool(ctx, events, partID, title, tc, "denied", &out, deniedJSON(), nil, nil)
+	}
 	switch tc.Name {
-	case "bash":
+	case toolBash:
 		return a.execBash(ctx, events, partID, title, tc)
-	case "read":
+	case toolRead:
 		return a.execRead(ctx, events, partID, title, tc)
-	case "write":
+	case toolWrite:
 		return a.execWrite(ctx, events, partID, title, tc)
-	case "edit":
+	case toolEdit:
 		return a.execEdit(ctx, events, partID, title, tc)
-	case "webfetch":
+	case toolWebfetch:
 		return a.execWebfetch(ctx, events, partID, title, tc)
-	case "question":
+	case toolQuestion:
 		return a.execQuestion(ctx, events, partID, title, tc)
 	default:
 		out := "unknown tool: " + tc.Name
 		return a.updateTool(ctx, events, partID, title, tc, "denied", &out, deniedJSON(), nil, nil)
 	}
+}
+
+func (a *Agent) execTaskTool(ctx context.Context, events chan<- Event, partID, title string, tc opencode.ToolCall) (string, error) {
+	if a.opts.Host == nil {
+		out := "task tools require a subagent host"
+		return a.updateTool(ctx, events, partID, title, tc, "denied", &out, deniedJSON(), nil, nil)
+	}
+	result, meta, status, err := a.opts.Host.Execute(ctx, a.sessionID(), tc.Name, tc.Arguments, partID)
+	if err != nil {
+		msg := err.Error()
+		return a.updateTool(ctx, events, partID, title, tc, "error", &msg, errorJSON(msg), nil, nil)
+	}
+	if status == "" {
+		status = "completed"
+	}
+	out := result
+	var metaPtr *string
+	if meta != "" {
+		metaPtr = &meta
+	}
+	return a.updateTool(ctx, events, partID, title, tc, status, &out, result, nil, metaPtr)
 }
 
 func (a *Agent) execBash(ctx context.Context, events chan<- Event, partID, title string, tc opencode.ToolCall) (string, error) {

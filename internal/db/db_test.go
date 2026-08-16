@@ -3,9 +3,12 @@ package db
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func openTestStore(t *testing.T) *Store {
@@ -41,8 +44,8 @@ WHERE type = 'table' AND name IN ('sessions', 'messages', 'parts', 'tool_calls',
 	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&n); err != nil {
 		t.Fatalf("count migrations: %v", err)
 	}
-	if n != 3 {
-		t.Fatalf("got %d schema_migrations rows, want 3", n)
+	if n != 4 {
+		t.Fatalf("got %d schema_migrations rows, want 4", n)
 	}
 }
 
@@ -470,6 +473,8 @@ func TestUpdateSessionModel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
+	// time_updated is Unix ms; sleep so the bump is strictly greater.
+	time.Sleep(2 * time.Millisecond)
 	if err := s.UpdateSessionModel(ctx, sess.ID, "gpt-9"); err != nil {
 		t.Fatalf("UpdateSessionModel: %v", err)
 	}
@@ -579,5 +584,61 @@ func TestRepairSessionDirectories(t *testing.T) {
 	}
 	if len(again) != 1 || again[0].Directory != project {
 		t.Fatalf("second repair changed rows: %+v", again)
+	}
+}
+
+func TestConcurrentWritersNoBusy(t *testing.T) {
+	// Simulates parent + several sub-agent sessions writing parts at once.
+	// Pre-fix this failed with SQLITE_BUSY under a multi-conn pool.
+	ctx := context.Background()
+	s := openTestStore(t)
+
+	const agents = 12
+	const partsPer = 20
+	type pair struct {
+		sess Session
+		msg  Message
+	}
+	pairs := make([]pair, agents)
+	for i := 0; i < agents; i++ {
+		sess, err := s.CreateSession(ctx, Session{Directory: "/work", Title: "child"})
+		if err != nil {
+			t.Fatalf("CreateSession %d: %v", i, err)
+		}
+		msg, err := s.InsertMessage(ctx, Message{SessionID: sess.ID, Role: "assistant", Agent: "sub"})
+		if err != nil {
+			t.Fatalf("InsertMessage %d: %v", i, err)
+		}
+		pairs[i] = pair{sess: sess, msg: msg}
+	}
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, agents*partsPer)
+	for i := 0; i < agents; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			msgID := pairs[idx].msg.ID
+			for j := 0; j < partsPer; j++ {
+				text := fmt.Sprintf("agent-%d-part-%d", idx, j)
+				if _, err := s.InsertPart(ctx, Part{MessageID: msgID, Type: "text", Text: &text}); err != nil {
+					errCh <- err
+					return
+				}
+				if j%3 == 0 {
+					if _, err := s.InsertMessage(ctx, Message{SessionID: pairs[idx].sess.ID, Role: "user"}); err != nil {
+						errCh <- err
+						return
+					}
+				}
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatalf("concurrent write: %v", err)
+		}
 	}
 }
