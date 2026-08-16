@@ -8,6 +8,7 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
@@ -22,17 +23,21 @@ func (m Model) View() tea.View {
 		return m.newView(m.sessionPickerScreen())
 	}
 	screen := m.chatScreen()
+	overlayH := m.height
+	if ph := lipgloss.Height(m.promptLine()); ph > 0 && overlayH > ph {
+		overlayH -= ph
+	}
 	if m.confirmMode {
-		screen = overlayOn(screen, m.width, m.height, m.confirmOverlay())
+		screen = overlayOn(screen, m.width, overlayH, m.confirmOverlay())
 	}
 	if m.askMode {
-		screen = overlayOn(screen, m.width, m.height, m.askOverlay())
+		screen = overlayOn(screen, m.width, overlayH, m.askOverlay())
 	}
 	if m.helpMode {
-		screen = overlayOn(screen, m.width, m.height, m.helpOverlay())
+		screen = overlayOn(screen, m.width, overlayH, m.helpOverlay())
 	}
 	if m.filePickerMode {
-		screen = overlayOn(screen, m.width, m.height, m.filePickerOverlay())
+		screen = overlayOn(screen, m.width, overlayH, m.filePickerOverlay())
 	}
 	return m.newView(screen)
 }
@@ -79,9 +84,6 @@ func overlayOn(base string, width, height int, card string) string {
 	for len(baseLines) < height {
 		baseLines = append(baseLines, "")
 	}
-	if height > 0 && len(baseLines) > height {
-		baseLines = baseLines[:height]
-	}
 	cardLines := strings.Split(card, "\n")
 	cardH := len(cardLines)
 	cardW := 0
@@ -90,7 +92,14 @@ func overlayOn(base string, width, height int, card string) string {
 			cardW = w
 		}
 	}
-	top := max(0, (height-cardH)/centerDiv)
+	regionH := height
+	if regionH <= 0 || regionH > len(baseLines) {
+		regionH = len(baseLines)
+	}
+	top := max(0, (regionH-cardH)/centerDiv)
+	if top+cardH > regionH {
+		top = max(0, regionH-cardH)
+	}
 	left := max(0, (width-cardW)/centerDiv)
 	for i, line := range cardLines {
 		row := top + i
@@ -98,7 +107,7 @@ func overlayOn(base string, width, height int, card string) string {
 			continue
 		}
 		dst := padDisplay(baseLines[row], width)
-		baseLines[row] = spliceDisplay(dst, line, left)
+		baseLines[row] = spliceDisplay(dst, padDisplay(line, cardW), left)
 	}
 	return strings.Join(baseLines, "\n")
 }
@@ -112,17 +121,22 @@ func padDisplay(s string, width int) string {
 }
 
 func spliceDisplay(dst, src string, left int) string {
-	if left <= 0 {
-		return src
+	if left < 0 {
+		left = 0
 	}
-	prefix := dst
-	// Keep the left columns of dst; lipgloss cells are not split here
-	// because overlay cards are placed on a padded row.
-	runes := []rune(dst)
-	if left < len(runes) {
-		prefix = string(runes[:left])
+	srcW := lipgloss.Width(src)
+	dst = padDisplay(dst, left+srcW)
+	prefix := ansi.Cut(dst, 0, left)
+	if w := lipgloss.Width(prefix); w < left {
+		prefix += strings.Repeat(" ", left-w)
 	}
-	return prefix + src
+	end := left + srcW
+	dstW := lipgloss.Width(dst)
+	suffix := ""
+	if end < dstW {
+		suffix = ansi.Cut(dst, end, dstW)
+	}
+	return prefix + src + suffix
 }
 
 func (m Model) quitScreen() string {
@@ -266,26 +280,49 @@ func (m Model) transcriptView() string {
 }
 
 func (m Model) helpOverlay() string {
-	lines := []string{
-		lipgloss.NewStyle().Bold(true).Render("keys"),
-		"enter send  •  shift+enter newline",
-		"/ commands  •  /sessions or ctrl+s",
-		"/model  •  /variant  low medium high",
-		"@ mention a project file",
-		"click model to switch",
-		"t thinking  •  e expand last tool",
-		"esc cancel turn  •  ctrl+c quit",
-		"scroll ↑/↓ page mouse",
-		hintStyle.Render("esc or ? close"),
+	rows := [][2]string{
+		{"enter", "send"},
+		{"shift+enter", "newline"},
+		{"/", "commands"},
+		{"ctrl+s", "sessions"},
+		{"/model", "switch model"},
+		{"/variant", "reasoning effort"},
+		{"@", "mention a file"},
+		{"click model", "switch"},
+		{"t", "thinking"},
+		{"e", "expand last tool"},
+		{"esc", "cancel turn"},
+		{"ctrl+c", "quit"},
+		{"↑/↓  page", "scroll"},
 	}
-	innerW := min(56, max(minPaneWidth, m.width-8))
-	body := hintStyle.Width(innerW).Render(strings.Join(lines, "\n"))
+	keyW := 0
+	for _, row := range rows {
+		if w := lipgloss.Width(row[0]); w > keyW {
+			keyW = w
+		}
+	}
+	innerW := min(56, max(minPaneWidth, m.width-12))
+	title := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).Width(innerW).Render("keys")
+	var body strings.Builder
+	body.WriteString(title)
+	for _, row := range rows {
+		gap := max(2, keyW-lipgloss.Width(row[0])+2)
+		line := row[0] + strings.Repeat(" ", gap) + row[1]
+		if lipgloss.Width(line) > innerW {
+			line = truncateRunes(line, innerW)
+		}
+		body.WriteString("\n")
+		body.WriteString(hintStyle.Width(innerW).Render(line))
+	}
+	body.WriteString("\n")
+	closeGap := max(2, keyW-lipgloss.Width("esc or ?")+2)
+	body.WriteString(hintStyle.Width(innerW).Render("esc or ?" + strings.Repeat(" ", closeGap) + "close"))
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(theme.ColorBorder()).
-		Padding(1, 2).
-		Width(innerW + 6).
-		Render(body)
+		Background(theme.ColorBg()).
+		Padding(0, 2).
+		Render(body.String())
 }
 
 func (m Model) headerView() string {

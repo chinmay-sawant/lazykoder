@@ -1342,7 +1342,7 @@ func TestHelpOverlayDoesNotGrowTranscript(t *testing.T) {
 		t.Fatal("? did not open help")
 	}
 	v := stripANSI(viewText(m))
-	if !strings.Contains(v, "enter send") {
+	if !strings.Contains(v, "enter") || !strings.Contains(v, "send") {
 		t.Fatalf("help overlay missing: %q", v)
 	}
 	if len(m.items) != before {
@@ -1356,6 +1356,65 @@ func TestHelpOverlayDoesNotGrowTranscript(t *testing.T) {
 	m = upd(m, tea.KeyPressMsg{Code: tea.KeyEscape})
 	if m.helpMode {
 		t.Fatal("esc did not close help")
+	}
+}
+
+func TestHelpOverlayBordersAlign(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = mm.(Model)
+	m.items = []transcriptItem{
+		{kind: itemUser, text: "what is love baby don't hurt me 🎵"},
+		{kind: itemAssistant, text: "Baby, don't hurt me\n🎶 Da-da-da"},
+	}
+	m.syncTranscript()
+	m.helpMode = true
+	v := stripANSI(viewText(m))
+	lines := strings.Split(v, "\n")
+	start, end := -1, -1
+	for i, line := range lines {
+		if start < 0 && strings.Contains(line, "╭") && lipgloss.Width(strings.TrimRight(line, " ")) < m.width-4 {
+			start = i
+		}
+		if start >= 0 && strings.Contains(line, "╰") {
+			end = i
+			break
+		}
+	}
+	if start < 0 || end <= start {
+		t.Fatalf("help card borders missing: %q", v)
+	}
+	var lefts []int
+	for _, line := range lines[start : end+1] {
+		if i := strings.Index(line, "│"); i >= 0 {
+			lefts = append(lefts, lipgloss.Width(line[:i]))
+		}
+	}
+	if len(lefts) < 3 {
+		t.Fatalf("not enough help rows to check alignment: %q", v)
+	}
+	for _, col := range lefts[1:] {
+		if col != lefts[0] {
+			t.Fatalf("help left border columns = %v\n%s", lefts, v)
+		}
+	}
+	if strings.Contains(strings.Join(lines[start:end+1], "\n"), "ask lazykoder") {
+		t.Fatalf("help card overlaps the prompt: %q", v)
+	}
+	if !strings.Contains(v, "switch model") || !strings.Contains(v, "ctrl+c") {
+		t.Fatalf("help rows missing: %q", v)
+	}
+}
+
+func TestSpliceDisplayUsesCellsNotRunes(t *testing.T) {
+	dst := "🎶1234567890 leftover"
+	src := "│keys│"
+	got := stripANSI(spliceDisplay(dst, src, 10))
+	if !strings.Contains(got, "│keys│") {
+		t.Fatalf("src missing: %q", got)
+	}
+	if lipgloss.Width(got) < 10+lipgloss.Width(src) {
+		t.Fatalf("spliced width %d too small: %q", lipgloss.Width(got), got)
 	}
 }
 

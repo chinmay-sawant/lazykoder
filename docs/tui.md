@@ -47,7 +47,8 @@ pickers are centered cards.
 - Session picker: `/sessions` or `ctrl+s` lists sessions for the project
   directory (newest first). Enter loads one; esc keeps the current session.
 - Empty session: a short hint in the transcript, not a blank pane.
-- `/help` or `?` (empty prompt) opens a key overlay. `esc` closes it.
+- `/help` or `?` (empty prompt) opens a centered key card with
+  shortcuts in two columns. `esc` or `?` closes it.
 - `@` in the prompt opens a project file picker. Enter inserts `@path`.
 - Dragging across transcript rows selects and copies the range on mouse
   release; a temporary `text copied` notice appears above the prompt. A
