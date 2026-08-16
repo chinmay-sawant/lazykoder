@@ -82,8 +82,11 @@ type Agents struct {
 	ModelOverride        string `json:"model_override"`
 	ExploreModel         string `json:"explore_model"`
 	BashConfirm          string `json:"bash_confirm"` // "parent" or "deny"
-	AllowParallelWriters bool   `json:"allow_parallel_writers"`
-	DefaultRole          string `json:"default_role"` // explore|plan|general
+	BashAllowlistEnabled bool   `json:"bash_allowlist_enabled"`
+	// BashAllowlist is a comma-separated executable allowlist.
+	BashAllowlist        []string `json:"bash_allowlist"`
+	AllowParallelWriters bool     `json:"allow_parallel_writers"`
+	DefaultRole          string   `json:"default_role"` // explore|plan|general
 }
 
 // Settings is the on-disk project config under .lazykoder/settings.json.
@@ -112,6 +115,8 @@ func Default() Settings {
 			DefaultTimeoutSec:    DefaultAgentsTimeoutSec,
 			ChildMaxSteps:        DefaultChildMaxSteps,
 			BashConfirm:          "parent",
+			BashAllowlistEnabled: false,
+			BashAllowlist:        []string{"ls", "pwd", "cat", "echo", "find", "grep", "git", "go", "npm", "python", "make"},
 			AllowParallelWriters: false,
 			DefaultRole:          "explore",
 		},

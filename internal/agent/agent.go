@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -61,6 +63,9 @@ type Options struct {
 	ToolNames []string
 	// AgentName is written to messages.agent (empty = main parent agent).
 	AgentName string
+	// BashAllowlist controls optional strict command allowlisting.
+	BashAllowlist        []string
+	BashAllowlistEnabled bool
 }
 
 // Agent runs user turns against a store and provider client.
@@ -550,10 +555,14 @@ func (a *Agent) execBash(ctx context.Context, events chan<- Event, partID, title
 		msg := "invalid bash arguments: " + err.Error()
 		return a.updateTool(ctx, events, partID, title, tc, "error", &msg, errorJSON(msg), nil, nil)
 	}
-	dec := policy.Classify(args.Command)
+	dec := policy.ClassifyWithAllowlist(args.Command, a.opts.BashAllowlist, a.opts.BashAllowlistEnabled)
 	workdir := args.Workdir
 	if workdir == "" {
 		workdir = a.workdir
+	}
+	if !withinWorkspace(a.workdir, workdir) {
+		msg := "bash: workdir must remain inside the approved workspace"
+		return a.updateTool(ctx, events, partID, title, tc, "denied", &msg, errorJSON(msg), nil, nil)
 	}
 	deny := func() (string, error) {
 		out := deniedJSON()
@@ -690,7 +699,12 @@ func (a *Agent) execWebfetch(ctx context.Context, events chan<- Event, partID, t
 		msg := "invalid webfetch arguments: " + err.Error()
 		return a.updateTool(ctx, events, partID, title, tc, "error", &msg, errorJSON(msg), nil, nil)
 	}
-	res, err := webfetch.Run(ctx, args.URL, args.Format, nil)
+	res, err := webfetch.Run(ctx, args.URL, args.Format, &http.Client{CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if policy.PrivateOrLoopback(req.URL.Hostname()) {
+			return fmt.Errorf("webfetch: redirect to local or private host is not allowed")
+		}
+		return nil
+	}})
 	if err != nil {
 		return a.updateTool(ctx, events, partID, title, tc, "error", errOut(err), errorJSON(err.Error()), nil, nil)
 	}
@@ -824,4 +838,25 @@ func strPtr(s string) *string {
 		return nil
 	}
 	return &s
+}
+
+func withinWorkspace(root, candidate string) bool {
+	r, err := filepath.Abs(root)
+	if err != nil {
+		return false
+	}
+	c, err := filepath.Abs(candidate)
+	if err != nil {
+		return false
+	}
+	r, err = filepath.EvalSymlinks(r)
+	if err != nil {
+		return false
+	}
+	c, err = filepath.EvalSymlinks(c)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(r, c)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
