@@ -241,6 +241,15 @@ func typeText(m Model, s string) Model {
 	return m
 }
 
+func lastToolStatus(m Model) string {
+	for i := len(m.items) - 1; i >= 0; i-- {
+		if m.items[i].kind == itemTool {
+			return m.items[i].tool.Status
+		}
+	}
+	return ""
+}
+
 func viewLineIndex(m Model, needle string) int {
 	for i, line := range strings.Split(stripANSI(viewText(m)), "\n") {
 		if strings.Contains(line, needle) {

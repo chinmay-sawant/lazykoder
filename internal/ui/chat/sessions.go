@@ -142,6 +142,14 @@ func formatSessionAge(ms int64) string {
 	}
 }
 
+// formatClock is the transcript stamp: 24-hour time with seconds, no date.
+func formatClock(ms int64) string {
+	if ms <= 0 {
+		return ""
+	}
+	return time.UnixMilli(ms).Format("15:04:05")
+}
+
 func (m Model) sessionVPHeight() int {
 	available := max(minPaneHeight, m.height*70/percentBase-pickerFixedRows)
 	return min(max(minPaneHeight, m.sessionContentRows()), min(pickerMaxRows, available))

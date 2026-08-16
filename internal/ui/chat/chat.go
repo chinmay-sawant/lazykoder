@@ -430,9 +430,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.transcript.SetWidth(max(minPaneWidth, msg.Width-1))
-		m.transcript.SetHeight(max(minPaneHeight, msg.Height-m.chromeHeight()))
 		m.prompt.SetWidth(max(minPaneWidth, msg.Width))
 		m.prompt.SetHeight(m.promptHeight())
+		m.syncTranscript()
+		m.transcript.SetHeight(max(minPaneHeight, msg.Height-m.chromeHeight()))
 		if m.pickerBuilt {
 			m = m.resizePicker()
 		}

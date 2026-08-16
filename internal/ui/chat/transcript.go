@@ -219,7 +219,7 @@ func itemTime(messageMS int64, partMS int64) int64 {
 }
 
 func (m Model) roleLine(label string, when int64) string {
-	return m.alignMeta(roleStyle.Render(label), formatSessionAge(when))
+	return m.alignMeta(roleStyle.Render(label), formatClock(when))
 }
 
 func (m Model) alignMeta(left, stamp string) string {
@@ -326,7 +326,7 @@ func (m Model) renderItem(it transcriptItem, selected bool) string {
 		if !it.collapsed {
 			marker = "▾"
 		}
-		head := m.alignMeta(reasoningStyle.Render(marker+" "+thinkingLabel), formatSessionAge(it.when))
+		head := m.alignMeta(reasoningStyle.Render(marker+" "+thinkingLabel), formatClock(it.when))
 		if it.collapsed {
 			return head
 		}
@@ -373,11 +373,7 @@ func (m Model) renderTool(ev agent.Event, collapsed bool, when int64) string {
 	}
 	diamond := lipgloss.NewStyle().Foreground(diamondColor).Render(theme.StatusDiamond)
 	left := diamond + "  " + lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).Render(chevron+"  "+label)
-	rightBits := status
-	if stamp := formatSessionAge(when); stamp != "" {
-		rightBits = stamp + "  ·  " + status
-	}
-	header := m.alignMeta(left, rightBits)
+	header := m.alignMeta(left, formatClock(when))
 	card := toolCardStyle.Width(m.toolCardWidth()).Background(theme.ColorBg())
 	if collapsed {
 		return card.Render(header)
@@ -449,7 +445,7 @@ func renderDiff(diff string, width int) string {
 }
 
 func (m Model) toolCardWidth() int {
-	return max(minPaneWidth, m.width)
+	return m.metaWidth()
 }
 
 func toolCommand(tc db.ToolCall) string {

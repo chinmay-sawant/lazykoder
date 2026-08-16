@@ -75,7 +75,7 @@ func TestReplayNoNetwork(t *testing.T) {
 
 	m := New(Options{Store: st, Client: deadClient(), Workdir: t.TempDir(), Session: &sess})
 	v := stripANSI(viewText(m))
-	for _, want := range []string{roleYou, "hello there", roleAssistant, "hi back", thinkingLabel, "bash", "completed", "echo hello"} {
+	for _, want := range []string{roleYou, "hello there", roleAssistant, "hi back", thinkingLabel, "bash", "echo hello"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("View() missing %q: %q", want, v)
 		}
@@ -104,7 +104,7 @@ func TestBashCommandAndOutputRendered(t *testing.T) {
 	p.run(cmd)
 	m = p.drainIdle(m)
 	v := stripANSI(viewText(m))
-	for _, want := range []string{"bash", "completed", "echo hello"} {
+	for _, want := range []string{"bash", "echo hello"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("View() missing %q: %q", want, v)
 		}
@@ -215,11 +215,11 @@ func TestConfirmDeny(t *testing.T) {
 	m = upd(m, tea.KeyPressMsg{Code: 'n'})
 	m = p.drainIdle(m)
 	v = stripANSI(viewText(m))
-	if !strings.Contains(v, "bash") || !strings.Contains(v, "denied") {
-		t.Errorf("want tool card bash denied, got %q", v)
+	if !strings.Contains(v, "bash") {
+		t.Errorf("want tool card bash, got %q", v)
 	}
-	if strings.Contains(v, "pending") {
-		t.Errorf("pending tool card not replaced: %q", v)
+	if status := lastToolStatus(m); status != "denied" {
+		t.Errorf("tool status = %q, want denied", status)
 	}
 	if !strings.Contains(v, "done") {
 		t.Errorf("final reply missing: %q", v)
@@ -250,8 +250,8 @@ func TestConfirmAllow(t *testing.T) {
 	m = upd(m, tea.KeyPressMsg{Code: 'y'})
 	m = p.drainIdle(m)
 	v := stripANSI(viewText(m))
-	if !strings.Contains(v, "bash") || !strings.Contains(v, "completed") {
-		t.Errorf("want tool card bash completed, got %q", v)
+	if !strings.Contains(v, "bash") {
+		t.Errorf("want tool card bash, got %q", v)
 	}
 	if strings.Contains(v, "pending") {
 		t.Errorf("tool card still pending: %q", v)
@@ -286,8 +286,8 @@ func TestAskQuestion(t *testing.T) {
 	m = upd(m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = p.drainIdle(m)
 	v = stripANSI(viewText(m))
-	if !strings.Contains(v, "question") || !strings.Contains(v, "completed") {
-		t.Errorf("want tool card question completed, got %q", v)
+	if !strings.Contains(v, "question") {
+		t.Errorf("want tool card question, got %q", v)
 	}
 	if !strings.Contains(v, "done") {
 		t.Errorf("final reply missing: %q", v)
@@ -539,7 +539,7 @@ func TestLiveToolCardBeforeTurnEnds(t *testing.T) {
 		t.Fatal("Enter returned nil cmd")
 	}
 	p.run(cmd)
-	m = p.drainUntil(m, "pending")
+	m = p.drainUntil(m, "bash")
 	if !m.busy {
 		t.Fatal("busy cleared before the turn finished")
 	}
@@ -549,8 +549,8 @@ func TestLiveToolCardBeforeTurnEnds(t *testing.T) {
 	}
 	m = p.drainIdle(m)
 	v = stripANSI(viewText(m))
-	if !strings.Contains(v, "completed") || !strings.Contains(v, "hello") {
-		t.Errorf("completed tool card missing: %q", v)
+	if !strings.Contains(v, "bash") || !strings.Contains(v, "hello") {
+		t.Errorf("tool card missing: %q", v)
 	}
 }
 
@@ -607,8 +607,8 @@ func TestConfirmEscDoesNotCancelTurn(t *testing.T) {
 	if strings.Contains(v, "cancelled") {
 		t.Errorf("confirm esc cancelled the turn: %q", v)
 	}
-	if !strings.Contains(v, "denied") {
-		t.Errorf("confirm esc should deny: %q", v)
+	if status := lastToolStatus(m); status != "denied" {
+		t.Errorf("confirm esc should deny, status = %q view = %q", status, v)
 	}
 }
 
@@ -863,26 +863,70 @@ func TestComposerPutsModelOnTheRight(t *testing.T) {
 
 func TestTurnShowsTimestamp(t *testing.T) {
 	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
-	m.items = append(m.items, transcriptItem{kind: itemUser, text: "hello there", when: time.Now().UnixMilli()})
+	when := time.Date(2026, 8, 16, 15, 32, 5, 0, time.Local).UnixMilli()
+	m.items = append(m.items, transcriptItem{kind: itemUser, text: "hello there", when: when})
 	m.syncTranscript()
 	v := stripANSI(viewText(m))
-	if !strings.Contains(v, roleYou) || !strings.Contains(v, "just now") {
-		t.Fatalf("user turn missing timestamp: %q", v)
+	stamp := formatClock(when)
+	if !strings.Contains(v, roleYou) || !strings.Contains(v, stamp) {
+		t.Fatalf("user turn missing timestamp %q: %q", stamp, v)
 	}
-	if !stampOnRight(v, roleYou, "just now") {
+	if !stampOnRight(v, roleYou, stamp) {
 		t.Fatalf("timestamp not right-aligned on the you row: %q", v)
 	}
 }
 
 func TestThinkingTimestampIsRightAligned(t *testing.T) {
 	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	when := time.Date(2026, 8, 16, 15, 32, 5, 0, time.Local).UnixMilli()
 	m.items = append(m.items, transcriptItem{
-		kind: itemReasoning, text: "secret", collapsed: true, when: time.Now().UnixMilli(),
+		kind: itemReasoning, text: "secret", collapsed: true, when: when,
 	})
 	m.syncTranscript()
 	v := stripANSI(viewText(m))
-	if !stampOnRight(v, thinkingLabel, "just now") {
+	if !stampOnRight(v, thinkingLabel, formatClock(when)) {
 		t.Fatalf("thinking timestamp not right-aligned: %q", v)
+	}
+}
+
+func TestToolHeaderAlignsClockWithoutStatus(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	when := time.Date(2026, 8, 16, 15, 32, 5, 0, time.Local).UnixMilli()
+	title := "echo hello"
+	m.items = append(m.items, transcriptItem{
+		kind: itemTool, collapsed: true, when: when,
+		tool: db.ToolCall{Tool: "bash", Status: "completed", Title: &title},
+	})
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 36})
+	m = mm.(Model)
+	stamp := formatClock(when)
+	var row string
+	for _, line := range strings.Split(stripANSI(viewText(m)), "\n") {
+		if strings.Contains(line, "bash") {
+			row = strings.TrimRight(line, " ")
+			break
+		}
+	}
+	if row == "" {
+		t.Fatalf("bash header missing: %q", viewText(m))
+	}
+	if !stampOnRight(row, "bash", stamp) {
+		t.Fatalf("bash clock not right-aligned: %q", row)
+	}
+	if strings.Contains(row, "completed") || strings.Contains(row, "Aug") || strings.Contains(row, "ago") {
+		t.Fatalf("bash header still shows status or date: %q", row)
+	}
+}
+
+func TestTimestampsRealignOnResize(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	when := time.Date(2026, 8, 16, 15, 32, 5, 0, time.Local).UnixMilli()
+	m.items = append(m.items, transcriptItem{kind: itemReasoning, text: "secret", collapsed: true, when: when})
+	m.syncTranscript()
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 36})
+	m = mm.(Model)
+	if !stampOnRight(stripANSI(viewText(m)), thinkingLabel, formatClock(when)) {
+		t.Fatalf("thinking clock not right-aligned after resize: %q", viewText(m))
 	}
 }
 
@@ -903,8 +947,8 @@ func TestThinkingFrameUsesBrackets(t *testing.T) {
 	if !strings.Contains(v, theme.StatusDiamond) {
 		t.Fatalf("in-flight tool card missing status diamond: %q", v)
 	}
-	if !strings.Contains(v, "bash") || !strings.Contains(v, "pending") {
-		t.Fatalf("in-flight tool card missing bash pending: %q", v)
+	if !strings.Contains(v, "bash") {
+		t.Fatalf("in-flight tool card missing bash: %q", v)
 	}
 	var header string
 	for _, line := range strings.Split(v, "\n") {

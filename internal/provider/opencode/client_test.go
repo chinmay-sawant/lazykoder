@@ -233,6 +233,31 @@ func TestChatToolCalls(t *testing.T) {
 	if toolMsg.Role != "tool" || toolMsg.ToolCallID != "call_1" || toolMsg.Content != "file.txt" {
 		t.Errorf("tool message = %+v", toolMsg)
 	}
+	if !strings.Contains(string(lastBody), `"content":`) {
+		t.Fatalf("request omitted content on an empty assistant turn: %s", lastBody)
+	}
+}
+
+func TestChatKeepsEmptyContentField(t *testing.T) {
+	var lastBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lastBody, _ = io.ReadAll(r.Body)
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"ok","finish_reason":"stop"}}]}`)
+	}))
+	defer srv.Close()
+
+	c := NewClient("k", WithBaseURL(srv.URL))
+	_, err := c.Chat(context.Background(), ChatRequest{
+		Messages: []Message{
+			{Role: "assistant", ToolCalls: []ToolCall{{ID: "call_1", Name: "bash", Arguments: `{}`}}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Chat(): %v", err)
+	}
+	if !strings.Contains(string(lastBody), `"content":""`) {
+		t.Fatalf("empty assistant content omitted: %s", lastBody)
+	}
 }
 
 func TestChatServerError(t *testing.T) {

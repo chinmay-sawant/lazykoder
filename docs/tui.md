@@ -9,13 +9,13 @@ pickers are centered cards.
 - Header: `lazykoder`, the session title (or `new session`), and the project
   directory basename.
 - Transcript: user turns labeled `you`, assistant turns labeled `assistant`,
-  each with a relative timestamp (`just now`, `2m ago`) on the far right of
-  the row. Reasoning starts collapsed as `▸ thinking` with its timestamp on
-  the far right; `t` expands it when the prompt is empty. Tool runs are
+  each with a clock timestamp (`15:32:05`) on the far right of the row.
+  Reasoning starts collapsed as `▸ thinking` with the same clock on the
+  far right; `t` expands it when the prompt is empty. Tool runs are
   full-width cards that start collapsed (`◆  ▸  bash  title` on the left,
-  `just now  ·  completed` on the far right). The diamond stays on the
-  card after the turn ends: white while pending or running, green on
-  success, red on error or deny. `e` expands the last run. Clicks on a
+  `15:32:05` on the far right). The diamond is the only status mark: white
+  while pending or running, green on success, red on error or deny. `e`
+  expands the last run. Clicks on a
   thinking or tool header toggle that item.
 - Composer: a rounded input box on the solid black layer. Typed text uses
   the same black background as the rest of the screen (no cursor-line
