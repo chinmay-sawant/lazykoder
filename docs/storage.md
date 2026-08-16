@@ -32,16 +32,28 @@ parts(id TEXT PK, message_id -> messages ON DELETE CASCADE,
 tool_calls(part_id TEXT PK -> parts ON DELETE CASCADE,
            tool, call_id, status, title, time_start, time_end, exit_code,
            input_json, output, metadata_json)
+subagent_jobs(id TEXT PK, parent_session_id -> sessions ON DELETE CASCADE,
+              parent_part_id, child_session_id, name, role, status,
+              prompt, description, model, variant, max_steps, timeout_ms,
+              summary, error, time_created, time_updated,
+              time_started, time_finished)
 ```
 
 Indexes: `messages(session_id, seq)`, `parts(message_id, seq)`,
 `parts(type)`, `parts(tool_name)` (partial), `tool_calls(tool)`,
 `tool_calls(status)`, `sessions(time_updated DESC)`,
-`sessions(parent_session_id)` (partial), `sessions(kind)`.
+`sessions(parent_session_id)` (partial), `sessions(kind)`,
+`subagent_jobs(parent_session_id)`, `subagent_jobs(status)`.
 
 `kind=subagent` sessions are hidden from `ListSessionsByDir` / resume.
-Deleting a parent session also deletes its child sessions. Child messages
-set `messages.agent` to the sub-agent name.
+Deleting a parent session also deletes its child sessions and durable
+`subagent_jobs` rows. Child messages set `messages.agent` to the sub-agent
+name.
+
+`subagent_jobs` is the durable task registry: spawn/status/finish are
+upserted so `task_list`, `task_status`, and `task_wait` still work after a
+process restart. Open (`queued`/`running`) rows are resumed on startup via
+`Manager.Recover`.
 
 ## Conventions
 
@@ -73,7 +85,9 @@ set `messages.agent` to the sub-agent name.
 `InsertToolCall`, `UpdateToolCall` (upsert + part status),
 `TouchSession`, `DeleteSession`, `ListMessages`, `ListParts`,
 `ListSessionsByDir` (latest first), `ListToolCalls` (per session),
-`UpdateSessionModel` / `UpdateSessionVariant` (also bump `time_updated`).
+`UpdateSessionModel` / `UpdateSessionVariant` (also bump `time_updated`),
+`UpsertSubagentJob` / `GetSubagentJob` / `ListSubagentJobs` /
+`ListOpenSubagentJobs` (durable sub-agent registry).
 
 ## Tool call lifecycle
 

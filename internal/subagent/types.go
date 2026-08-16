@@ -82,13 +82,16 @@ type Job struct {
 	ParentSessionID string
 	ParentPartID    string
 	// ChildSessionID is set by the runner as soon as the child session row exists.
+	// When non-empty on entry, the runner resumes that session instead of creating one.
 	ChildSessionID string
-	Workdir        string
-	Model          string
-	Endpoint       string
-	Variant        string
-	MaxSteps       int
-	Timeout        time.Duration
+	// Resume is true when Recover restarts a job after a process restart.
+	Resume   bool
+	Workdir  string
+	Model    string
+	Endpoint string
+	Variant  string
+	MaxSteps int
+	Timeout  time.Duration
 	// Tools is the child tool allowlist (no task tools at depth 1).
 	Tools   []string
 	Confirm func(dec policy.Decision, subject string) (bool, error)

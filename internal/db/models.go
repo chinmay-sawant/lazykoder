@@ -78,6 +78,30 @@ type ToolCall struct {
 	MetadataJSON *string
 }
 
+// SubagentJob is a durable parent-side task handle (sub_...).
+// Survives process restarts so task_list / task_wait / resume can reattach.
+type SubagentJob struct {
+	ID              string
+	ParentSessionID string
+	ParentPartID    string
+	ChildSessionID  string
+	Name            string
+	Role            string
+	Status          string
+	Prompt          string
+	Description     string
+	Model           string
+	Variant         string
+	MaxSteps        int
+	TimeoutMS       int64
+	Summary         string
+	Error           string
+	TimeCreated     int64
+	TimeUpdated     int64
+	TimeStarted     int64
+	TimeFinished    int64
+}
+
 // NewID returns prefix plus 16 lowercase hex characters from crypto/rand.
 func NewID(prefix string) string {
 	var b [8]byte

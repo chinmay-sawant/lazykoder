@@ -88,7 +88,10 @@ spawns; follow with `task_wait`). Default child step budget is 32
 completes with a partial summary and a note instead of status `failed`.
 
 Schemas and pure JSON helpers live in `internal/tools/task`. Runtime
-lifecycle is `internal/subagent.Manager` + `AgentRunner`.
+lifecycle is `internal/subagent.Manager` + `AgentRunner`. Job handles are
+persisted in SQLite (`subagent_jobs`): after a crash or app restart,
+`task_list` / `task_status` / `task_wait` still return finished summaries,
+and open jobs are resumed (same child session when possible).
 
 ### Child roles
 

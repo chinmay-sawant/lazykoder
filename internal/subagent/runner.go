@@ -17,7 +17,7 @@ type AgentRunner struct {
 	Client *opencode.Client
 }
 
-// Run creates a child session, runs one agent turn, and returns a summary.
+// Run creates (or resumes) a child session, runs one agent turn, and returns a summary.
 func (r AgentRunner) Run(ctx context.Context, job Job) (Result, error) {
 	res := Result{
 		ID:   job.ID,
@@ -29,7 +29,7 @@ func (r AgentRunner) Run(ctx context.Context, job Job) (Result, error) {
 		res.Err = "subagent: runner missing store or client"
 		return res, fmt.Errorf("%s", res.Err)
 	}
-	if strings.TrimSpace(job.Prompt) == "" {
+	if strings.TrimSpace(job.Prompt) == "" && !job.Resume {
 		res.Status = string(StatusFailed)
 		res.Err = "subagent: empty prompt"
 		return res, fmt.Errorf("%s", res.Err)
@@ -46,23 +46,45 @@ func (r AgentRunner) Run(ctx context.Context, job Job) (Result, error) {
 	if len([]rune(title)) > 60 {
 		title = string([]rune(title)[:60])
 	}
-	sess, err := r.Store.CreateSession(ctx, db.Session{
-		Title:           title,
-		Directory:       workdir,
-		Model:           job.Model,
-		Variant:         strPtr(job.Variant),
-		ParentSessionID: parentID,
-		Kind:            db.SessionKindSubagent,
-	})
-	if err != nil {
-		res.Status = string(StatusFailed)
-		res.Err = err.Error()
-		return res, err
+
+	var sess db.Session
+	var err error
+	if job.ChildSessionID != "" {
+		sess, err = r.Store.GetSession(ctx, job.ChildSessionID)
+		if err != nil {
+			// Stale id: fall through to a new session.
+			job.ChildSessionID = ""
+		}
+	}
+	if job.ChildSessionID == "" {
+		sess, err = r.Store.CreateSession(ctx, db.Session{
+			Title:           title,
+			Directory:       workdir,
+			Model:           job.Model,
+			Variant:         strPtr(job.Variant),
+			ParentSessionID: parentID,
+			Kind:            db.SessionKindSubagent,
+		})
+		if err != nil {
+			res.Status = string(StatusFailed)
+			res.Err = err.Error()
+			return res, err
+		}
 	}
 	res.ChildSessionID = sess.ID
 	// Publish session id before the turn so the drawer can merge live + store rows.
 	if job.OnSession != nil {
 		job.OnSession(sess.ID)
+	}
+
+	// Crash recovery: if the child already finished with a text answer and
+	// has no pending tools, adopt that summary without another model turn.
+	if job.Resume {
+		if summary, ok := r.finishedSummary(ctx, sess.ID); ok {
+			res.Summary = summary
+			res.Status = string(StatusCompleted)
+			return res, nil
+		}
 	}
 
 	var ask func(q question.Question) (int, error)
@@ -91,6 +113,14 @@ func (r AgentRunner) Run(ctx context.Context, job Job) (Result, error) {
 	prompt := strings.TrimSpace(job.Prompt) + "\n\n" +
 		"Finish with a concise written report as plain assistant text before your step budget ends. " +
 		"Do not keep calling tools once you have enough evidence."
+	if job.Resume {
+		prompt = "You were interrupted mid-task (process restart). Continue from the transcript above. " +
+			"Finish with a concise written report as plain assistant text. " +
+			"Do not redo completed work; do not keep calling tools once you have enough evidence."
+		if strings.TrimSpace(job.Prompt) != "" {
+			prompt = "Original task:\n" + strings.TrimSpace(job.Prompt) + "\n\n" + prompt
+		}
+	}
 	if err := ag.Send(ctx, prompt, nil); err != nil {
 		summary, _ := agent.LastAssistantText(ctx, r.Store, sess.ID)
 		res.Summary = summary
@@ -119,6 +149,26 @@ func (r AgentRunner) Run(ctx context.Context, job Job) (Result, error) {
 	res.Summary = summary
 	res.Status = string(StatusCompleted)
 	return res, nil
+}
+
+// finishedSummary reports whether the child session already has a usable
+// terminal answer (assistant text and no pending tool calls).
+func (r AgentRunner) finishedSummary(ctx context.Context, sessionID string) (string, bool) {
+	summary, err := agent.LastAssistantText(ctx, r.Store, sessionID)
+	if err != nil || strings.TrimSpace(summary) == "" {
+		return "", false
+	}
+	tcs, err := r.Store.ListToolCalls(ctx, sessionID)
+	if err != nil {
+		return "", false
+	}
+	for _, tc := range tcs {
+		switch strings.ToLower(tc.Status) {
+		case "pending", "running", "":
+			return "", false
+		}
+	}
+	return summary, true
 }
 
 func isStepLimitErr(err error) bool {

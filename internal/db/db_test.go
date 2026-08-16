@@ -31,11 +31,11 @@ func TestMigrateIdempotent(t *testing.T) {
 
 	var n int
 	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master
-WHERE type = 'table' AND name IN ('sessions', 'messages', 'parts', 'tool_calls', 'schema_migrations')`).Scan(&n); err != nil {
+WHERE type = 'table' AND name IN ('sessions', 'messages', 'parts', 'tool_calls', 'subagent_jobs', 'schema_migrations')`).Scan(&n); err != nil {
 		t.Fatalf("count tables: %v", err)
 	}
-	if n != 5 {
-		t.Fatalf("got %d tables, want 5", n)
+	if n != 6 {
+		t.Fatalf("got %d tables, want 6", n)
 	}
 
 	if err := s.Migrate(ctx); err != nil {
@@ -44,8 +44,8 @@ WHERE type = 'table' AND name IN ('sessions', 'messages', 'parts', 'tool_calls',
 	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&n); err != nil {
 		t.Fatalf("count migrations: %v", err)
 	}
-	if n != 4 {
-		t.Fatalf("got %d schema_migrations rows, want 4", n)
+	if n != 5 {
+		t.Fatalf("got %d schema_migrations rows, want 5", n)
 	}
 }
 
@@ -734,5 +734,57 @@ func TestListChildSessionsHiddenFromMain(t *testing.T) {
 	}
 	if len(kids) != 1 || kids[0].ID != child.ID {
 		t.Fatalf("kids = %+v", kids)
+	}
+}
+
+func TestSubagentJobRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	parent, err := s.CreateSession(ctx, Session{Directory: "/work", Title: "parent"})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	job := SubagentJob{
+		ID:              "sub_testjob01aabbcc",
+		ParentSessionID: parent.ID,
+		ParentPartID:    "prt_1",
+		Name:            "layout-audit",
+		Role:            "explore",
+		Status:          "queued",
+		Prompt:          "audit layout",
+		Description:     "layout",
+		MaxSteps:        32,
+		TimeoutMS:       60000,
+	}
+	if err := s.UpsertSubagentJob(ctx, job); err != nil {
+		t.Fatalf("UpsertSubagentJob: %v", err)
+	}
+	got, err := s.GetSubagentJob(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("GetSubagentJob: %v", err)
+	}
+	if got.Name != "layout-audit" || got.Status != "queued" || got.Prompt != "audit layout" {
+		t.Fatalf("got %+v", got)
+	}
+	got.Status = "completed"
+	got.Summary = "all good"
+	got.ChildSessionID = "ses_child"
+	// child FK is not enforced; store as plain text id
+	if err := s.UpsertSubagentJob(ctx, got); err != nil {
+		t.Fatalf("Upsert completed: %v", err)
+	}
+	list, err := s.ListSubagentJobs(ctx, parent.ID)
+	if err != nil || len(list) != 1 {
+		t.Fatalf("ListSubagentJobs: %v %#v", err, list)
+	}
+	if list[0].Summary != "all good" || list[0].Status != "completed" {
+		t.Fatalf("list row: %+v", list[0])
+	}
+	open, err := s.ListOpenSubagentJobs(ctx)
+	if err != nil {
+		t.Fatalf("ListOpen: %v", err)
+	}
+	if len(open) != 0 {
+		t.Fatalf("open should be empty after completed, got %#v", open)
 	}
 }

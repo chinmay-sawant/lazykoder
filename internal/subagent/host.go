@@ -75,16 +75,18 @@ func (h *Host) Specs() []opencode.ToolSpec {
 			},
 		},
 		{
-			Name:        "task_list",
-			Description: "List sub-agent jobs for the current parent session.",
+			Name: "task_list",
+			Description: "List sub-agent jobs for the current parent session " +
+				"(includes completed jobs from SQLite after restart).",
 			Parameters: map[string]any{
 				"type":       "object",
 				"properties": map[string]any{},
 			},
 		},
 		{
-			Name:        "task_status",
-			Description: "Get status for one sub-agent by id.",
+			Name: "task_status",
+			Description: "Get status for one sub-agent by id " +
+				"(works for finished jobs persisted in SQLite).",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -94,8 +96,10 @@ func (h *Host) Specs() []opencode.ToolSpec {
 			},
 		},
 		{
-			Name:        "task_wait",
-			Description: "Wait for one sub-agent (id) or all jobs for this parent session.",
+			Name: "task_wait",
+			Description: "Wait for one sub-agent (id) or all jobs for this parent session. " +
+				"Returns durable summaries from SQLite when jobs already finished " +
+				"(including after a crash/restart). Always call this after background task spawns.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

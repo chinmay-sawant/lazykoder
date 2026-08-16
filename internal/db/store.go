@@ -142,6 +142,32 @@ var schemaMigrations = [][]string{
 		`CREATE INDEX idx_sessions_parent ON sessions(parent_session_id) WHERE parent_session_id IS NOT NULL`,
 		`CREATE INDEX idx_sessions_kind ON sessions(kind)`,
 	},
+	{
+		// Durable sub-agent job registry for task_list/wait after restart.
+		`CREATE TABLE subagent_jobs (
+  id                TEXT PRIMARY KEY,
+  parent_session_id TEXT    NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  parent_part_id    TEXT,
+  child_session_id  TEXT,
+  name              TEXT    NOT NULL DEFAULT '',
+  role              TEXT    NOT NULL DEFAULT 'explore',
+  status            TEXT    NOT NULL,
+  prompt            TEXT    NOT NULL DEFAULT '',
+  description       TEXT    NOT NULL DEFAULT '',
+  model             TEXT,
+  variant           TEXT,
+  max_steps         INTEGER NOT NULL DEFAULT 0,
+  timeout_ms        INTEGER NOT NULL DEFAULT 0,
+  summary           TEXT,
+  error             TEXT,
+  time_created      INTEGER NOT NULL,
+  time_updated      INTEGER NOT NULL,
+  time_started      INTEGER,
+  time_finished     INTEGER
+)`,
+		`CREATE INDEX idx_subagent_jobs_parent ON subagent_jobs(parent_session_id)`,
+		`CREATE INDEX idx_subagent_jobs_status ON subagent_jobs(status)`,
+	},
 }
 
 // Migrate runs numbered migrations. schema_migrations records the applied

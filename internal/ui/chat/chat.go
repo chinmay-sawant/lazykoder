@@ -384,6 +384,17 @@ func New(opts Options) Model {
 		Store:  opts.Store,
 		Client: opts.Client,
 	})
+	m.subMgr.SetStore(opts.Store)
+	// Workdir is known at construction; model/confirm are refreshed per turn.
+	m.subMgr.SetRuntime(subagent.Runtime{
+		Workdir: opts.Workdir,
+		Model:   cfg.EffectiveModel(),
+		Variant: cfg.EffectiveVariant(),
+	})
+	// Recover open jobs from a previous process crash/exit.
+	if opts.Store != nil {
+		_ = m.subMgr.Recover(context.Background())
+	}
 	if m.cachePath != "" {
 		if infos, _, err := modelscache.Load(m.cachePath, time.Now(), 0); err == nil && len(infos) > 0 {
 			m.modelInfos = infos

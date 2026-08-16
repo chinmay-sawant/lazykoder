@@ -389,6 +389,7 @@ func (m Model) agentOptions() agent.Options {
 		return opts
 	}
 	m.subMgr.SetRunner(subagent.AgentRunner{Store: m.store, Client: m.client})
+	m.subMgr.SetStore(m.store)
 	m.subMgr.SetRuntime(subagent.Runtime{
 		Workdir:  m.workdir,
 		Model:    m.model,

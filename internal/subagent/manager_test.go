@@ -2,11 +2,14 @@ package subagent
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/chinmay-sawant/lazykoder/internal/db"
 )
 
 // blockingRunner holds each Run until release is closed (or ctx done).
@@ -318,4 +321,125 @@ func TestConfigNormalize(t *testing.T) {
 
 func containsID(s, sub string) bool {
 	return strings.Contains(s, sub)
+}
+
+func TestDurableListAndWaitAfterManagerDrop(t *testing.T) {
+	ctx := context.Background()
+	st := openSubagentTestStore(t)
+	parent, err := st.CreateSession(ctx, db.Session{Directory: t.TempDir(), Title: "p"})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	r := newBlockingRunner("durable-summary")
+	close(r.release)
+	cfg := NewConfig()
+	m := NewManager(cfg, r)
+	m.SetStore(st)
+	m.SetRuntime(Runtime{Workdir: t.TempDir()})
+
+	snap, err := m.Spawn(ctx, parent.ID, "prt_1", Spec{
+		Prompt: "do durable work", Name: "durable-job", Role: RoleExplore, Background: true,
+	})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	// Wait until terminal in memory, then drop the manager (simulates process exit).
+	res, err := m.Wait(ctx, snap.ID)
+	if err != nil {
+		t.Fatalf("Wait live: %v", err)
+	}
+	if res.Summary != "durable-summary" {
+		t.Fatalf("summary = %q", res.Summary)
+	}
+
+	// New manager, same store: no live handles.
+	m2 := NewManager(cfg, r)
+	m2.SetStore(st)
+	m2.SetRuntime(Runtime{Workdir: t.TempDir()})
+
+	list := m2.List(parent.ID)
+	if len(list) != 1 {
+		t.Fatalf("List after restart: %#v", list)
+	}
+	if list[0].Status != string(StatusCompleted) || list[0].Summary != "durable-summary" {
+		t.Fatalf("list snap: %+v", list[0])
+	}
+	stSnap, ok := m2.Status(snap.ID)
+	if !ok || stSnap.Summary != "durable-summary" {
+		t.Fatalf("Status after restart: ok=%v %+v", ok, stSnap)
+	}
+	waitRes, err := m2.Wait(ctx, snap.ID)
+	if err != nil {
+		t.Fatalf("Wait durable: %v", err)
+	}
+	if waitRes.Summary != "durable-summary" {
+		t.Fatalf("Wait summary after restart: %q", waitRes.Summary)
+	}
+	all, err := m2.WaitAll(ctx, parent.ID)
+	if err != nil || len(all) != 1 || all[0].Summary != "durable-summary" {
+		t.Fatalf("WaitAll after restart: %v %#v", err, all)
+	}
+}
+
+func TestRecoverResumesOpenJob(t *testing.T) {
+	ctx := context.Background()
+	st := openSubagentTestStore(t)
+	parent, err := st.CreateSession(ctx, db.Session{Directory: t.TempDir(), Title: "p"})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	// Seed an open job as if the process crashed mid-run.
+	job := db.SubagentJob{
+		ID:              "sub_recover01aabbcc",
+		ParentSessionID: parent.ID,
+		Name:            "resume-me",
+		Role:            RoleExplore,
+		Status:          string(StatusRunning),
+		Prompt:          "finish the audit",
+		MaxSteps:        8,
+		TimeCreated:     time.Now().UnixMilli(),
+		TimeUpdated:     time.Now().UnixMilli(),
+		TimeStarted:     time.Now().UnixMilli(),
+	}
+	if err := st.UpsertSubagentJob(ctx, job); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	r := newBlockingRunner("recovered-ok")
+	close(r.release)
+	m := NewManager(NewConfig(), r)
+	m.SetStore(st)
+	m.SetRuntime(Runtime{Workdir: t.TempDir()})
+	if err := m.Recover(ctx); err != nil {
+		t.Fatalf("Recover: %v", err)
+	}
+	res, err := m.Wait(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("Wait recovered: %v", err)
+	}
+	if res.Summary != "recovered-ok" || res.Status != string(StatusCompleted) {
+		t.Fatalf("recovered result: %+v", res)
+	}
+	// Durable row updated.
+	row, err := st.GetSubagentJob(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if row.Status != string(StatusCompleted) || row.Summary != "recovered-ok" {
+		t.Fatalf("store after recover: %+v", row)
+	}
+}
+
+func openSubagentTestStore(t *testing.T) *db.Store {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "sub.db")
+	st, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	if err := st.Migrate(context.Background()); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	return st
 }

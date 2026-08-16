@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -413,10 +414,21 @@ func (m Model) rebuildSubMgr() Model {
 	if m.store == nil || m.client == nil {
 		return m
 	}
+	if m.subMgr != nil {
+		m.subMgr.Shutdown()
+	}
 	m.subMgr = subagent.NewManager(subagent.ConfigFromSettings(m.projectSettings), subagent.AgentRunner{
 		Store:  m.store,
 		Client: m.client,
 	})
+	m.subMgr.SetStore(m.store)
+	m.subMgr.SetRuntime(subagent.Runtime{
+		Workdir: m.workdir,
+		Model:   m.projectSettings.EffectiveModel(),
+		Variant: m.projectSettings.EffectiveVariant(),
+	})
+	// Recover open durable jobs so task_list/wait stay consistent after settings rebuild.
+	_ = m.subMgr.Recover(context.Background())
 	return m
 }
 
