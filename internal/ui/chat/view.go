@@ -530,7 +530,7 @@ func (m Model) helpOverlay() string {
 }
 
 func (m Model) headerView() string {
-	brand := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorAccent()).Render("lazykoder")
+	brand := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorAccent()).Render("lazyKoder")
 	title := m.sessionTitle()
 	cwd := filepath.Base(m.workdir)
 	if cwd == "" || cwd == "." {

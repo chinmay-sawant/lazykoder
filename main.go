@@ -1,4 +1,4 @@
-// Command lazykoder runs the OpenCode agent harness TUI.
+// Command lazyKoder runs the OpenCode agent harness TUI.
 package main
 
 import (
@@ -22,18 +22,18 @@ const defaultMaxSteps = 16
 func main() {
 	cwd, err := os.Getwd()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "lazykoder:", err)
+		fmt.Fprintln(os.Stderr, "lazyKoder:", err)
 		os.Exit(1)
 	}
 	env, err := workspace.Init(cwd)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "lazykoder:", err)
+		fmt.Fprintln(os.Stderr, "lazyKoder:", err)
 		os.Exit(1)
 	}
 	defer func() { _ = env.DB.Close() }()
 
 	if err := envfile.Load(filepath.Join(cwd, ".env")); err != nil {
-		fmt.Fprintln(os.Stderr, "lazykoder:", err)
+		fmt.Fprintln(os.Stderr, "lazyKoder:", err)
 		os.Exit(1)
 	}
 	key, keyErr := opencode.APIKeyFromEnv()
@@ -59,7 +59,7 @@ func main() {
 		CachePath:  filepath.Join(env.Dir, "models.json"),
 	}))
 	if _, err := p.Run(); err != nil {
-		fmt.Fprintln(os.Stderr, "lazykoder:", err)
+		fmt.Fprintln(os.Stderr, "lazyKoder:", err)
 		os.Exit(1)
 	}
 }

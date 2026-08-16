@@ -13,7 +13,7 @@ import (
 func TestSlashMenuOpensAndDivides(t *testing.T) {
 	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
 	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
-	if !strings.Contains(stripANSI(viewText(m)), "ask lazykoder") {
+	if !strings.Contains(stripANSI(viewText(m)), "ask lazyKoder") {
 		t.Fatalf("prompt placeholder missing: %q", stripANSI(viewText(m)))
 	}
 	m = typeRune(m, '/')
