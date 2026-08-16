@@ -27,6 +27,14 @@ func (m Model) mousePress(msg tea.MouseClickMsg) (Model, tea.Cmd) {
 		m.transcript.GotoBottom()
 		return m, nil
 	}
+	if mu.Button == tea.MouseLeft && m.sessionPickerMode {
+		if idx, ok := m.sessionIndexAtScreenY(mu.Y); ok {
+			sess := m.sessionItems[idx]
+			m = m.closeSessionPicker()
+			return m.loadSession(&sess), nil
+		}
+		return m, nil
+	}
 	if !m.pickerMode && !m.slashMode {
 		if _, top, right, bottom, ok := m.modelStatusRect(); ok && mu.X < right && mu.Y >= top && mu.Y < bottom {
 			m = m.clearTextSelection()
@@ -246,6 +254,54 @@ func (m Model) pickerIndexAtScreenY(y int) (int, bool) {
 		return -1, false
 	}
 	return idx, true
+}
+
+// sessionIndexAtScreenY maps a screen row to a visible session in the
+// centered resume card, skipping group headers and the viewport offset.
+func (m Model) sessionIndexAtScreenY(y int) (int, bool) {
+	if !m.sessionPickerMode || len(m.sessionItems) == 0 {
+		return -1, false
+	}
+	inner := y - m.sessionListScreenTop()
+	if inner < 0 || inner >= m.sessionVPHeight() {
+		return -1, false
+	}
+	return m.sessionIndexAtDisplayRow(inner + m.sessionVp.YOffset())
+}
+
+// sessionListScreenTop is the first session-list row on the painted
+// screen: the line after the RUNS header. Falling back to the centered
+// card formula keeps hit-testing usable if the header is off-screen.
+func (m Model) sessionListScreenTop() int {
+	for i, line := range strings.Split(m.sessionPickerScreen(), "\n") {
+		if strings.Contains(ansi.Strip(line), "RUNS") {
+			return i + 1
+		}
+	}
+	vpH := m.sessionVPHeight()
+	return max(0, (m.height-(vpH+sessionCardChromeRows))/centerDiv) + sessionCardHeaderRows
+}
+
+// sessionIndexAtDisplayRow maps a content row (group headers occupy rows
+// too) back to a session index. A group header row reports not-found.
+func (m Model) sessionIndexAtDisplayRow(row int) (int, bool) {
+	r := 0
+	last := ""
+	for i, sess := range m.sessionItems {
+		g := sessionAgeGroup(sess.TimeUpdated)
+		if g != last {
+			last = g
+			if r == row {
+				return -1, false
+			}
+			r++
+		}
+		if r == row {
+			return i, true
+		}
+		r++
+	}
+	return -1, false
 }
 
 func (m Model) updateTextSelection(msg tea.MouseMotionMsg) Model {

@@ -33,6 +33,42 @@ func TestMouseWheelScrollsTranscript(t *testing.T) {
 	}
 }
 
+func TestMouseWheelScrollsSessionPicker(t *testing.T) {
+	dir := t.TempDir()
+	st := newTestStore(t)
+	for i := 0; i < 20; i++ {
+		sess, err := st.CreateSession(context.Background(), db.Session{
+			Title: fmt.Sprintf("sess-%02d", i), Directory: dir,
+			TimeCreated: int64(i), TimeUpdated: int64(i),
+		})
+		if err != nil {
+			t.Fatalf("create session %d: %v", i, err)
+		}
+		um, err := st.InsertMessage(context.Background(), db.Message{SessionID: sess.ID, Role: "user"})
+		if err != nil {
+			t.Fatalf("insert message %d: %v", i, err)
+		}
+		text := fmt.Sprintf("msg-%02d", i)
+		if _, err := st.InsertPart(context.Background(), db.Part{MessageID: um.ID, Type: "text", Text: &text}); err != nil {
+			t.Fatalf("insert part %d: %v", i, err)
+		}
+	}
+	m := New(Options{Store: st, Client: deadClient(), Workdir: dir})
+	m = typeText(m, "/resume")
+	m = upd(m, enter())
+	if !m.sessionPickerMode {
+		t.Fatal("resume picker not open")
+	}
+	m = upd(m, tea.MouseWheelMsg(tea.Mouse{Button: tea.MouseWheelDown}))
+	if m.sessionVp.YOffset() <= 0 {
+		t.Fatalf("wheel down did not scroll the session picker (offset %d)", m.sessionVp.YOffset())
+	}
+	m = upd(m, tea.MouseWheelMsg(tea.Mouse{Button: tea.MouseWheelUp}))
+	if m.sessionVp.YOffset() != 0 {
+		t.Fatalf("wheel up did not return to top (offset %d)", m.sessionVp.YOffset())
+	}
+}
+
 func TestJumpBarClickScrollsToLatest(t *testing.T) {
 	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
 	for i := 0; i < 80; i++ {
@@ -341,4 +377,102 @@ func TestClickRunsSlashCommand(t *testing.T) {
 	if !m.pickerMode {
 		t.Fatal("click on /model did not open the picker")
 	}
+}
+
+func TestSessionPickerClickAtScrolledBottom(t *testing.T) {
+	dir := t.TempDir()
+	st := newTestStore(t)
+	const n = 40
+	for i := 0; i < n; i++ {
+		title := fmt.Sprintf("scroll-sess-%02d", i)
+		if i == n-2 {
+			// A wrapped title must still occupy one picker row. Extra
+			// lines used to shift every hit target below this entry, so
+			// a click on the third-from-last row opened the last session.
+			title = "scroll-sess-38\n| Path | Purpose |\n| main.go |"
+		}
+		if err := insertNamedSession(t, st, dir, title, int64(i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := New(Options{Store: st, Client: deadClient(), Workdir: dir})
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = mm.(Model)
+	m = typeText(m, "/resume")
+	m = upd(m, enter())
+	if !m.sessionPickerMode {
+		t.Fatal("resume picker not open")
+	}
+	for i := 0; i < 80; i++ {
+		m = upd(m, tea.MouseWheelMsg(tea.Mouse{Button: tea.MouseWheelDown}))
+	}
+
+	lines := strings.Split(stripANSI(viewText(m)), "\n")
+	var visible []struct {
+		y     int
+		title string
+	}
+	for i, line := range lines {
+		if strings.Contains(line, "scroll-sess-") {
+			start := strings.Index(line, "scroll-sess-")
+			visible = append(visible, struct {
+				y     int
+				title string
+			}{i, line[start : start+len("scroll-sess-00")]})
+		}
+	}
+	if len(visible) < 3 {
+		t.Fatalf("expected at least 3 visible sessions, got %d: %q", len(visible), strings.Join(lines, "\n"))
+	}
+	for _, row := range visible {
+		idx, ok := m.sessionIndexAtScreenY(row.y)
+		if !ok || idx < 0 || idx >= len(m.sessionItems) {
+			t.Fatalf("row %d (%s) did not map to a session", row.y, row.title)
+		}
+		got := sessionPickerTitle(m.sessionItems[idx])
+		if !strings.Contains(got, row.title) && !strings.HasPrefix(got, row.title) {
+			t.Fatalf("row %d shows %q but maps to %q", row.y, row.title, got)
+		}
+	}
+
+	target := visible[len(visible)-3]
+	m = upd(m, tea.MouseMotionMsg(tea.Mouse{X: 40, Y: target.y}))
+	if m.sessionHover < 0 || m.sessionHover >= len(m.sessionItems) ||
+		!strings.Contains(sessionPickerTitle(m.sessionItems[m.sessionHover]), target.title) {
+		got := ""
+		if m.sessionHover >= 0 && m.sessionHover < len(m.sessionItems) {
+			got = m.sessionItems[m.sessionHover].Title
+		}
+		t.Fatalf("hover y=%d title %q, sessionHover=%d (%q)", target.y, target.title, m.sessionHover, got)
+	}
+	m = upd(m, tea.MouseClickMsg(tea.Mouse{X: 40, Y: target.y, Button: tea.MouseLeft}))
+	if m.sessionPickerMode {
+		t.Fatal("click did not close the picker")
+	}
+	if m.session == nil || !strings.Contains(sessionPickerTitle(*m.session), target.title) {
+		got := ""
+		if m.session != nil {
+			got = m.session.Title
+		}
+		t.Fatalf("clicked y=%d title %q, loaded %q", target.y, target.title, got)
+	}
+}
+
+func insertNamedSession(t *testing.T, st *db.Store, dir, title string, ts int64) error {
+	t.Helper()
+	sess, err := st.CreateSession(context.Background(), db.Session{
+		Title: title, Directory: dir, TimeCreated: ts, TimeUpdated: ts,
+	})
+	if err != nil {
+		return fmt.Errorf("create session %q: %w", title, err)
+	}
+	um, err := st.InsertMessage(context.Background(), db.Message{SessionID: sess.ID, Role: "user"})
+	if err != nil {
+		return fmt.Errorf("insert message %q: %w", title, err)
+	}
+	text := title
+	if _, err := st.InsertPart(context.Background(), db.Part{MessageID: um.ID, Type: "text", Text: &text}); err != nil {
+		return fmt.Errorf("insert part %q: %w", title, err)
+	}
+	return nil
 }

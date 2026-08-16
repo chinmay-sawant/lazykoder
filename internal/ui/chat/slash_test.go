@@ -21,8 +21,14 @@ func TestSlashMenuOpensAndDivides(t *testing.T) {
 		t.Fatal("slash mode not opened on /")
 	}
 	v := stripANSI(viewText(m))
-	if !strings.Contains(v, "/new") || !strings.Contains(v, "/model") || !strings.Contains(v, "/variant") || !strings.Contains(v, "/help") || !strings.Contains(v, "/sessions") {
+	if !strings.Contains(v, "/new") || !strings.Contains(v, "/model") || !strings.Contains(v, "/variant") || !strings.Contains(v, "/help") || !strings.Contains(v, "/resume") {
 		t.Errorf("slash menu missing commands: %q", v)
+	}
+	if strings.Contains(v, "/sessions") {
+		t.Errorf("slash menu should list /resume, not /sessions: %q", v)
+	}
+	if !strings.Contains(v, "resume a previous session") {
+		t.Errorf("slash menu missing resume description: %q", v)
 	}
 	if !strings.Contains(v, "start a new session") {
 		t.Errorf("slash menu missing selected description: %q", v)
@@ -63,6 +69,45 @@ func TestSlashMenuAnchorsAbovePrompt(t *testing.T) {
 	}
 	if len(lines) > m.height {
 		t.Errorf("slash view has %d rows for a %d-row terminal", len(lines), m.height)
+	}
+}
+
+func TestSlashResumeAcceptsSessionAlias(t *testing.T) {
+	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
+	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
+	for _, r := range "/session" {
+		m = typeRune(m, r)
+	}
+	if !m.slashMode || len(m.slashItems) != 1 || m.slashItems[0].name != "/resume" {
+		t.Fatalf("filtered items = %+v, want only /resume", m.slashItems)
+	}
+	if v := stripANSI(m.slashView()); strings.Contains(v, "/sessions") {
+		t.Errorf("typed /session should display /resume, got: %q", v)
+	}
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.slashMode {
+		t.Fatal("slash mode still open after enter")
+	}
+	if !m.sessionPickerMode {
+		t.Fatal("enter on /session did not open the resume picker")
+	}
+}
+
+func TestSlashResumeOpensPicker(t *testing.T) {
+	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
+	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
+	for _, r := range "/resume" {
+		m = typeRune(m, r)
+	}
+	if !m.slashMode || len(m.slashItems) != 1 || m.slashItems[0].name != "/resume" {
+		t.Fatalf("filtered items = %+v, want only /resume", m.slashItems)
+	}
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.slashMode {
+		t.Fatal("slash mode still open after enter")
+	}
+	if !m.sessionPickerMode {
+		t.Fatal("enter on /resume did not open the resume picker")
 	}
 }
 

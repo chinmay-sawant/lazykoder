@@ -101,7 +101,7 @@ func (m Model) runSlash(name string) (Model, tea.Cmd) {
 	switch name {
 	case "/new":
 		return m.loadSession(nil), nil
-	case "/sessions":
+	case "/resume", "/sessions":
 		return m.openSessionPicker(), nil
 	case "/model":
 		return m.openModelSearch(), nil
@@ -153,15 +153,30 @@ func (m Model) syncSlash(value string) Model {
 	partial := strings.ToLower(strings.TrimPrefix(value, "/"))
 	m.slashItems = nil
 	for _, cmd := range slashCommands {
-		if strings.HasPrefix(strings.TrimPrefix(cmd.name, "/"), partial) {
-			m.slashItems = append(m.slashItems, cmd)
+		if !matchesSlashPartial(cmd, partial) {
+			continue
 		}
+		m.slashItems = append(m.slashItems, cmd)
 	}
 	if m.slashCursor >= len(m.slashItems) {
 		m.slashCursor = max(0, len(m.slashItems)-1)
 	}
 	m.slashMode = true
 	return m
+}
+
+// matchesSlashPartial reports whether a command matches a typed partial
+// by its own name or by one of its aliases.
+func matchesSlashPartial(cmd slashCmd, partial string) bool {
+	if strings.HasPrefix(strings.TrimPrefix(cmd.name, "/"), partial) {
+		return true
+	}
+	for _, alias := range cmd.aliases {
+		if strings.HasPrefix(alias, partial) {
+			return true
+		}
+	}
+	return false
 }
 
 // modelSearchQuery reports whether value is `/model` plus an optional

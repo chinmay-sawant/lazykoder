@@ -1088,6 +1088,257 @@ func TestSessionPickerEscKeepsCurrent(t *testing.T) {
 	}
 }
 
+func TestSessionPickerCardAlignsAndShowsScrollbar(t *testing.T) {
+	dir := t.TempDir()
+	st := newTestStore(t)
+	for i := 0; i < 25; i++ {
+		sess, err := st.CreateSession(context.Background(), db.Session{
+			Title: fmt.Sprintf("session-%02d-%s", i, strings.Repeat("x", 40)), Directory: dir,
+			TimeCreated: int64(i), TimeUpdated: int64(i),
+		})
+		if err != nil {
+			t.Fatalf("create session %d: %v", i, err)
+		}
+		um, err := st.InsertMessage(context.Background(), db.Message{SessionID: sess.ID, Role: "user"})
+		if err != nil {
+			t.Fatalf("insert message %d: %v", i, err)
+		}
+		text := fmt.Sprintf("msg-%02d", i)
+		if _, err := st.InsertPart(context.Background(), db.Part{MessageID: um.ID, Type: "text", Text: &text}); err != nil {
+			t.Fatalf("insert part %d: %v", i, err)
+		}
+	}
+	m := New(Options{Store: st, Client: deadClient(), Workdir: dir})
+	m = typeText(m, "/resume")
+	m = upd(m, enter())
+	if !m.sessionPickerMode {
+		t.Fatal("resume picker not open")
+	}
+	v := stripANSI(viewText(m))
+	if !strings.Contains(v, "RUNS") {
+		t.Fatalf("picker title missing: %q", v)
+	}
+	lines := strings.Split(v, "\n")
+	start, end := -1, -1
+	for i, line := range lines {
+		if start < 0 && strings.Contains(line, "╭") {
+			start = i
+		}
+		if start >= 0 && strings.Contains(line, "╰") {
+			end = i
+			break
+		}
+	}
+	if start < 0 || end <= start {
+		t.Fatalf("picker card borders missing: %q", v)
+	}
+	cardW := lipgloss.Width(strings.TrimRight(lines[start], " "))
+	for _, line := range lines[start : end+1] {
+		if w := lipgloss.Width(strings.TrimRight(line, " ")); w != cardW {
+			t.Errorf("picker card row width %d, want %d: %q", w, cardW, line)
+		}
+	}
+	if !strings.Contains(v, "░") && !strings.Contains(v, "█") {
+		t.Errorf("picker scrollbar missing with overflow: %q", v)
+	}
+	if !strings.Contains(v, "…") {
+		t.Errorf("long session titles should truncate to one line with an ellipsis: %q", v)
+	}
+}
+
+func TestSessionPickerCardUsesMostOfTheScreen(t *testing.T) {
+	dir := t.TempDir()
+	st := newTestStore(t)
+	for i := 0; i < 40; i++ {
+		if _, err := st.CreateSession(context.Background(), db.Session{
+			Title: fmt.Sprintf("tall-%02d", i), Directory: dir,
+			TimeCreated: int64(i), TimeUpdated: int64(i),
+		}); err != nil {
+			t.Fatalf("create session %d: %v", i, err)
+		}
+	}
+	m := New(Options{Store: st, Client: deadClient(), Workdir: dir})
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 50})
+	m = mm.(Model)
+	m = typeText(m, "/resume")
+	m = upd(m, enter())
+	if !m.sessionPickerMode {
+		t.Fatal("resume picker not open")
+	}
+	v := stripANSI(viewText(m))
+	start, end := -1, -1
+	for i, line := range strings.Split(v, "\n") {
+		if start < 0 && strings.Contains(line, "╭") {
+			start = i
+		}
+		if start >= 0 && strings.Contains(line, "╰") {
+			end = i
+			break
+		}
+	}
+	if start < 0 || end <= start {
+		t.Fatalf("picker card borders missing: %q", v)
+	}
+	cardH := end - start + 1
+	want := 50 * sessionCardHeightPct / percentBase
+	if cardH < want-1 {
+		t.Fatalf("resume card height %d, want about %d (80%% of 50): %q", cardH, want, v)
+	}
+	if m.sessionVPHeight() <= 20 {
+		t.Fatalf("list height %d still looks capped at 20", m.sessionVPHeight())
+	}
+}
+
+func TestSessionPickerFlattensMultilineTitles(t *testing.T) {
+	dir := t.TempDir()
+	st := newTestStore(t)
+	if _, err := st.CreateSession(context.Background(), db.Session{
+		Title: "line one\n| Path | Purpose |\nline three", Directory: dir,
+		TimeCreated: 1, TimeUpdated: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	m := New(Options{Store: st, Client: deadClient(), Workdir: dir})
+	m = typeText(m, "/resume")
+	m = upd(m, enter())
+	v := stripANSI(viewText(m))
+	if !strings.Contains(v, "line one | Path") {
+		t.Fatalf("flattened title missing from picker: %q", v)
+	}
+	for _, line := range strings.Split(v, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "| Path | Purpose |" || trimmed == "line three" {
+			t.Fatalf("multiline title leaked onto its own row: %q", v)
+		}
+	}
+	if m.sessionContentRows() != 2 {
+		t.Fatalf("content rows = %d, want 2 (one group + one session)", m.sessionContentRows())
+	}
+}
+
+func TestSessionPickerClickOpensSession(t *testing.T) {
+	dir := t.TempDir()
+	st := newTestStore(t)
+	newer, err := st.CreateSession(context.Background(), db.Session{
+		Title: "click-newer", Directory: dir, TimeCreated: 2000, TimeUpdated: time.Now().UnixMilli(),
+	})
+	if err != nil {
+		t.Fatalf("create newer: %v", err)
+	}
+	nm, err := st.InsertMessage(context.Background(), db.Message{SessionID: newer.ID, Role: "user"})
+	if err != nil {
+		t.Fatalf("insert newer user: %v", err)
+	}
+	newText := "newer-click-text"
+	if _, err := st.InsertPart(context.Background(), db.Part{MessageID: nm.ID, Type: "text", Text: &newText}); err != nil {
+		t.Fatalf("insert newer part: %v", err)
+	}
+	older, err := st.CreateSession(context.Background(), db.Session{
+		Title: "click-older", Directory: dir, TimeCreated: 1000, TimeUpdated: 1000,
+	})
+	if err != nil {
+		t.Fatalf("create older: %v", err)
+	}
+	om, err := st.InsertMessage(context.Background(), db.Message{SessionID: older.ID, Role: "user"})
+	if err != nil {
+		t.Fatalf("insert older user: %v", err)
+	}
+	oldText := "older-click-text"
+	if _, err := st.InsertPart(context.Background(), db.Part{MessageID: om.ID, Type: "text", Text: &oldText}); err != nil {
+		t.Fatalf("insert older part: %v", err)
+	}
+
+	m := New(Options{Store: st, Client: deadClient(), Workdir: dir})
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = mm.(Model)
+	m = typeText(m, "/resume")
+	m = upd(m, enter())
+	if !m.sessionPickerMode {
+		t.Fatal("resume picker not open")
+	}
+	v := stripANSI(viewText(m))
+	olderRow := -1
+	for i, line := range strings.Split(v, "\n") {
+		if strings.Contains(line, "click-older") {
+			olderRow = i
+			break
+		}
+	}
+	if olderRow < 0 {
+		t.Fatalf("older session row not rendered: %q", v)
+	}
+
+	m = upd(m, tea.MouseClickMsg(tea.Mouse{X: 40, Y: olderRow, Button: tea.MouseLeft}))
+	if m.sessionPickerMode {
+		t.Fatal("click on a session row did not close the picker")
+	}
+	v = stripANSI(viewText(m))
+	if !strings.Contains(v, oldText) {
+		t.Errorf("clicked older session not loaded: %q", v)
+	}
+	if strings.Contains(v, newText) {
+		t.Errorf("clicked older session kept newer transcript: %q", v)
+	}
+}
+
+func TestSessionPickerHoverHighlightsRow(t *testing.T) {
+	dir := t.TempDir()
+	st := newTestStore(t)
+	for i := 0; i < 6; i++ {
+		sess, err := st.CreateSession(context.Background(), db.Session{
+			Title: fmt.Sprintf("hover-session-%d", i), Directory: dir,
+			TimeCreated: int64(i), TimeUpdated: int64(i),
+		})
+		if err != nil {
+			t.Fatalf("create session %d: %v", i, err)
+		}
+		um, err := st.InsertMessage(context.Background(), db.Message{SessionID: sess.ID, Role: "user"})
+		if err != nil {
+			t.Fatalf("insert message %d: %v", i, err)
+		}
+		text := fmt.Sprintf("hover-msg-%d", i)
+		if _, err := st.InsertPart(context.Background(), db.Part{MessageID: um.ID, Type: "text", Text: &text}); err != nil {
+			t.Fatalf("insert part %d: %v", i, err)
+		}
+	}
+	m := New(Options{Store: st, Client: deadClient(), Workdir: dir})
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = mm.(Model)
+	m = typeText(m, "/resume")
+	m = upd(m, enter())
+	if !m.sessionPickerMode {
+		t.Fatal("resume picker not open")
+	}
+	target := -1
+	for i, line := range strings.Split(stripANSI(viewText(m)), "\n") {
+		if strings.Contains(line, "hover-session-3") {
+			target = i
+			break
+		}
+	}
+	if target < 0 {
+		t.Fatalf("target session row not rendered: %q", stripANSI(viewText(m)))
+	}
+	m = upd(m, tea.MouseMotionMsg(tea.Mouse{X: 40, Y: target, Button: tea.MouseLeft}))
+	want := -1
+	for i, sess := range m.sessionItems {
+		if strings.Contains(sess.Title, "hover-session-3") {
+			want = i
+			break
+		}
+	}
+	if m.sessionHover != want {
+		t.Fatalf("sessionHover = %d, want %d (hover-session-3)", m.sessionHover, want)
+	}
+	if !strings.Contains(viewText(m), "48;2;42;42;42") {
+		t.Errorf("hovered row missing background highlight: %q", viewText(m))
+	}
+	m = upd(m, tea.MouseMotionMsg(tea.Mouse{X: 1, Y: 0, Button: tea.MouseLeft}))
+	if m.sessionHover != -1 {
+		t.Fatalf("sessionHover = %d after leaving the list, want -1", m.sessionHover)
+	}
+}
+
 func TestReplayRestoresTokensFromStepFinish(t *testing.T) {
 	st := newTestStore(t)
 	sess, err := st.CreateSession(context.Background(), db.Session{Title: "t", Directory: t.TempDir()})

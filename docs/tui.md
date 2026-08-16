@@ -57,10 +57,13 @@ pickers are centered cards.
   usage. `/refresh` always rewrites that cache. Live reasoning and
   assistant text are painted as SSE deltas arrive. A non-streaming JSON
   response is treated as one complete chunk.
-- Session list (`/sessions` or `ctrl+s`) groups runs as `just now`,
+- Session list (`/resume` or `ctrl+s`) groups runs as `just now`,
   `recently`, and `older`.
-- Session picker: `/sessions` or `ctrl+s` lists sessions for the project
-  directory (newest first). Enter loads one; esc keeps the current session.
+- Session picker: `/resume` (or `/session`) or `ctrl+s` lists sessions for
+  the project directory (newest first). The card uses about 80% of the
+  terminal height. Enter or a click loads one; esc keeps the current
+  session. Rows stay on one line (newlines in a title collapse to spaces);
+  long titles truncate with an ellipsis, and the list scrolls with the wheel.
 - Empty session: a short hint in the transcript, not a blank pane.
 - `/help` or `?` (empty prompt) opens a centered key card with
   shortcuts in two columns. `esc` or `?` closes it.
@@ -85,7 +88,7 @@ pickers are centered cards.
 | `t` | expand or collapse reasoning (empty prompt) |
 | `e` | expand or collapse the last tool card (empty prompt) |
 | `ctrl+s` | open the session picker (idle only) |
-| `/sessions` | same as `ctrl+s` |
+| `/resume` | same as `ctrl+s` |
 | click model | open the model picker |
 | `ctrl+c` | two-step quit (press twice) |
 

@@ -487,7 +487,7 @@ func (m Model) helpOverlay() string {
 		{"enter", "send"},
 		{"shift+enter", "newline"},
 		{"/", "commands"},
-		{"ctrl+s", "sessions"},
+		{"ctrl+s", "resume"},
 		{"/model", "switch model"},
 		{"/variant", "reasoning effort"},
 		{"@", "mention a file"},
@@ -626,6 +626,9 @@ func withScrollbar(v string, width, height int, percent float64, overflow bool) 
 		return v
 	}
 	lines := strings.Split(v, "\n")
+	if len(lines) > height {
+		lines = lines[:height]
+	}
 	for len(lines) < height {
 		lines = append(lines, "")
 	}

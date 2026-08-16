@@ -77,13 +77,12 @@ const (
 	// cardBorder is the two columns of border/margin chrome on each side
 	// of the overlay card content.
 	cardBorder = 2
+	// cardPad is the horizontal padding inside overlay cards (help, pickers).
+	cardPad = 2
 	// percentBase converts a percentage to a fraction.
 	percentBase = 100
 	// paneCount is the number of overlay columns (left, divider, right).
 	paneCount = 3
-	// pickerFixedRows are the session-card rows outside the list (borders,
-	// header, footer) that reduce the available list height.
-	pickerFixedRows = 7
 	// pickerDrawerChrome is the models-drawer header and filter rows.
 	pickerDrawerChrome = 2
 	pickerKindModel    = "model"
@@ -205,6 +204,7 @@ type Model struct {
 	sessionPickerMode bool
 	sessionItems      []db.Session
 	sessionCursor     int
+	sessionHover      int
 	sessionVp         viewport.Model
 	sessionBuilt      bool
 
@@ -229,10 +229,12 @@ type Model struct {
 	errCh      chan error
 }
 
-// slashCmd is one entry of the slash command menu.
+// slashCmd is one entry of the slash command menu. aliases are extra
+// prefixes that match the same command (e.g. /session finds /resume).
 type slashCmd struct {
 	name        string
 	description string
+	aliases     []string
 }
 
 type inputHistoryItem struct {
@@ -261,7 +263,7 @@ type copyNoticeMsg struct{}
 
 var slashCommands = []slashCmd{
 	{name: "/new", description: "start a new session and clear the transcript"},
-	{name: "/sessions", description: "open a previous session"},
+	{name: "/resume", description: "resume a previous session", aliases: []string{"sessions"}},
 	{name: "/model", description: "search and switch the chat model"},
 	{name: "/variant", description: "switch the model variant (low, medium, high)"},
 	{name: "/refresh", description: "reload the model list from the server"},
@@ -567,6 +569,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m.updateKey(msg)
 	case tea.MouseWheelMsg:
+		if m.sessionPickerMode {
+			vp, _ := m.sessionVp.Update(msg)
+			m.sessionVp = vp
+			return m, nil
+		}
 		if m.pickerMode {
 			vp, _ := m.pickerVp.Update(msg)
 			m.pickerVp = vp
@@ -578,6 +585,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseClickMsg:
 		return m.mousePress(msg)
 	case tea.MouseMotionMsg:
+		if m.sessionPickerMode {
+			m.sessionHover = -1
+			if idx, ok := m.sessionIndexAtScreenY(msg.Mouse().Y); ok {
+				m.sessionHover = idx
+			}
+			return m.refreshSessionHover(), nil
+		}
 		if m.selection.dragging {
 			return m.updateTextSelection(msg), nil
 		}
