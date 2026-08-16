@@ -44,7 +44,7 @@ const (
 	minLeftPane   = 4
 	maxLeftPane   = 24
 	minRightPane  = 8
-	pickerMaxRows = 12
+	pickerMaxRows = 16
 
 	// titleBlockRows are the fixed rows above the transcript: the title
 	// line and one blank line.
@@ -53,9 +53,6 @@ const (
 	centerDiv = 2
 	// paneDivider is the width of the " │ " separator between panes.
 	paneDivider = 3
-	// listInsetRows is the picker list offset below the card top border
-	// (border + header row).
-	listInsetRows = 2
 	// pickerVpMinWidth is the floor for the picker list viewport.
 	pickerVpMinWidth = 12
 	// slashQueryMinWidth is the floor for the slash menu query row.
@@ -77,11 +74,13 @@ const (
 	percentBase = 100
 	// paneCount is the number of overlay columns (left, divider, right).
 	paneCount = 3
-	// pickerFixedRows are the card rows outside the list (borders, header,
-	// footer) that reduce the available list height.
-	pickerFixedRows   = 7
-	pickerKindModel   = "model"
-	pickerKindVariant = "variant"
+	// pickerFixedRows are the session-card rows outside the list (borders,
+	// header, footer) that reduce the available list height.
+	pickerFixedRows = 7
+	// pickerDrawerChrome is the models-drawer header and filter rows.
+	pickerDrawerChrome = 2
+	pickerKindModel    = "model"
+	pickerKindVariant  = "variant"
 	// pulseInterval and pulseSteps drive the thinking glow.
 	pulseInterval = 90 * time.Millisecond
 	pulseSteps    = 100
@@ -317,6 +316,12 @@ func New(opts Options) Model {
 		transcript:          viewport.New(viewport.WithWidth(defaultWidth-1), viewport.WithHeight(defaultHeight-chromeLines)),
 		prompt:              newPromptArea(defaultWidth),
 	}
+	if m.cachePath != "" {
+		if infos, _, err := modelscache.Load(m.cachePath, time.Now(), 0); err == nil && len(infos) > 0 {
+			m.modelInfos = infos
+			m.models = modelscache.IDs(infos)
+		}
+	}
 	if m.session != nil && m.store != nil {
 		m.model = m.session.Model
 		if m.session.Variant != nil {
@@ -383,6 +388,7 @@ func toCacheInfos(infos []opencode.ModelInfo) []modelscache.Info {
 	for _, info := range infos {
 		row := modelscache.Info{
 			ID:             info.ID,
+			Provider:       info.Provider,
 			Endpoint:       info.Endpoint,
 			Context:        info.Context,
 			InputPerM:      info.InputPerM,
@@ -394,6 +400,9 @@ func toCacheInfos(infos []opencode.ModelInfo) []modelscache.Info {
 		}
 		if modelscache.IsFree(row) {
 			row.Free = true
+		}
+		if row.Provider == "" {
+			row.Provider = modelscache.ProviderFromEndpoint(row.Endpoint, row.ID)
 		}
 		out = append(out, row)
 	}
@@ -440,6 +449,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.models = msg.list
 		if len(msg.infos) > 0 {
 			m.modelInfos = msg.infos
+			m.recomputeSessionCost()
 		}
 		m.modelsCached = msg.fromCache
 		if msg.err != nil {
@@ -777,6 +787,9 @@ func (m Model) chromeHeight() int {
 	h := lipgloss.Height(m.headerView()) + 1 + lipgloss.Height(m.promptLine())
 	if m.slashMode {
 		h += 1 + lipgloss.Height(m.slashView())
+	}
+	if m.pickerMode {
+		h += 1 + lipgloss.Height(m.pickerView())
 	}
 	if m.err != "" {
 		h += lipgloss.Height(errStyle.Width(max(minPaneWidth, m.width)).Render(m.err))

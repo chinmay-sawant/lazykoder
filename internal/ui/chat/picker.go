@@ -12,57 +12,53 @@ import (
 )
 
 func (m Model) pickerVPHeight() int {
-	available := max(minPaneHeight, m.height*70/percentBase-pickerFixedRows)
+	reserved := lipgloss.Height(m.headerView()) + 1 + lipgloss.Height(m.promptLine()) + pickerDrawerChrome + 1
+	if m.err != "" {
+		reserved += lipgloss.Height(errStyle.Width(max(minPaneWidth, m.width)).Render(m.err))
+	}
+	reserved += minPaneHeight
+	available := max(minPaneHeight, m.height-reserved)
 	return min(max(minPaneHeight, len(m.pickerItems)), min(pickerMaxRows, available))
 }
 
-// pickerView renders the model settings card with a label rail on the left,
-// the selectable model list on the right, and a filter prompt at the bottom.
-func (m Model) pickerView() string {
-	cardW := m.overlayWidth()
-	innerW := max(minPaneWidth, cardW-cardBorder)
-	leftW, rightW := splitPaneWidths(innerW)
+func (m Model) pickerDrawerWidth() int {
+	return max(minPaneWidth, m.width-cardBorder)
+}
 
-	current := m.pickerSelectedLabel()
-	kindLabel := "MODEL"
-	rightTitle := "AVAILABLE MODELS"
+// pickerView renders the model list as a full-width drawer above the prompt,
+// matching the slash command menu.
+func (m Model) pickerView() string {
+	cardW := m.pickerDrawerWidth()
+	kind := "models"
 	if m.pickerKind == pickerKindVariant {
-		kindLabel = "VARIANT"
-		rightTitle = "AVAILABLE VARIANTS"
+		kind = "variants"
 	}
-	left := lipgloss.NewStyle().Width(leftW).Render(strings.Join([]string{
-		lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Render(kindLabel),
-		hintStyle.Render("Selected"),
-		current,
-	}, "\n"))
+	header := hintStyle.Render(kind+"  ·  ") + m.pickerSelectedLabel()
+	if lipgloss.Width(header) > cardW {
+		header = truncateRunes(header, cardW)
+	}
 
 	vpH := m.pickerVPHeight()
-	rightHeader := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Render(rightTitle)
-	rightBody := ""
-	if m.modelsErr != "" {
-		rightBody = errStyle.Render("models unavailable: " + m.modelsErr)
+	body := ""
+	if m.modelsErr != "" && m.pickerKind != pickerKindVariant {
+		body = errStyle.Render("models unavailable: " + m.modelsErr)
 	} else if len(m.pickerItems) == 0 {
 		if m.pickerKind == pickerKindVariant {
 			if len(m.pickerSource()) == 0 {
-				rightBody = hintStyle.Render("no variants for this model")
+				body = hintStyle.Render("no variants for this model")
 			} else {
-				rightBody = hintStyle.Render("no variants match \"" + m.pickerFilter + "\"")
+				body = hintStyle.Render("no variants match \"" + m.pickerFilter + "\"")
 			}
 		} else if len(m.models) == 0 {
-			rightBody = hintStyle.Render("no models loaded")
+			body = hintStyle.Render("no models loaded")
 		} else {
-			rightBody = hintStyle.Render("no models match \"" + m.pickerFilter + "\"")
+			body = hintStyle.Render("no models match \"" + m.pickerFilter + "\"")
 		}
 	} else {
 		vpW := m.pickerVp.Width()
-		rightBody = withScrollbar(m.pickerVp.View(), vpW, vpH,
+		body = withScrollbar(m.pickerVp.View(), vpW, vpH,
 			m.pickerVp.ScrollPercent(), m.pickerVp.TotalLineCount() > vpH)
 	}
-	right := lipgloss.NewStyle().Width(rightW).Render(
-		lipgloss.JoinVertical(lipgloss.Left, rightHeader, rightBody),
-	)
-	divider := lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" │ ")
-	body := lipgloss.JoinHorizontal(lipgloss.Top, left, divider, right)
 
 	filter := "filter /  •  r refresh  •  enter select  •  esc cancel"
 	if m.pickerFiltering {
@@ -70,56 +66,10 @@ func (m Model) pickerView() string {
 	} else if m.pickerFilter != "" {
 		filter = "filter: " + m.pickerFilter + "  •  enter select"
 	}
-	footer := hintStyle.Width(innerW).Render(filter)
-	content := lipgloss.JoinVertical(lipgloss.Left,
-		pickerHeaderFor(m.pickerKind, innerW),
-		body,
-		footer,
+	footer := hintStyle.Width(cardW).Render(filter)
+	return lipgloss.NewStyle().Width(cardW).Render(
+		lipgloss.JoinVertical(lipgloss.Left, header, body, footer),
 	)
-
-	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("8")).
-		Width(cardW).
-		Render(content)
-}
-
-func pickerHeaderFor(kind string, width int) string {
-	title := " SETTINGS  /  MODEL"
-	if kind == pickerKindVariant {
-		title = " SETTINGS  /  VARIANT"
-	}
-	return pickerHeaderTitle(width, title)
-}
-
-func pickerHeaderTitle(width int, title string) string {
-	if lipgloss.Width(title)+1 > width {
-		if strings.Contains(title, "VARIANT") {
-			title = " SETTINGS / VARIANT"
-		} else {
-			title = " SETTINGS / MODEL"
-		}
-	}
-	return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Width(width).Render(
-		title + strings.Repeat(" ", max(0, width-lipgloss.Width(title)-1)) + "X",
-	)
-}
-
-func (m Model) pickerCloseRect() (x, y int, ok bool) {
-	if !m.pickerMode {
-		return 0, 0, false
-	}
-	card := m.pickerView()
-	cardW, cardH := lipgloss.Width(card), lipgloss.Height(card)
-	left := max(0, (m.width-cardW)/centerDiv)
-	top := max(0, (m.height-cardH)/centerDiv)
-	// The close marker sits one row below the top border and two columns
-	// from the right border.
-	return left + cardW - cardBorder, top + 1, true
-}
-
-func (m Model) pickerScreen() string {
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, m.pickerView())
 }
 
 // pickerContent renders the filtered model list with the cursor marker.
@@ -131,10 +81,9 @@ func (m Model) pickerContent(width int) string {
 		if i > 0 {
 			b.WriteString("\n")
 		}
-		label := m.pickerItemLabel(id)
-		line := "  " + label
+		line := m.pickerRow(id, i == m.pickerCursor, width)
 		if i == m.pickerCursor {
-			b.WriteString(sel.Render("▸ " + label))
+			b.WriteString(sel.Render(line))
 			continue
 		}
 		b.WriteString(normal.Render(line))
@@ -142,10 +91,32 @@ func (m Model) pickerContent(width int) string {
 	return b.String()
 }
 
+func (m Model) pickerRow(id string, selected bool, width int) string {
+	prefix := "  "
+	if selected {
+		prefix = "▸ "
+	}
+	left := prefix + m.pickerItemLabel(id)
+	if m.pickerKind == pickerKindVariant {
+		return left
+	}
+	right := modelscache.ProviderOf(m.modelInfos, id)
+	if right == "" {
+		return left
+	}
+	gap := width - lipgloss.Width(left) - lipgloss.Width(right)
+	if gap < 1 {
+		left = truncateRunes(left, max(4, width-lipgloss.Width(right)-1))
+		gap = width - lipgloss.Width(left) - lipgloss.Width(right)
+	}
+	if gap < 1 {
+		gap = 1
+	}
+	return left + strings.Repeat(" ", gap) + right
+}
+
 func (m Model) resizePicker() Model {
-	innerW := max(minPaneWidth, m.overlayWidth()-cardBorder)
-	_, rightW := splitPaneWidths(innerW)
-	vpW := max(pickerVpMinWidth, rightW-1)
+	vpW := max(pickerVpMinWidth, m.pickerDrawerWidth()-1)
 	m.pickerVp.SetWidth(vpW)
 	m.pickerVp.SetHeight(m.pickerVPHeight())
 	return m
@@ -187,22 +158,7 @@ func (m Model) updatePickerKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.pickerFiltering = true
 		return m, nil
 	case tea.KeyEnter:
-		if m.pickerBuilt && len(m.pickerItems) > 0 && m.pickerCursor < len(m.pickerItems) {
-			if m.pickerKind == pickerKindVariant {
-				m.variant = m.pickerItems[m.pickerCursor]
-				m.syncSessionVariant()
-				m.pickerMode = false
-				return m, m.persistVariant()
-			}
-			m.model = m.pickerItems[m.pickerCursor]
-			if !modelscache.HasVariant(m.modelInfos, m.model, m.variant) {
-				m.variant = ""
-			}
-			m.syncSessionVariant()
-			m.pickerMode = false
-			return m, m.persistSelection()
-		}
-		return m, nil
+		return m.selectPickerItem(m.pickerCursor)
 	case 'j', tea.KeyDown:
 		if m.pickerCursor < len(m.pickerItems)-1 {
 			m.pickerCursor++
@@ -223,6 +179,25 @@ func (m Model) updatePickerKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m, nil
 	}
 	return m, nil
+}
+
+func (m Model) selectPickerItem(idx int) (Model, tea.Cmd) {
+	if !m.pickerBuilt || idx < 0 || idx >= len(m.pickerItems) {
+		return m, nil
+	}
+	if m.pickerKind == pickerKindVariant {
+		m.variant = m.pickerItems[idx]
+		m.syncSessionVariant()
+		m.pickerMode = false
+		return m, m.persistVariant()
+	}
+	m.model = m.pickerItems[idx]
+	if !modelscache.HasVariant(m.modelInfos, m.model, m.variant) {
+		m.variant = ""
+	}
+	m.syncSessionVariant()
+	m.pickerMode = false
+	return m, m.persistSelection()
 }
 
 func (m Model) closePicker() Model {
@@ -247,7 +222,9 @@ func (m *Model) applyFilter() {
 	m.pickerItems = nil
 	needle := strings.ToLower(m.pickerFilter)
 	for _, id := range m.pickerSource() {
+		provider := strings.ToLower(modelscache.ProviderOf(m.modelInfos, id))
 		if needle == "" || strings.Contains(strings.ToLower(id), needle) ||
+			strings.Contains(provider, needle) ||
 			(needle == "free" && modelscache.IsFree(modelscache.Info{ID: id})) {
 			m.pickerItems = append(m.pickerItems, id)
 		}

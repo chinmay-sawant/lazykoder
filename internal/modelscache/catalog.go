@@ -109,8 +109,10 @@ func liveInfo(id string, m liveModel, provider string) Info {
 	switch provider {
 	case "opencode-go":
 		info.Endpoint = catalogGoChatURL
+		info.Provider = ProviderOpenCodeGo
 	case "opencode":
 		info.Endpoint = catalogZenChatURL
+		info.Provider = ProviderOpenCodeZen
 	}
 	if m.Cost != nil {
 		info.InputPerM = m.Cost.Input
@@ -148,8 +150,8 @@ func effortVariants(opts []liveReasonOption) []string {
 	return out
 }
 
-// MergeLive copies missing context, prices, variants, and endpoint from
-// the live catalog row. Existing non-zero API values are kept.
+// MergeLive copies missing context, prices, variants, endpoint, and
+// provider from the live catalog row. Existing non-zero API values are kept.
 func MergeLive(info Info, live map[string]Info) Info {
 	fb, ok := live[info.ID]
 	if !ok {
@@ -178,6 +180,9 @@ func MergeLive(info Info, live map[string]Info) Info {
 	}
 	if info.Endpoint == "" && fb.Endpoint != "" {
 		info.Endpoint = fb.Endpoint
+	}
+	if info.Provider == "" && fb.Provider != "" {
+		info.Provider = fb.Provider
 	}
 	if fb.Free || isFreeID(info.ID) {
 		info.Free = true

@@ -22,11 +22,6 @@ func (m Model) mousePress(msg tea.MouseClickMsg) (Model, tea.Cmd) {
 			return m.openPicker(), nil
 		}
 	}
-	if m.pickerMode {
-		if x, y, ok := m.pickerCloseRect(); ok && mu.X == x && mu.Y == y {
-			return m.closePicker(), nil
-		}
-	}
 	for _, target := range []int{0, 1} {
 		if m.dragTarget == 1 && target == 0 {
 			continue
@@ -43,6 +38,11 @@ func (m Model) mousePress(msg tea.MouseClickMsg) (Model, tea.Cmd) {
 		m.dragTarget = target
 		m.dragOn = true
 		return m, nil
+	}
+	if mu.Button == tea.MouseLeft && m.pickerMode {
+		if idx, ok := m.pickerIndexAtScreenY(mu.Y); ok {
+			return m.selectPickerItem(idx)
+		}
 	}
 	if mu.Button == tea.MouseLeft && m.slashMode {
 		if idx, ok := m.slashIndexAtScreenY(mu.Y); ok {
@@ -213,6 +213,23 @@ func (m Model) slashIndexAtScreenY(y int) (int, bool) {
 		return -1, false
 	}
 	return inner, true
+}
+
+// pickerIndexAtScreenY maps a screen row to a visible model in the drawer.
+func (m Model) pickerIndexAtScreenY(y int) (int, bool) {
+	if !m.pickerMode || len(m.pickerItems) == 0 {
+		return -1, false
+	}
+	top := m.pickerDrawerTop() + 1
+	visible := y - top
+	if visible < 0 || visible >= m.pickerVPHeight() {
+		return -1, false
+	}
+	idx := visible + m.pickerVp.YOffset()
+	if idx < 0 || idx >= len(m.pickerItems) {
+		return -1, false
+	}
+	return idx, true
 }
 
 func (m Model) updateTextSelection(msg tea.MouseMotionMsg) Model {

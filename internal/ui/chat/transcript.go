@@ -128,18 +128,11 @@ func (m *Model) applyUsage(p db.Part) {
 	if total > m.tokensUsed {
 		m.tokensUsed = total
 	}
-	var hit, written int64
+	var hit int64
 	if p.TokensCacheRead != nil {
 		hit = *p.TokensCacheRead
 	}
-	if p.TokensCacheWrite != nil {
-		written = *p.TokensCacheWrite
-	}
-	if in > 0 || out > 0 || hit > 0 || written > 0 {
-		m.addCost(in, out, hit, written)
-	} else if total > 0 {
-		m.addCost(0, total, 0, 0)
-	}
+	m.addStepCost(p)
 
 	miss := cacheMissTokens(in, hit)
 	if hit > 0 {
@@ -163,6 +156,59 @@ func (m *Model) applyUsage(p db.Part) {
 func (m *Model) bumpTokenFloor() {
 	if est := estimateTokens(m.items); est > m.tokensUsed {
 		m.tokensUsed = est
+	}
+}
+
+func (m *Model) addStepCost(p db.Part) {
+	if p.Cost != nil && *p.Cost > 0 {
+		m.sessionCost += *p.Cost
+		return
+	}
+	var in, out, total, hit, written int64
+	if p.TokensInput != nil {
+		in = *p.TokensInput
+	}
+	if p.TokensOutput != nil {
+		out = *p.TokensOutput
+	}
+	if p.TokensTotal != nil {
+		total = *p.TokensTotal
+	}
+	if p.TokensCacheRead != nil {
+		hit = *p.TokensCacheRead
+	}
+	if p.TokensCacheWrite != nil {
+		written = *p.TokensCacheWrite
+	}
+	if in > 0 || out > 0 || hit > 0 || written > 0 {
+		m.addCost(in, out, hit, written)
+		return
+	}
+	if total > 0 {
+		m.addCost(0, total, 0, 0)
+	}
+}
+
+func (m *Model) recomputeSessionCost() {
+	if m.store == nil || m.session == nil || len(m.modelInfos) == 0 {
+		return
+	}
+	m.sessionCost = 0
+	ctx := context.Background()
+	msgs, err := m.store.ListMessages(ctx, m.session.ID)
+	if err != nil {
+		return
+	}
+	for _, msg := range msgs {
+		parts, err := m.store.ListParts(ctx, msg.ID)
+		if err != nil {
+			continue
+		}
+		for _, p := range parts {
+			if p.Type == "step-finish" {
+				m.addStepCost(p)
+			}
+		}
 	}
 }
 

@@ -18,6 +18,10 @@ const (
 	defaultBaseURL = "https://opencode.ai/zen/go/v1"
 	defaultModel   = "deepseek-v4-flash"
 
+	// Must match modelscache.ProviderOpenCodeGo / ProviderOpenCodeZen.
+	providerGo  = "opencode go"
+	providerZen = "opencode zen"
+
 	// maxResponseBytes caps how much of a chat response body is read.
 	maxResponseBytes = 64 << 20
 	// maxErrorBodyLen caps how much of an error body is echoed in errors.
@@ -378,6 +382,7 @@ func (c *Client) chatURL(req ChatRequest) string {
 // ModelInfo is one entry from GET /models.
 type ModelInfo struct {
 	ID             string
+	Provider       string
 	Endpoint       string // full chat-completions URL for this model
 	Context        int
 	InputPerM      float64
@@ -431,6 +436,7 @@ func (c *Client) ModelInfos(ctx context.Context) ([]ModelInfo, error) {
 		}
 		info := m.info()
 		info.Endpoint = endpoint
+		info.Provider = providerGo
 		out = append(out, info)
 	}
 	return out, nil
@@ -470,6 +476,7 @@ func (c *Client) FreeModelInfos(ctx context.Context) ([]ModelInfo, error) {
 		}
 		info := m.info()
 		info.Endpoint = endpoint
+		info.Provider = providerZen
 		out = append(out, info)
 	}
 	return out, nil

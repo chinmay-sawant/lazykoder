@@ -18,9 +18,6 @@ func (m Model) View() tea.View {
 	if m.quitConfirm {
 		return m.newView(m.quitScreen())
 	}
-	if m.pickerMode {
-		return m.newView(m.pickerScreen())
-	}
 	if m.sessionPickerMode {
 		return m.newView(m.sessionPickerScreen())
 	}
@@ -63,6 +60,10 @@ func (m Model) chatScreen() string {
 	b.WriteString("\n")
 	if m.slashMode {
 		b.WriteString(m.slashView())
+		b.WriteString("\n")
+	}
+	if m.pickerMode {
+		b.WriteString(m.pickerView())
 		b.WriteString("\n")
 	}
 	if m.err != "" {
@@ -177,7 +178,7 @@ func (m Model) modelContextLabel() string {
 	if m.cacheHit > 0 || m.cacheMiss > 0 {
 		label = label + "  " + formatCache(m.cacheHit, m.cacheMiss)
 	}
-	if m.sessionCost > 0 {
+	if m.tokensUsed > 0 || m.cacheHit > 0 || m.cacheMiss > 0 || m.sessionCost > 0 {
 		label = label + "  " + formatCost(m.sessionCost)
 	}
 	if m.tokensPerSec > 0 {
@@ -191,6 +192,9 @@ func formatCache(hit, miss int64) string {
 }
 
 func formatCost(usd float64) string {
+	if usd <= 0 {
+		return "$0.00"
+	}
 	if usd < 0.01 {
 		return fmt.Sprintf("$%.4f", usd)
 	}
@@ -220,6 +224,9 @@ func (m Model) transcriptRenderHeight() int {
 	fixedRows := lipgloss.Height(m.headerView()) + 1 + lipgloss.Height(m.promptLine())
 	if m.slashMode {
 		fixedRows += 1 + lipgloss.Height(m.slashView())
+	}
+	if m.pickerMode {
+		fixedRows += 1 + lipgloss.Height(m.pickerView())
 	}
 	if m.err != "" {
 		fixedRows += lipgloss.Height(errStyle.Width(max(minPaneWidth, m.width)).Render(m.err))
@@ -358,14 +365,17 @@ func (m Model) scrollbarRect(target int) (top, bottom, col int, ok bool) {
 	if len(m.pickerItems) <= vpH {
 		return 0, 0, 0, false
 	}
-	card := m.pickerView()
-	cardTop := max(0, (m.height-lipgloss.Height(card))/centerDiv)
-	cardLeft := max(0, (m.width-lipgloss.Width(card))/centerDiv)
-	innerW := max(minPaneWidth, m.overlayWidth()-cardBorder)
-	leftW, _ := splitPaneWidths(innerW)
-	listTop := cardTop + listInsetRows
-	listCol := cardLeft + 1 + leftW + paneDivider + m.pickerVp.Width()
+	listTop := m.pickerDrawerTop() + 1
+	listCol := min(m.width-1, m.pickerDrawerWidth())
 	return listTop, listTop + vpH, listCol, true
+}
+
+func (m Model) pickerDrawerTop() int {
+	top := m.transcriptTop() + m.transcriptRenderHeight() + 1
+	if m.slashMode {
+		top += 1 + lipgloss.Height(m.slashView())
+	}
+	return top
 }
 
 // withScrollbar appends a scrollbar column at the right edge of a rendered

@@ -62,6 +62,9 @@ func TestParseModelsDevReadsPricesAndVariants(t *testing.T) {
 	if glm.Endpoint != catalogGoChatURL {
 		t.Fatalf("glm endpoint = %q, want go chat URL", glm.Endpoint)
 	}
+	if free.Provider != ProviderOpenCodeZen || glm.Provider != ProviderOpenCodeGo {
+		t.Fatalf("providers = %q / %q", free.Provider, glm.Provider)
+	}
 }
 
 func TestMergeLiveFillsMissingOnly(t *testing.T) {

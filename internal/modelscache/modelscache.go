@@ -20,10 +20,17 @@ const DefaultTTL = 15 * time.Minute
 // responses, so it is not world-readable.
 const cacheMode = 0o600
 
+// Known OpenCode provider labels stored on each model row.
+const (
+	ProviderOpenCodeGo  = "opencode go"
+	ProviderOpenCodeZen = "opencode zen"
+)
+
 // Info is one cached model: context window, USD per million tokens,
 // selectable reasoning variants, and the chat-completions endpoint to call.
 type Info struct {
 	ID             string   `json:"id"`
+	Provider       string   `json:"provider,omitempty"`
 	Endpoint       string   `json:"endpoint,omitempty"`
 	Context        int      `json:"context,omitempty"`
 	InputPerM      float64  `json:"input_per_million"`
@@ -80,6 +87,34 @@ func EndpointOf(infos []Info, id string) string {
 	return ""
 }
 
+// ProviderOf returns the stored provider label for id, or a fallback
+// derived from the endpoint or free-model id.
+func ProviderOf(infos []Info, id string) string {
+	if info, ok := InfoOf(infos, id); ok && info.Provider != "" {
+		return info.Provider
+	}
+	if info, ok := InfoOf(infos, id); ok {
+		return ProviderFromEndpoint(info.Endpoint, id)
+	}
+	return ProviderFromEndpoint("", id)
+}
+
+// ProviderFromEndpoint maps a chat URL or free-model id to a provider label.
+func ProviderFromEndpoint(endpoint, id string) string {
+	switch {
+	case strings.Contains(endpoint, "/zen/go/"):
+		return ProviderOpenCodeGo
+	case strings.Contains(endpoint, "/zen/"):
+		return ProviderOpenCodeZen
+	case isFreeID(id):
+		return ProviderOpenCodeZen
+	case id != "":
+		return ProviderOpenCodeGo
+	default:
+		return ""
+	}
+}
+
 // InfoOf returns the cached row for id.
 func InfoOf(infos []Info, id string) (Info, bool) {
 	for _, m := range infos {
@@ -93,6 +128,9 @@ func InfoOf(infos []Info, id string) (Info, bool) {
 func markFree(info Info) Info {
 	if isFreeID(info.ID) {
 		info.Free = true
+	}
+	if info.Provider == "" {
+		info.Provider = ProviderFromEndpoint(info.Endpoint, info.ID)
 	}
 	return info
 }

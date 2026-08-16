@@ -759,6 +759,41 @@ func TestReplayRestoresCacheHitMiss(t *testing.T) {
 	}
 }
 
+func TestModelsMsgRestoresMissingSessionCost(t *testing.T) {
+	st := newTestStore(t)
+	sess, err := st.CreateSession(context.Background(), db.Session{Title: "t", Directory: t.TempDir(), Model: "deepseek-v4-flash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	am, err := st.InsertMessage(context.Background(), db.Message{SessionID: sess.ID, Role: "assistant"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	in, out := int64(1_000_000), int64(1_000_000)
+	if _, err := st.InsertPart(context.Background(), db.Part{
+		MessageID: am.ID, Type: "step-finish", TokensInput: &in, TokensOutput: &out, TokensTotal: ptrInt64(2_000_000),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	m := New(Options{Store: st, Client: deadClient(), Workdir: t.TempDir(), Session: &sess})
+	if m.sessionCost != 0 {
+		t.Fatalf("sessionCost = %v, want 0 before model prices load", m.sessionCost)
+	}
+	mm, _ := m.Update(modelsMsg{list: []string{"deepseek-v4-flash"}, infos: []modelscache.Info{{
+		ID: "deepseek-v4-flash", InputPerM: 0.14, OutputPerM: 0.28,
+	}}})
+	m = mm.(Model)
+	if m.sessionCost < 0.4 || m.sessionCost > 0.45 {
+		t.Fatalf("sessionCost = %v, want ~0.42 after models load", m.sessionCost)
+	}
+	mm, _ = m.Update(tea.WindowSizeMsg{Width: 140, Height: 24})
+	m = mm.(Model)
+	v := stripANSI(viewText(m))
+	if !strings.Contains(v, "$0.420") && !strings.Contains(v, "$0.42") {
+		t.Fatalf("footer missing restored cost: %q", v)
+	}
+}
+
 func TestCacheMissTokens(t *testing.T) {
 	if got := cacheMissTokens(68790, 68000); got != 790 {
 		t.Fatalf("included cache: miss = %d, want 790", got)
@@ -942,6 +977,48 @@ func TestComposerShowsCost(t *testing.T) {
 	v := stripANSI(viewText(m))
 	if !strings.Contains(v, "$0.420") && !strings.Contains(v, "$0.42") {
 		t.Fatalf("footer missing session cost: %q", v)
+	}
+}
+
+func TestComposerShowsZeroCostAfterUsage(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	m.model = "deepseek-v4-flash-free"
+	m.modelInfos = []modelscache.Info{{ID: "deepseek-v4-flash-free", Free: true, Context: 200000}}
+	in, miss := int64(511), int64(397)
+	m.applyPart(db.Part{Type: "step-finish", TokensInput: &in, TokensTotal: &in, TokensCacheRead: ptrInt64(0)})
+	m.cacheMiss = miss
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
+	m = mm.(Model)
+	v := stripANSI(viewText(m))
+	if !strings.Contains(v, "hit 0") || !strings.Contains(v, "miss 397") {
+		t.Fatalf("footer missing cache counts: %q", v)
+	}
+	if !strings.Contains(v, "$0.00") {
+		t.Fatalf("footer missing zero cost after usage: %q", v)
+	}
+}
+
+func TestApplyUsageEstimatesWhenStoredCostIsZero(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	m.model = "deepseek-v4-flash"
+	m.modelInfos = []modelscache.Info{{ID: "deepseek-v4-flash", InputPerM: 0.14, OutputPerM: 0.28}}
+	zero := 0.0
+	in, out := int64(1_000_000), int64(1_000_000)
+	m.applyPart(db.Part{Type: "step-finish", TokensInput: &in, TokensOutput: &out, TokensTotal: ptrInt64(2_000_000), Cost: &zero})
+	if m.sessionCost < 0.4 || m.sessionCost > 0.45 {
+		t.Fatalf("sessionCost = %v, want list-price estimate ~0.42", m.sessionCost)
+	}
+}
+
+func TestApplyUsagePrefersStoredCost(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	m.model = "deepseek-v4-flash-free"
+	m.modelInfos = []modelscache.Info{{ID: "deepseek-v4-flash-free", Free: true}}
+	cost := 0.15
+	in := int64(1000)
+	m.applyPart(db.Part{Type: "step-finish", TokensInput: &in, TokensTotal: &in, Cost: &cost})
+	if m.sessionCost < 0.149 || m.sessionCost > 0.151 {
+		t.Fatalf("sessionCost = %v, want stored API cost 0.15", m.sessionCost)
 	}
 }
 

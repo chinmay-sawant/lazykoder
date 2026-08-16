@@ -104,11 +104,13 @@ enter selects, `esc` cancels.
 
 ## Model picker
 
-`m` or `/model` opens a centered settings card sized to about 80% of the
-terminal width. The left rail labels the setting and shows the selected model;
-the right pane contains the fetched model list, including free OpenCode
-models. Navigation: `j`/`k` or arrows; `enter` selects, `esc`/`q` cancels.
-`/` enters model filtering and `r` refreshes the model list.
+`/model` or a click on the model status opens a full-width drawer above
+the prompt, the same place as the `/` command list. The drawer shows
+more rows than the slash menu so more models stay visible, including
+free OpenCode models. Each row shows the provider on the right
+(`opencode go` or `opencode zen`). Navigation: `j`/`k` or arrows;
+`enter` or a click selects, `esc`/`q` cancels. `/` enters model
+filtering (also by provider) and `r` refreshes the model list.
 
 `/variant` opens the same card for the current model's reasoning variants
 from `models.json`. The choice is stored in `sessions.variant` and sent

@@ -431,6 +431,9 @@ func TestModelInfosStampsGoEndpoint(t *testing.T) {
 	if len(infos) != 1 || infos[0].Endpoint != srv.URL+"/chat/completions" {
 		t.Fatalf("infos = %+v", infos)
 	}
+	if infos[0].Provider != providerGo {
+		t.Fatalf("go provider = %q", infos[0].Provider)
+	}
 }
 
 func TestFreeModelInfosStampsZenEndpointAndAuth(t *testing.T) {
@@ -475,6 +478,9 @@ func TestFreeModelInfosStampsZenEndpointAndAuth(t *testing.T) {
 	}
 	if zenModels[0].Endpoint != srv.URL+"/zen/v1/chat/completions" {
 		t.Fatalf("zen endpoint = %q", zenModels[0].Endpoint)
+	}
+	if zenModels[0].Provider != providerZen {
+		t.Fatalf("zen provider = %q", zenModels[0].Provider)
 	}
 }
 

@@ -116,12 +116,11 @@ func TestModelPickerFilter(t *testing.T) {
 		m = upd(m, tea.KeyPressMsg{Code: r, Text: string(r)})
 	}
 	v := stripANSI(viewText(m))
-	card := v[strings.Index(v, "╭"):]
 	if len(m.pickerItems) != 1 || m.pickerItems[0] != "claude-4" {
 		t.Errorf("filtered picker items = %v, want [claude-4]", m.pickerItems)
 	}
-	if !strings.Contains(card, "AVAILABLE MODELS") || !strings.Contains(card, "claude-4") {
-		t.Errorf("matching model missing: %q", card)
+	if !strings.Contains(v, "models  ·") || !strings.Contains(v, "claude-4") {
+		t.Errorf("matching model missing: %q", v)
 	}
 	if !strings.Contains(v, "filter: claude") {
 		t.Errorf("filter prompt missing query: %q", v)
@@ -158,13 +157,44 @@ func TestModelPickerFilterFree(t *testing.T) {
 	if !strings.Contains(v, "big-pickle  free") {
 		t.Fatalf("free label missing: %q", v)
 	}
+	if !strings.Contains(v, modelscache.ProviderOpenCodeZen) {
+		t.Fatalf("zen provider missing on the right: %q", v)
+	}
+}
+
+func TestModelPickerShowsProviderOnRight(t *testing.T) {
+	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
+	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
+	m.models = []string{"deepseek-v4-flash", "deepseek-v4-flash-free"}
+	m.modelInfos = []modelscache.Info{
+		{ID: "deepseek-v4-flash", Provider: modelscache.ProviderOpenCodeGo, Endpoint: "https://opencode.ai/zen/go/v1/chat/completions"},
+		{ID: "deepseek-v4-flash-free", Provider: modelscache.ProviderOpenCodeZen, Endpoint: "https://opencode.ai/zen/v1/chat/completions", Free: true},
+	}
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = mm.(Model)
+	m = clickModelStatus(t, m)
+	row := ""
+	for _, line := range strings.Split(stripANSI(m.pickerView()), "\n") {
+		if strings.Contains(line, "deepseek-v4-flash-free") {
+			row = line
+			break
+		}
+	}
+	if row == "" {
+		t.Fatal("free model row missing")
+	}
+	nameAt := strings.Index(row, "deepseek-v4-flash-free")
+	provAt := strings.Index(row, modelscache.ProviderOpenCodeZen)
+	if provAt < 0 || provAt < nameAt {
+		t.Fatalf("provider should sit to the right of the model name: %q", row)
+	}
 }
 
 func typeRune(m Model, r rune) Model {
 	return upd(m, tea.KeyPressMsg{Code: r, Text: string(r)})
 }
 
-func TestPickerCardCenteredSettingsLayout(t *testing.T) {
+func TestPickerDrawerSitsAbovePrompt(t *testing.T) {
 	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
 	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
 	p := newPump(t)
@@ -173,30 +203,35 @@ func TestPickerCardCenteredSettingsLayout(t *testing.T) {
 
 	m = clickModelStatus(t, m)
 	v := stripANSI(viewText(m))
-	card := stripANSI(m.pickerView())
-	if !strings.Contains(v, "SETTINGS  /  MODEL") || !strings.Contains(v, "AVAILABLE MODELS") {
-		t.Fatalf("settings card labels missing: %q", v)
+	if !strings.Contains(v, "models  ·") || !strings.Contains(v, "deepseek-v4-flash") {
+		t.Fatalf("drawer labels missing: %q", v)
 	}
-	if got, want := lipgloss.Width(card), m.width*cardWidthPct/100; got != want {
-		t.Errorf("card width = %d, want %d (%d%% of screen)", got, want, cardWidthPct)
+	if !strings.Contains(v, "lazykoder") || !strings.Contains(v, "enter send") {
+		t.Fatalf("chat chrome missing under the drawer: %q", v)
 	}
-	cardLine := strings.Index(strings.Split(v, "\n")[0], "╭")
-	if cardLine >= 0 {
-		t.Fatalf("card unexpectedly starts on the first screen row: %q", v)
+	drawer := stripANSI(m.pickerView())
+	if strings.Contains(drawer, "╭") {
+		t.Fatalf("drawer should not use a centered card border: %q", drawer)
 	}
-	for _, line := range strings.Split(v, "\n") {
-		if strings.Contains(line, "╭") {
-			wantLeft := (m.width - lipgloss.Width(card)) / 2
-			if got := strings.Index(line, "╭"); got != wantLeft {
-				t.Errorf("card left offset = %d, want %d: %q", got, wantLeft, line)
-			}
-			return
+	if got, want := lipgloss.Width(drawer), max(minPaneWidth, m.width-cardBorder); got != want {
+		t.Errorf("drawer width = %d, want %d", got, want)
+	}
+	lines := strings.Split(v, "\n")
+	drawerLine, promptLine := -1, -1
+	for i, line := range lines {
+		if drawerLine < 0 && strings.Contains(line, "models  ·") {
+			drawerLine = i
+		}
+		if strings.Contains(line, "ask lazykoder") || strings.Contains(line, "enter send") {
+			promptLine = i
 		}
 	}
-	t.Fatalf("card border missing: %q", v)
+	if drawerLine < 0 || promptLine < 0 || drawerLine >= promptLine {
+		t.Fatalf("drawer should sit above the prompt: drawer=%d prompt=%d\n%s", drawerLine, promptLine, v)
+	}
 }
 
-func TestPickerCloseButton(t *testing.T) {
+func TestPickerClosesWithEscAndQ(t *testing.T) {
 	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
 	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
 	p := newPump(t)
@@ -204,33 +239,15 @@ func TestPickerCloseButton(t *testing.T) {
 	m = p.runStep(m, p.next())
 
 	m = clickModelStatus(t, m)
-	v := stripANSI(viewText(m))
-	headerFound := false
-	for _, line := range strings.Split(v, "\n") {
-		if strings.Contains(line, "SETTINGS  /  MODEL") {
-			headerFound = true
-			if !strings.HasSuffix(strings.TrimSpace(line), "X│") {
-				t.Fatalf("settings card close button is not at the header edge: %q", line)
-			}
-		}
-	}
-	if !headerFound {
-		t.Fatalf("settings card header missing: %q", v)
-	}
-	x, y, ok := m.pickerCloseRect()
-	if !ok {
-		t.Fatal("picker close button rectangle not found")
-	}
-	mm, _ := m.Update(tea.MouseClickMsg(tea.Mouse{X: x, Y: y, Button: tea.MouseLeft}))
-	m = mm.(Model)
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyEscape})
 	if m.pickerMode {
-		t.Fatal("clicking the picker close button did not close the card")
+		t.Fatal("esc did not close the picker drawer")
 	}
 
 	m = clickModelStatus(t, m)
 	m = upd(m, tea.KeyPressMsg{Code: 'x'})
 	if m.pickerMode {
-		t.Fatal("x did not close the picker card")
+		t.Fatal("x did not close the picker drawer")
 	}
 }
 
@@ -294,18 +311,15 @@ func TestPickerCardFitsAndScrollbarDrags(t *testing.T) {
 	m = clickModelStatus(t, m)
 
 	v := stripANSI(viewText(m))
-	lines := strings.Split(v, "\n")
-	bottomBorder := -1
-	for i, line := range lines {
-		if strings.Contains(line, "╰") {
-			bottomBorder = i
-		}
+	drawer := stripANSI(m.pickerView())
+	if strings.Contains(drawer, "╭") || strings.Contains(drawer, "╰") {
+		t.Fatalf("drawer should not render a card border: %q", drawer)
 	}
-	if bottomBorder < 0 {
-		t.Fatalf("card bottom border missing: %q", v)
+	if lipgloss.Height(v) > 30 {
+		t.Errorf("screen height %d exceeds the 30-row window", lipgloss.Height(v))
 	}
-	if bottomBorder >= 30 {
-		t.Errorf("card bottom (%d) below the 30-row screen", bottomBorder)
+	if m.pickerVPHeight() < 13 {
+		t.Errorf("drawer list height = %d, want at least 13 visible rows", m.pickerVPHeight())
 	}
 
 	top, _, col, ok := m.scrollbarRect(1)
