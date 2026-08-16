@@ -13,7 +13,7 @@ Bubble Tea (charmbracelet) TUI agent harness written in Go. v0.0.1 supports
 OpenCode Go only. Project workspace is `.lazykoder/` in the current working
 directory. Small repo, small team: **one agent at a time, no subagent waves
 until the codebase grows**.
-Module: `github.com/chinmay-sawant/lazykoder` (renamed from `lazykoder` on 2026-08-15, and from the prototype module name before that). Default branch: `master`.
+Module: `github.com/chinmay-sawant/lazykoder`. GitHub repo: `https://github.com/chinmay-sawant/lazykoder`. Default branch: `master`.
 
 ## Golden rules (from the gowkhtmltopdf audit)
 

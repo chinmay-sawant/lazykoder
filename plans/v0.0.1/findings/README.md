@@ -32,7 +32,7 @@ Do not treat a rating as a checklist row. Close rows only with tests or a record
 
 Confirmed against the running binary and `.lazykoder/lazykoder.db`:
 
-1. Idle screen is the word `lazykoder`, ~20 blank rows, then a hint dump and a one-line prompt.
+1. Idle screen is the word `lazyKoder`, ~20 blank rows, then a hint dump and a one-line prompt.
 2. 35 sessions / 110 messages / 55 tool calls exist. Latest session is `ses_c7aafc6068d060aa` ("say hello world in the golang") with user + assistant + bash parts. The live transcript was empty.
 3. Every session row stores `directory = <cwd>/.lazykoder`. Startup looks up `ListSessionsByDir(cwd)`. Replay is implemented and misses every row.
 4. Typing `hel` then `q` killed `go run` and the dedicated tmux session. `internal/ui/chat/keys.go` handles `q` / `Q` before the prompt.

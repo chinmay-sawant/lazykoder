@@ -59,7 +59,7 @@ The current view is a data dump of the store: `user:` / `assistant:` / `reasonin
 
 - [x] Replaced `textinput` with Charm `textarea`. `enter` sends, `shift+enter` inserts a newline
 - [x] Prompt height grows with content up to 6 rows. Transcript shrinks with the prompt
-- [x] Placeholder is `ask lazykoder`
+- [x] Placeholder is `ask lazyKoder`
 - [x] Prompt undo, paste, history up/down, and double-esc clear still work
 - [x] Test: `shift+enter` grows the value with a newline and does not submit - `TestShiftEnterDoesNotSubmit`, exit 0
 - [x] Test: `enter` on `hello` still submits - `TestEmptyEnterIgnored` and submit tests green
