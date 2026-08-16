@@ -34,10 +34,10 @@ func isPrivateHost(host string) bool {
 	return false
 }
 
-// Run GETs an HTTP(S) URL, rejects private destinations for the default client,
-// and caps the response body at 5MB. A custom client is intended for tests or
-// callers with an explicit egress policy; redirects must still be validated by
-// that caller.
+// Run GETs an HTTP(S) URL, rejects local/private destinations (including every
+// redirect), and caps the response body at 5MB. The client may provide an
+// explicit transport (for example, a test transport); destination validation
+// is always applied and is never disabled for custom clients.
 func Run(ctx context.Context, urlStr, format string, client *http.Client) (Result, error) {
 	u, err := url.Parse(urlStr)
 	if err != nil {
@@ -49,9 +49,19 @@ func Run(ctx context.Context, urlStr, format string, client *http.Client) (Resul
 		return Result{}, fmt.Errorf("webfetch: unsupported scheme %q", u.Scheme)
 	}
 	if client == nil {
-		client = http.DefaultClient
+		client = &http.Client{}
 	}
-	if isPrivateHost(u.Hostname()) && client == http.DefaultClient {
+	previousRedirect := client.CheckRedirect
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if isPrivateHost(req.URL.Hostname()) {
+			return fmt.Errorf("webfetch: redirect to local or private host is not allowed")
+		}
+		if previousRedirect != nil {
+			return previousRedirect(req, via)
+		}
+		return nil
+	}
+	if isPrivateHost(u.Hostname()) {
 		return Result{}, fmt.Errorf("webfetch: local or private host is not allowed")
 	}
 	if format == "markdown" {

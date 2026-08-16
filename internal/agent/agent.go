@@ -66,6 +66,9 @@ type Options struct {
 	// BashAllowlist controls optional strict command allowlisting.
 	BashAllowlist        []string
 	BashAllowlistEnabled bool
+	// WebfetchClient is an explicit egress client, primarily for injected tests.
+	// Production leaves it nil, so webfetch uses its validated default client.
+	WebfetchClient *http.Client
 }
 
 // Agent runs user turns against a store and provider client.
@@ -699,12 +702,8 @@ func (a *Agent) execWebfetch(ctx context.Context, events chan<- Event, partID, t
 		msg := "invalid webfetch arguments: " + err.Error()
 		return a.updateTool(ctx, events, partID, title, tc, "error", &msg, errorJSON(msg), nil, nil)
 	}
-	res, err := webfetch.Run(ctx, args.URL, args.Format, &http.Client{CheckRedirect: func(req *http.Request, via []*http.Request) error {
-		if policy.PrivateOrLoopback(req.URL.Hostname()) {
-			return fmt.Errorf("webfetch: redirect to local or private host is not allowed")
-		}
-		return nil
-	}})
+	client := a.opts.WebfetchClient
+	res, err := webfetch.Run(ctx, args.URL, args.Format, client)
 	if err != nil {
 		return a.updateTool(ctx, events, partID, title, tc, "error", errOut(err), errorJSON(err.Error()), nil, nil)
 	}

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,6 +19,17 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/question"
 )
+
+type agentWebfetchTransport struct{ srv *httptest.Server }
+
+func (t agentWebfetchTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	copy := r.Clone(r.Context())
+	u := *copy.URL
+	target, _ := url.Parse(t.srv.URL)
+	u.Scheme, u.Host = target.Scheme, target.Host
+	copy.URL = &u
+	return t.srv.Client().Transport.RoundTrip(copy)
+}
 
 type wireMessage struct {
 	Role       string            `json:"role"`
@@ -281,7 +293,7 @@ func TestSendToolDispatch(t *testing.T) {
 	writeArgs, _ := json.Marshal(map[string]any{"filePath": "new.txt", "contents": "hello new"})
 	editArgs, _ := json.Marshal(map[string]any{"filePath": "fixture.txt", "oldString": "line one", "newString": "line uno"})
 	grepArgs, _ := json.Marshal(map[string]any{"pattern": "line two", "glob": "*.txt"})
-	webArgs, _ := json.Marshal(map[string]any{"url": webSrv.URL, "format": "text"})
+	webArgs, _ := json.Marshal(map[string]any{"url": "http://example.test/", "format": "text"})
 	qArgs, _ := json.Marshal(map[string]any{"questions": []any{
 		map[string]any{"question": "pick one?", "header": "choice", "options": []string{"alpha", "beta"}},
 	}})
@@ -300,7 +312,8 @@ func TestSendToolDispatch(t *testing.T) {
 	st, path := newTestEnv(t)
 	asks := 0
 	a := New(st, newClient(t, fake.srv), workdir, Options{
-		Confirm: func(policy.Decision, string) (bool, error) { return true, nil },
+		Confirm:        func(policy.Decision, string) (bool, error) { return true, nil },
+		WebfetchClient: &http.Client{Transport: agentWebfetchTransport{srv: webSrv}},
 		Ask: func(q question.Question) (int, error) {
 			asks++
 			return 1, nil

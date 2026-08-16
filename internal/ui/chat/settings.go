@@ -24,6 +24,8 @@ const (
 	settingsRowAgentsEnabled
 	settingsRowAgentsConcurrent
 	settingsRowAgentsChildSteps
+	settingsRowAllowlistEnabled
+	settingsRowAllowlist
 	settingsRowCount
 
 	// settingsCardChromeRows: top border, header, footer, bottom border.
@@ -125,6 +127,10 @@ func (m Model) settingsRows(innerW int) []string {
 	}
 	concurrentVal := fmt.Sprintf("◂ %d ▸", m.projectSettings.Agents.MaxConcurrent)
 	childStepsVal := fmt.Sprintf("◂ %d ▸", m.projectSettings.Agents.ChildMaxSteps)
+	allowlistVal := strings.Join(m.projectSettings.Agents.BashAllowlist, ", ")
+	if m.settingsEdit {
+		allowlistVal = m.settingsEditValue
+	}
 	return []string{
 		settingsKVRow(m.settingsCursor == settingsRowModel, "default model", "◂ "+modelVal+" ▸", innerW),
 		settingsKVRow(m.settingsCursor == settingsRowVariant, "default variant", "◂ "+variantVal+" ▸", innerW),
@@ -133,7 +139,16 @@ func (m Model) settingsRows(innerW int) []string {
 		settingsKVRow(m.settingsCursor == settingsRowAgentsEnabled, "sub-agents", "["+agentsOn+"]", innerW),
 		settingsKVRow(m.settingsCursor == settingsRowAgentsConcurrent, "max concurrent", concurrentVal, innerW),
 		settingsKVRow(m.settingsCursor == settingsRowAgentsChildSteps, "child max steps", childStepsVal, innerW),
+		settingsKVRow(m.settingsCursor == settingsRowAllowlistEnabled, "bash allowlist", "["+boolOn(m.projectSettings.Agents.BashAllowlistEnabled)+"]", innerW),
+		settingsKVRow(m.settingsCursor == settingsRowAllowlist, "allowed executables", allowlistVal, innerW),
 	}
+}
+
+func boolOn(on bool) string {
+	if on {
+		return "on"
+	}
+	return "off"
 }
 
 func settingsKVRow(selected bool, label, value string, width int) string {
@@ -155,6 +170,27 @@ func settingsKVRow(selected bool, label, value string, width int) string {
 }
 
 func (m Model) updateSettingsKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
+	if m.settingsEdit {
+		if key.Code == tea.KeyEscape {
+			m.settingsEdit = false
+			return m, nil
+		}
+		if key.Code == tea.KeyEnter {
+			m.settingsEdit = false
+			m.projectSettings.Agents.BashAllowlist = strings.Split(m.settingsEditValue, ",")
+			return m.persistSettings(), nil
+		}
+		if key.Code == tea.KeyBackspace {
+			if len(m.settingsEditValue) > 0 {
+				m.settingsEditValue = m.settingsEditValue[:len(m.settingsEditValue)-1]
+			}
+			return m, nil
+		}
+		if key.Text != "" {
+			m.settingsEditValue += key.Text
+		}
+		return m, nil
+	}
 	if key.Mod.Contains(tea.ModCtrl) && key.Code == 'c' {
 		return m.closeDone(), tea.Quit
 	}
@@ -209,8 +245,23 @@ func (m Model) activateSettingsRow() (Model, tea.Cmd) {
 		return m.setAgentsConcurrent(m.projectSettings.Agents.MaxConcurrent + 1), nil
 	case settingsRowAgentsChildSteps:
 		return m.setAgentsChildSteps(m.projectSettings.Agents.ChildMaxSteps + 1), nil
+	case settingsRowAllowlistEnabled:
+		return m.setAllowlistEnabled(!m.projectSettings.Agents.BashAllowlistEnabled), nil
+	case settingsRowAllowlist:
+		m.settingsEdit = true
+		m.settingsEditValue = strings.Join(m.projectSettings.Agents.BashAllowlist, ", ")
 	}
 	return m, nil
+}
+
+func (m Model) setAllowlistEnabled(on bool) Model {
+	m.projectSettings.Agents.BashAllowlistEnabled = on
+	return m.persistSettings()
+}
+
+func (m Model) setAllowlist(value string) Model {
+	m.projectSettings.Agents.BashAllowlist = strings.Split(value, ",")
+	return m.persistSettings()
 }
 
 func (m Model) adjustSettings(delta int) Model {
@@ -233,6 +284,14 @@ func (m Model) adjustSettings(delta int) Model {
 		return m.setAgentsConcurrent(m.projectSettings.Agents.MaxConcurrent + delta)
 	case settingsRowAgentsChildSteps:
 		return m.setAgentsChildSteps(m.projectSettings.Agents.ChildMaxSteps + delta)
+	case settingsRowAllowlistEnabled:
+		if delta != 0 {
+			return m.setAllowlistEnabled(!m.projectSettings.Agents.BashAllowlistEnabled)
+		}
+	case settingsRowAllowlist:
+		if delta != 0 {
+			m.settingsEdit = true
+		}
 	}
 	return m
 }
@@ -251,6 +310,11 @@ func (m Model) toggleSettingsRow() Model {
 		return m.setAgentsConcurrent(m.projectSettings.Agents.MaxConcurrent + 1)
 	case settingsRowAgentsChildSteps:
 		return m.setAgentsChildSteps(m.projectSettings.Agents.ChildMaxSteps + 1)
+	case settingsRowAllowlistEnabled:
+		return m.setAllowlistEnabled(!m.projectSettings.Agents.BashAllowlistEnabled)
+	case settingsRowAllowlist:
+		m.settingsEdit = true
+		m.settingsEditValue = strings.Join(m.projectSettings.Agents.BashAllowlist, ", ")
 	case settingsRowModel:
 		return m.cycleDefaultModel(1)
 	case settingsRowVariant:

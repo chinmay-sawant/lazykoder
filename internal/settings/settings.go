@@ -257,6 +257,20 @@ func (a Agents) normalized() Agents {
 		a.ChildMaxSteps = MaxMaxSteps
 	}
 	a.BashConfirm = strings.TrimSpace(a.BashConfirm)
+	var cleanAllowlist []string
+	if a.BashAllowlist != nil {
+		cleanAllowlist = make([]string, 0, len(a.BashAllowlist))
+	}
+	seenAllowlist := make(map[string]bool)
+	for _, item := range a.BashAllowlist {
+		item = strings.TrimSpace(item)
+		if item == "" || seenAllowlist[item] {
+			continue
+		}
+		seenAllowlist[item] = true
+		cleanAllowlist = append(cleanAllowlist, item)
+	}
+	a.BashAllowlist = cleanAllowlist
 	if a.BashConfirm != "parent" && a.BashConfirm != "deny" {
 		a.BashConfirm = "parent"
 	}

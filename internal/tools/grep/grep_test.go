@@ -96,3 +96,25 @@ func write(t *testing.T, root, rel, body string) {
 		t.Fatal(err)
 	}
 }
+
+func TestRunAbsoluteInsideAllowed(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "inside.txt", "needle\n")
+	res, err := Run(context.Background(), root, Options{Pattern: "needle", Path: filepath.Join(root, "inside.txt")}, nil)
+	if err != nil || !strings.Contains(res.Output, "needle") {
+		t.Fatalf("absolute inside should work: output=%q err=%v", res.Output, err)
+	}
+}
+
+func TestRunSymlinkEscapeNested(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	write(t, outside, "target.txt", "needle\n")
+	if err := os.Symlink(outside, filepath.Join(root, "link")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	_, err := Run(context.Background(), root, Options{Pattern: "needle", Path: "link"}, nil)
+	if err == nil || !strings.Contains(err.Error(), "escapes") {
+		t.Fatalf("want symlink escape rejection, got %v", err)
+	}
+}

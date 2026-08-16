@@ -228,3 +228,29 @@ func TestDiffCap(t *testing.T) {
 		t.Errorf("diff = %q, want truncation note", got)
 	}
 }
+
+func TestRunSymlinkEscapeNested(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	target := filepath.Join(outside, "target.txt")
+	writeFile(t, outside, "target.txt", "old")
+	if err := os.Symlink(outside, filepath.Join(root, "link")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	_, err := Run("link/target.txt", "old", "new", root)
+	if err == nil || !strings.Contains(err.Error(), "escapes") {
+		t.Fatalf("want symlink escape rejection, got %v", err)
+	}
+	got, readErr := os.ReadFile(target)
+	if readErr != nil || string(got) != "old" {
+		t.Fatalf("outside file changed: %q err=%v", got, readErr)
+	}
+}
+
+func TestRunAbsoluteInsideAllowed(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "absolute.txt", "old")
+	if _, err := Run(filepath.Join(root, "absolute.txt"), "old", "new", root); err != nil {
+		t.Fatalf("absolute inside should work: %v", err)
+	}
+}
