@@ -15,9 +15,32 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
 
+const composerFooterDetailGap = 2
+
 const (
-	maxDisplayTPS = 99.9
-	minWholeTPS   = 10
+	minWholeTPS = 10
+	tpsKilo     = 1000
+	tpsTenKilo  = 10_000
+)
+
+// View layout quantities. Names follow each use site so semantically distinct
+// values that happen to be equal are not collapsed into one const.
+const (
+	percent         = 100  // percentage scale (100%)
+	tipsMinWidth    = 100  // min terminal width to show rotating tips
+	twoColMinWidth  = 100  // min terminal width for the two-column keys layout
+	minCentDisplay  = 0.01 // smallest USD to print with 4 decimals
+	overlayMaxW     = 64   // max inner width of the keys overlay
+	overlayColMin   = 28   // min column width in the two-column keys layout
+	minAvailW       = 8    // min header space before dropping title onto row 2
+	cardHorzPad     = 2    // horizontal card padding
+	cardBorderPad   = 4    // two card-border columns on each side
+	footerChipMin   = 4    // min budget left before truncating a footer chip
+	footerBudgetMin = 4    // min budget for the footer row
+	footerStatGap   = 2    // gap between a footer chip and its stats
+	layoutHalf      = 2    // halving divisor
+	twoColPad       = 2    // space reserved between the two key columns
+	keyColPad       = 2    // gap around a key label in the keys overlay
 )
 
 // View renders the picker card, slash menu, confirm overlay, or the chat layout.
@@ -251,7 +274,7 @@ func (m Model) alertRow() string {
 	w := max(minPaneWidth, m.width)
 	row := strings.Repeat(" ", w)
 	if m.jumpBarVisible() {
-		row = spliceDisplay(row, lipgloss.NewStyle().Faint(true).Render(jumpDownArrow), w/2)
+		row = spliceDisplay(row, lipgloss.NewStyle().Faint(true).Render(jumpDownArrow), w/layoutHalf)
 	}
 	if alert := m.alertText(); alert != "" {
 		row = spliceDisplay(row, alert, max(0, w-lipgloss.Width(alert)))
@@ -280,7 +303,7 @@ func (m Model) tipsVisible() bool {
 	if m.busy || m.quitConfirm || m.copyNotice != "" {
 		return false
 	}
-	if m.width < 100 {
+	if m.width < tipsMinWidth {
 		return false
 	}
 	return m.promptEditing()
@@ -309,7 +332,7 @@ func (m Model) composerTop() int {
 }
 
 func (m Model) composerBlock() string {
-	if m.showLiveStatus() {
+	if m.showLiveStatus() && !m.liveStatusInSubagentDrawer() {
 		// Status + action strip sit directly above the input box.
 		return m.liveStatusView() + "\n" + m.promptLine()
 	}
@@ -346,20 +369,21 @@ func (m Model) promptLine() string {
 
 func (m Model) composerFooter(width int) string {
 	left := m.composerLeft()
-	right := m.statusChipLabel()
+	status := m.statusChipLabel()
+	detailBudget := width - lipgloss.Width(left) - lipgloss.Width(status) - composerFooterDetailGap
+	details := ""
+	if detailBudget > 0 {
+		details = m.fitFooterRight(detailBudget)
+	}
+	right := status
+	if details != "" {
+		right = details + "  " + status
+	}
 	gap := width - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 1 {
 		gap = 1
 	}
 	return left + strings.Repeat(" ", gap) + hintStyle.Render(right)
-}
-
-func (m Model) modelContextLabel() string {
-	return joinFooter(m.modelDisplayLabel(), m.footerStats())
-}
-
-func (m Model) footerStats() string {
-	return strings.Join(m.footerStatParts(), "  ")
 }
 
 func (m Model) footerPieces() (tokens, cache, cost, tps string) {
@@ -381,28 +405,9 @@ func (m Model) footerPieces() (tokens, cache, cost, tps string) {
 		cost = formatCost(m.sessionCost)
 	}
 	if m.statusSegmentEnabled("tps") {
-		if n := m.displayTPS(); n > 0 {
-			tps = formatTPS(n)
-		}
+		tps = m.tpsDisplayLabel()
 	}
 	return tokens, cache, cost, tps
-}
-
-func (m Model) footerStatParts() []string {
-	tokens, cache, cost, tps := m.footerPieces()
-	parts := make([]string, 0, 5)
-	for _, p := range []string{tokens, cache, cost, tps} {
-		if p != "" {
-			parts = append(parts, p)
-		}
-	}
-	if m.statusSegmentEnabled("subs") {
-		if s := m.subsStatusLabel(); s != "" {
-			parts = append(parts, s)
-		}
-	}
-	parts = append(parts, m.footerExtraSegments()...)
-	return parts
 }
 
 func (m Model) footerExtraSegments() []string {
@@ -458,8 +463,8 @@ func (m Model) fitFooterRight(budget int) string {
 				return right
 			}
 			if stats != "" {
-				chipBudget := budget - lipgloss.Width(stats) - 2
-				if chipBudget >= 4 {
+				chipBudget := budget - lipgloss.Width(stats) - footerStatGap
+				if chipBudget >= footerChipMin {
 					return truncateRunes(lead, chipBudget) + "  " + stats
 				}
 			}
@@ -532,24 +537,24 @@ func cachePercents(hit, miss int64) (hitPct, missPct int) {
 		return 0, 0
 	}
 	if miss <= 0 {
-		return 100, 0
+		return percent, 0
 	}
 	if hit <= 0 {
-		return 0, 100
+		return 0, percent
 	}
 	hitPct = int((hit*100 + total/2) / total)
-	if hitPct > 100 {
-		hitPct = 100
+	if hitPct > percent {
+		hitPct = percent
 	}
-	return hitPct, 100 - hitPct
+	return hitPct, percent - hitPct
 }
 
 func formatPercent(n int) string {
 	if n < 0 {
 		n = 0
 	}
-	if n > 100 {
-		n = 100
+	if n > percent {
+		n = percent
 	}
 	return fmt.Sprintf("%d%%", n)
 }
@@ -558,20 +563,42 @@ func formatCost(usd float64) string {
 	if usd <= 0 {
 		return "$0.00"
 	}
-	if usd < 0.01 {
+	if usd < minCentDisplay {
 		return fmt.Sprintf("$%.4f", usd)
 	}
 	return fmt.Sprintf("$%.3f", usd)
 }
 
 func formatTPS(n float64) string {
-	if n > maxDisplayTPS {
-		return ">99.9 tps"
+	if n >= tpsKilo {
+		if n >= tpsTenKilo {
+			return fmt.Sprintf("%.0fk tps", n/tpsKilo)
+		}
+		return fmt.Sprintf("%.1fk tps", n/tpsKilo)
 	}
 	if n >= minWholeTPS {
 		return fmt.Sprintf("%.0f tps", n)
 	}
 	return fmt.Sprintf("%.1f tps", n)
+}
+
+func (m Model) tpsDisplayLabel() string {
+	n := m.displayTPS()
+	if n <= 0 {
+		if m.busy {
+			return "measuring"
+		}
+		return ""
+	}
+	label := formatTPS(n)
+	estimated := m.tpsEstimated
+	if m.busy && !m.stepMetrics && (len(m.tpsSamples) > 0 || m.generatedThisTurn() > 0) {
+		estimated = true
+	}
+	if estimated {
+		return "~" + label
+	}
+	return label
 }
 
 func (m Model) composerLeft() string {
@@ -699,11 +726,11 @@ func (m Model) helpOverlay() string {
 			keyW = w
 		}
 	}
-	innerW := min(64, max(minPaneWidth, m.overlayWidth()-cardBorder-4))
-	twoCol := m.width >= 100
+	innerW := min(overlayMaxW, max(minPaneWidth, m.overlayWidth()-cardBorder-cardBorderPad))
+	twoCol := m.width >= twoColMinWidth
 	colW := innerW
 	if twoCol {
-		colW = max(28, (innerW-2)/2)
+		colW = max(overlayColMin, (innerW-twoColPad)/layoutHalf)
 	}
 	title := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).Render("keys")
 	closeBtn := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).Render("[x]")
@@ -711,7 +738,7 @@ func (m Model) helpOverlay() string {
 	header := title + strings.Repeat(" ", gap) + closeBtn
 
 	format := func(row [2]string, width int) string {
-		line := keyStyle.Render(row[0]) + strings.Repeat(" ", max(2, keyW-lipgloss.Width(row[0])+2)) + actStyle.Render(row[1])
+		line := keyStyle.Render(row[0]) + strings.Repeat(" ", max(keyColPad, keyW-lipgloss.Width(row[0])+keyColPad)) + actStyle.Render(row[1])
 		if lipgloss.Width(line) > width {
 			return truncateRunes(row[0]+"  "+row[1], width)
 		}
@@ -719,7 +746,7 @@ func (m Model) helpOverlay() string {
 	}
 	var body strings.Builder
 	if twoCol {
-		mid := (len(rows) + 1) / 2
+		mid := (len(rows) + 1) / layoutHalf
 		for i := 0; i < mid; i++ {
 			if i > 0 {
 				body.WriteString("\n")
@@ -746,8 +773,8 @@ func (m Model) helpOverlay() string {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(theme.ColorBorder()).
 		Background(theme.ColorBg()).
-		Padding(1, 2).
-		Width(min(m.overlayWidth(), innerW+cardBorder+4)).
+		Padding(1, cardHorzPad).
+		Width(min(m.overlayWidth(), innerW+cardBorder+cardBorderPad)).
 		Render(lipgloss.JoinVertical(lipgloss.Left, header, body.String()))
 }
 
@@ -788,7 +815,7 @@ func (m Model) headerView() string {
 		rightW = lipgloss.Width(sep) + lipgloss.Width(right)
 	}
 	avail := w - lipgloss.Width(brand) - lipgloss.Width(sep) - rightW
-	if avail < 8 {
+	if avail < minAvailW {
 		row1 := truncateRunes(brand+"  "+title, w)
 		if showCwd {
 			return row1 + "\n" + hintStyle.Render(truncateRunes(cwd, w))
@@ -804,45 +831,166 @@ func (m Model) headerView() string {
 }
 
 func (m Model) confirmOverlay() string {
-	innerW := max(minPaneWidth, m.overlayWidth()-cardBorder-4)
+	innerW := max(minPaneWidth, m.overlayWidth()-cardBorder-cardBorderPad)
 	inner := lipgloss.NewStyle().Width(innerW).Render(m.confirm.View())
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(theme.ColorDanger()).
 		Background(theme.ColorBg()).
-		Padding(1, 2).
-		Width(min(m.overlayWidth(), innerW+cardBorder+4)).
+		Padding(1, cardHorzPad).
+		Width(min(m.overlayWidth(), innerW+cardBorder+cardBorderPad)).
 		Render(inner)
 }
 
 func (m Model) askOverlay() string {
-	q := m.askQuestion
-	innerW := max(minPaneWidth, m.overlayWidth()-cardBorder-4)
-	var b strings.Builder
-	b.WriteString(lipgloss.NewStyle().Bold(true).Width(innerW).Render(q.Question))
-	if strings.TrimSpace(q.Header) != "" {
-		b.WriteString("\n")
-		b.WriteString(hintStyle.Width(innerW).Render(q.Header))
-	}
-	b.WriteString("\n")
-	for i, opt := range q.Options {
-		prefix := "  "
-		style := hintStyle
-		if i == m.askCursor {
-			prefix = "▸ "
-			style = lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText())
-		}
-		b.WriteString(style.MaxWidth(innerW).Render(fmt.Sprintf("%s%d. %s", prefix, i+1, opt)))
-		b.WriteString("\n")
-	}
-	b.WriteString(hintStyle.Render("j/k select  •  enter confirm  •  esc cancel"))
+	_, cardW, lines, _ := m.askOverlayLines()
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(theme.ColorBorder()).
-		Background(theme.ColorBg()).
-		Padding(1, 2).
-		Width(min(m.overlayWidth(), innerW+cardBorder+4)).
-		Render(strings.TrimRight(b.String(), "\n"))
+		Background(theme.ColorDialog()).
+		Padding(1, cardHorzPad).
+		Width(cardW).
+		Render(strings.Join(lines, "\n"))
+}
+
+type askOptionSpan struct {
+	index int
+	start int
+	end   int
+}
+
+// askOverlayLines builds the dialog content and the option row spans from the
+// same wrapped lines used by askOverlay, keeping pointer hit-testing aligned.
+func (m Model) askOverlayLines() (innerW, cardW int, lines []string, spans []askOptionSpan) {
+	cardW = max(minPaneWidth, m.overlayWidth())
+	innerW = max(1, cardW-cardBorder-cardBorderPad)
+	appendText := func(text string, style lipgloss.Style) {
+		for _, line := range wrapAskText(text, innerW) {
+			lines = append(lines, style.Width(innerW).MaxWidth(innerW).Render(line))
+		}
+	}
+
+	appendText(m.askQuestion.Question, lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()))
+	if strings.TrimSpace(m.askQuestion.Header) != "" {
+		appendText(m.askQuestion.Header, hintStyle)
+	}
+	lines = append(lines, strings.Repeat(" ", innerW))
+	for i, opt := range m.askQuestion.Options {
+		start := len(lines)
+		prefix := fmt.Sprintf("  %d. ", i+1)
+		style := hintStyle
+		if i == m.askCursor {
+			prefix = fmt.Sprintf("▸ %d. ", i+1)
+			style = lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText())
+		}
+		continuation := strings.Repeat(" ", lipgloss.Width(prefix))
+		textW := max(1, innerW-lipgloss.Width(prefix))
+		wrapped := wrapAskText(opt, textW)
+		for j, line := range wrapped {
+			if j == 0 {
+				line = prefix + line
+			} else {
+				line = continuation + line
+			}
+			lines = append(lines, style.Width(innerW).MaxWidth(innerW).Render(line))
+		}
+		spans = append(spans, askOptionSpan{index: i, start: start, end: len(lines)})
+	}
+	appendText("j/k select  •  enter confirm  •  esc cancel", hintStyle)
+	return innerW, cardW, lines, spans
+}
+
+func wrapAskText(text string, width int) []string {
+	if width < 1 {
+		width = 1
+	}
+	var lines []string
+	for _, part := range strings.Split(text, "\n") {
+		lines = append(lines, wrapAskLine(part, width)...)
+	}
+	if len(lines) == 0 {
+		return []string{""}
+	}
+	return lines
+}
+
+func wrapAskLine(line string, width int) []string {
+	words := strings.Fields(line)
+	if len(words) == 0 {
+		return []string{""}
+	}
+	lines := make([]string, 0, len(words))
+	current := ""
+	flush := func() {
+		if current != "" {
+			lines = append(lines, current)
+			current = ""
+		}
+	}
+	for _, word := range words {
+		if lipgloss.Width(word) > width {
+			flush()
+			chunks := hardWrapRunes([]rune(word), width)
+			for i, chunk := range chunks {
+				if i == len(chunks)-1 {
+					current = string(chunk)
+				} else {
+					lines = append(lines, string(chunk))
+				}
+			}
+			continue
+		}
+		candidate := word
+		if current != "" {
+			candidate = current + " " + word
+		}
+		if lipgloss.Width(candidate) > width {
+			flush()
+		}
+		if current == "" {
+			current = word
+		} else if lipgloss.Width(current)+1+lipgloss.Width(word) <= width {
+			current += " " + word
+		}
+	}
+	flush()
+	return lines
+}
+
+func (m Model) askOverlayRect() (left, top, width, height int, ok bool) {
+	card := m.askOverlay()
+	width = lipgloss.Width(card)
+	height = lipgloss.Height(card)
+	regionH := m.composerTop()
+	if !m.askMode || width < 1 || height < 1 || regionH < 1 {
+		return 0, 0, 0, 0, false
+	}
+	regionH = min(regionH, max(1, m.height))
+	top = max(0, (regionH-height)/centerDiv)
+	if top+height > regionH {
+		top = max(0, regionH-height)
+	}
+	left = max(0, (m.width-width)/centerDiv)
+	return left, top, width, height, true
+}
+
+func (m Model) askIndexAtScreen(x, y int) (int, bool) {
+	left, top, width, _, ok := m.askOverlayRect()
+	if !ok || x < left || x >= left+width {
+		return -1, false
+	}
+	_, _, lines, spans := m.askOverlayLines()
+	contentTop := top + askCardContentTop
+	row := y - contentTop
+	if row < 0 || row >= len(lines) {
+		return -1, false
+	}
+	for _, span := range spans {
+		if row >= span.start && row < span.end {
+			return span.index, true
+		}
+	}
+	return -1, false
 }
 
 // scrollbarRect returns the screen rectangle (top row, bottom row, column)
@@ -936,16 +1084,6 @@ func (m Model) overlayWidth() int {
 	return min(available, desired)
 }
 
-func splitPaneWidths(total int) (left, right int) {
-	left = max(minLeftPane, min(maxLeftPane, total/paneCount))
-	right = total - left - paneDivider
-	if right < minRightPane {
-		right = minRightPane
-		left = max(minLeftPane, total-right-paneDivider)
-	}
-	return left, right
-}
-
 // footerChipHit reports which footer chip contains (x,y). If both model
 // and variant boxes overlap, the closer center wins.
 func (m Model) footerChipHit(x, y int) (hit bool, which string) {
@@ -962,8 +1100,8 @@ func (m Model) footerChipHit(x, y int) (hit bool, which string) {
 	inV := vok && in(vl, vt, vr, vb)
 	switch {
 	case inM && inV:
-		mc := (ml + mr) / 2
-		vc := (vl + vr) / 2
+		mc := (ml + mr) / layoutHalf
+		vc := (vl + vr) / layoutHalf
 		if absInt(x-vc) < absInt(x-mc) {
 			return true, "variant"
 		}
@@ -978,7 +1116,7 @@ func (m Model) footerChipHit(x, y int) (hit bool, which string) {
 }
 
 func (m Model) statusChipRect() (left, top, right, bottom int, ok bool) {
-	if m.busy || m.pickerMode || m.sessionPickerMode || m.usageMode || m.settingsMode || m.subagentLogMode || m.statusMode {
+	if m.pickerMode || m.sessionPickerMode || m.usageMode || m.settingsMode || m.subagentLogMode || m.statusMode {
 		return 0, 0, 0, 0, false
 	}
 	plain, y, found := m.composerFooterPlainLine()
@@ -1009,8 +1147,10 @@ func (m Model) variantStatusRect() (left, top, right, bottom int, ok bool) {
 
 func (m Model) footerChipRect(chip string) (left, top, right, bottom int, ok bool) {
 	// Allow hits while the sub-agent drawer or slash menu is open; only
-	// suppress when another full-screen/modal chrome owns the mouse.
-	if chip == "" || m.busy || m.pickerMode || m.sessionPickerMode || m.usageMode || m.settingsMode || m.subagentLogMode || m.statusMode {
+	// suppress when another full-screen/modal chrome owns the mouse. A live
+	// turn does not own the model or variant controls: changes apply to the
+	// next prompt and should remain available while the current one runs.
+	if chip == "" || m.pickerMode || m.sessionPickerMode || m.usageMode || m.settingsMode || m.subagentLogMode || m.statusMode {
 		return 0, 0, 0, 0, false
 	}
 	plain, y, found := m.composerFooterPlainLine()
@@ -1108,32 +1248,10 @@ func composerFooterLine(plain string) bool {
 	if strings.Contains(plain, "history:") {
 		return true
 	}
-	return strings.Contains(plain, "working") && strings.Contains(plain, "esc cancel")
-}
-
-// composerFooterTop is the screen Y of the composer footer row (model/subs chips).
-func (m Model) composerFooterTop() int {
-	if _, y, ok := m.composerFooterPlainLine(); ok {
-		return y
+	if strings.Contains(plain, "working") && strings.Contains(plain, "esc cancel") {
+		return true
 	}
-	top := m.transcriptTop() + m.transcriptRenderHeight() + 1 + 1
-	if m.slashMode {
-		top += 1 + lipgloss.Height(m.slashView())
-	}
-	if m.pickerMode {
-		top += 1 + lipgloss.Height(m.pickerView())
-	}
-	if m.subagentPickerMode && !m.subagentLogMode {
-		top += 1 + lipgloss.Height(m.subagentDrawerView())
-	}
-	if m.err != "" {
-		top += lipgloss.Height(errStyle.Width(max(minPaneWidth, m.width)).Render(m.err)) + 1
-	}
-	if m.showLiveStatus() {
-		top += lipgloss.Height(m.liveStatusView())
-	}
-	top += 1 + m.promptHeight()
-	return top
+	return strings.Contains(plain, "status ▾")
 }
 
 // subsStatusRect is the click target for the persistent "subs:N" footer chip.
@@ -1146,7 +1264,7 @@ func (m Model) subsStatusRect() (left, top, right, bottom int, ok bool) {
 		return 0, 0, 0, 0, false
 	}
 	leftW := lipgloss.Width(m.composerLeft())
-	budget := max(4, max(minPaneWidth, m.width)-2-leftW-1)
+	budget := max(footerBudgetMin, max(minPaneWidth, m.width)-2-leftW-1)
 	footer := m.fitFooterRight(budget)
 	if !strings.Contains(footer, "subs:") {
 		return 0, 0, 0, 0, false

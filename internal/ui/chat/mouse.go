@@ -24,10 +24,20 @@ func (m Model) jumpBarRow() int {
 func (m Model) mousePress(msg tea.MouseClickMsg) (Model, tea.Cmd) {
 	mu := msg.Mouse()
 	m.copyNotice = ""
+	// Questions are modal: only an option row may consume a click, and all
+	// other clicks stay inside the dialog instead of hitting the chat below.
+	if m.askMode {
+		if mu.Button == tea.MouseLeft {
+			if idx, ok := m.askIndexAtScreen(mu.X, mu.Y); ok {
+				return m.resolveAskIndex(idx), nil
+			}
+		}
+		return m, nil
+	}
 	// Model / variant chips live on the composer footer. Handle them before
 	// the prompt and sub-agent drawer so those never swallow chip clicks
 	// (including while the sub-agent strip is open).
-	if mu.Button == tea.MouseLeft && !m.pickerMode && !m.usageMode && !m.settingsMode && !m.sessionPickerMode && !m.subagentLogMode && !m.statusMode && !m.busy {
+	if mu.Button == tea.MouseLeft && !m.pickerMode && !m.usageMode && !m.settingsMode && !m.sessionPickerMode && !m.subagentLogMode && !m.statusMode {
 		if hit, which := m.footerChipHit(mu.X, mu.Y); hit {
 			m = m.clearTextSelection()
 			m = m.clearPromptSelection()
@@ -82,6 +92,14 @@ func (m Model) mousePress(msg tea.MouseClickMsg) (Model, tea.Cmd) {
 				return m, nil
 			}
 		}
+	}
+	// Todo header toggles the checklist; body clicks are reserved for its
+	// independent viewport so clicking the scrollbar never collapses it.
+	if mu.Button == tea.MouseLeft && (m.todoPanelHeaderAt(mu.Y) || m.todoPanelBodyAt(mu.Y)) {
+		if m.todoPanelHeaderAt(mu.Y) {
+			return m.toggleTodos(), nil
+		}
+		return m, nil
 	}
 	// Composer click-to-caret / drag-select (before transcript hits).
 	if next, cmd, hit := m.mousePressPrompt(mu); hit {
@@ -142,9 +160,6 @@ func (m Model) mousePress(msg tea.MouseClickMsg) (Model, tea.Cmd) {
 				return m, nil
 			}
 		}
-		if panel := m.todoPanelView(); panel != "" && mu.Y >= lipgloss.Height(m.headerView()) && mu.Y < m.transcriptTop() {
-			return m.toggleTodos(), nil
-		}
 	}
 	for _, target := range []int{0, 1} {
 		if m.dragTarget == 1 && target == 0 {
@@ -176,12 +191,19 @@ func (m Model) mousePress(msg tea.MouseClickMsg) (Model, tea.Cmd) {
 	if mu.Button == tea.MouseLeft {
 		if idx, ok := m.itemIndexAtScreenY(mu.Y); ok {
 			kind := m.items[idx].kind
-			if kind == itemTool || kind == itemReasoning {
+			if kind == itemTool {
 				m = m.clearTextSelection()
 				m.selectedItem = idx
-				if kind == itemTool {
-					m.lastTool = idx
-				}
+				m.lastTool = idx
+				m.items[idx].collapsed = !m.items[idx].collapsed
+				m.syncTranscript()
+				return m, nil
+			}
+			if kind == itemReasoning {
+				m = m.clearTextSelection()
+				m.selectedItem = idx
+				m.syncTranscript()
+				return m, nil
 			}
 		}
 		if pos, ok := m.transcriptPosition(mu); ok {
@@ -383,6 +405,10 @@ func (m Model) sessionIndexAtScreenY(y int) (int, bool) {
 	return m.sessionIndexAtDisplayRow(inner + m.sessionVp.YOffset())
 }
 
+// sessionListHeaderGap is the number of rows between the RUNS header and
+// the first session list row (the header line plus one blank row).
+const sessionListHeaderGap = 2
+
 // sessionListScreenTop is the first session-list row on the painted
 // screen: the line after the RUNS header. Falling back to the centered
 // card formula keeps hit-testing usable if the header is off-screen.
@@ -390,7 +416,7 @@ func (m Model) sessionListScreenTop() int {
 	for i, line := range strings.Split(m.sessionPickerScreen(), "\n") {
 		if strings.Contains(ansi.Strip(line), "RUNS") {
 			// Header is followed by a blank row, then the list.
-			return i + 2
+			return i + sessionListHeaderGap
 		}
 	}
 	vpH := m.sessionVPHeight()

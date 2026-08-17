@@ -348,3 +348,28 @@ func TestBusyTurnKeepsComposerAndNoLeftScrollJunk(t *testing.T) {
 		}
 	}
 }
+
+func TestBusyTurnStatusChipOpensDrawer(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 36})
+	m = mm.(Model)
+	m.busy = true
+	m.activity = "thinking"
+	plain := stripANSI(viewText(m))
+	if !strings.Contains(plain, "status ▾") {
+		t.Fatalf("busy footer missing status control:\n%s", plain)
+	}
+	left, top, right, _, ok := m.statusChipRect()
+	if !ok {
+		t.Fatal("busy status chip rect missing")
+	}
+	next, _ := m.Update(tea.MouseClickMsg(tea.Mouse{
+		X:      (left + right) / 2,
+		Y:      top,
+		Button: tea.MouseLeft,
+	}))
+	got := next.(Model)
+	if !got.statusMode {
+		t.Fatal("busy status chip click did not open drawer")
+	}
+}

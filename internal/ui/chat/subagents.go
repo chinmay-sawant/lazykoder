@@ -21,6 +21,8 @@ type subagentRow struct {
 	ID             string // job id when live, else child session id
 	Name           string
 	Role           string
+	Model          string
+	Variant        string
 	Status         string
 	ChildSessionID string
 	Summary        string
@@ -31,11 +33,16 @@ type subagentRow struct {
 }
 
 const (
-	// Log view uses the full terminal: header + blank + footer.
+	// Log view uses the full terminal: header + blank + jump row + footer.
 	subagentLogHeaderRows = 2
+	subagentLogJumpRows   = 1
 	subagentLogFooterRows = 1
 	maxSubagentActivity   = 48
 	maxSubagentDrawerRows = 8
+	// subagentRowMinLeftW is the floor width for a sub-agent row label.
+	subagentRowMinLeftW = 6
+	// subagentLogRowFactor estimates the two log lines per item.
+	subagentLogRowFactor = 2
 )
 
 // openSubagentPicker opens the model-style drawer above the prompt and
@@ -232,6 +239,8 @@ func (m Model) refreshSubagentDrawerLive() Model {
 				row.Summary = snap.Summary
 			}
 			row.Err = snap.Err
+			row.Model = firstNonEmptyStr(snap.Model, row.Model)
+			row.Variant = firstNonEmptyStr(snap.Variant, row.Variant)
 			if snap.StartedAt > 0 && row.StartedAt == 0 {
 				row.StartedAt = snap.StartedAt
 			}
@@ -263,6 +272,8 @@ func (m Model) refreshSubagentDrawerLive() Model {
 				ID:             snap.ID,
 				Name:           snap.Name,
 				Role:           snap.Role,
+				Model:          snap.Model,
+				Variant:        snap.Variant,
 				Status:         snap.Status,
 				ChildSessionID: snap.ChildSessionID,
 				Summary:        snap.Summary,
@@ -306,6 +317,8 @@ func (m Model) collectSubagentRows() []subagentRow {
 	byKey := map[string]subagentRow{}
 	var order []string
 	claimedSession := map[string]bool{}
+	childModels := map[string]string{}
+	childVariants := map[string]string{}
 
 	if m.subMgr != nil && parentID != "" {
 		for _, snap := range m.subMgr.List(parentID) {
@@ -314,6 +327,8 @@ func (m Model) collectSubagentRows() []subagentRow {
 				ID:             snap.ID,
 				Name:           snap.Name,
 				Role:           snap.Role,
+				Model:          snap.Model,
+				Variant:        snap.Variant,
 				Status:         snap.Status,
 				ChildSessionID: snap.ChildSessionID,
 				Summary:        snap.Summary,
@@ -333,6 +348,10 @@ func (m Model) collectSubagentRows() []subagentRow {
 		children, err := m.store.ListChildSessions(context.Background(), parentID)
 		if err == nil {
 			for _, sess := range children {
+				childModels[sess.ID] = sess.Model
+				if sess.Variant != nil {
+					childVariants[sess.ID] = *sess.Variant
+				}
 				if claimedSession[sess.ID] {
 					continue
 				}
@@ -340,6 +359,8 @@ func (m Model) collectSubagentRows() []subagentRow {
 				row := subagentRow{
 					ID:             sess.ID,
 					Name:           sess.Title,
+					Model:          sess.Model,
+					Variant:        childVariants[sess.ID],
 					Status:         "completed",
 					ChildSessionID: sess.ID,
 					StartedAt:      sess.TimeCreated,
@@ -349,6 +370,15 @@ func (m Model) collectSubagentRows() []subagentRow {
 				order = append(order, key)
 			}
 		}
+	}
+	for key, row := range byKey {
+		if row.Model == "" {
+			row.Model = childModels[row.ChildSessionID]
+		}
+		if row.Variant == "" {
+			row.Variant = childVariants[row.ChildSessionID]
+		}
+		byKey[key] = row
 	}
 
 	rows := make([]subagentRow, 0, len(order))
@@ -476,6 +506,9 @@ func (m Model) subagentDrawerVPHeight() int {
 	// gap before prompt, full composer, and a floor for the transcript.
 	reserved := lipgloss.Height(m.headerView()) + 1 + 1 + pickerDrawerChrome + 1 +
 		lipgloss.Height(m.promptLine())
+	if m.liveStatusInSubagentDrawer() {
+		reserved += lipgloss.Height(m.liveStatusInDrawerView())
+	}
 	if m.slashMode {
 		reserved += 1 + lipgloss.Height(m.slashView())
 	}
@@ -493,6 +526,14 @@ func (m Model) subagentDrawerVPHeight() int {
 		n = 1
 	}
 	return min(n, min(maxSubagentDrawerRows, available))
+}
+
+func (m Model) liveStatusInSubagentDrawer() bool {
+	return m.subagentPickerMode && !m.subagentLogMode && m.showLiveStatus()
+}
+
+func (m Model) liveStatusInDrawerView() string {
+	return strings.TrimPrefix(m.liveStatusView(), "\n")
 }
 
 func (m Model) resizeSubagentDrawer() Model {
@@ -516,17 +557,23 @@ func (m Model) resizeSubagentDrawer() Model {
 
 func (m Model) resizeSubagentLogCard() Model {
 	// Full terminal width/height: only a one-line header and footer are reserved.
+	atBottom := m.subagentLogVp.TotalLineCount() == 0 || m.subagentLogVp.AtBottom()
+	off := m.subagentLogVp.YOffset()
 	w := max(minPaneWidth, m.width)
 	vpH := m.subagentLogVPHeight()
 	m.subagentLogVp.SetWidth(max(pickerVpMinWidth, w-1))
 	m.subagentLogVp.SetHeight(vpH)
 	m.subagentLogVp.SetContent(m.renderSubagentLogContent())
-	m.subagentLogVp.GotoTop()
+	if atBottom {
+		m.subagentLogVp.GotoBottom()
+	} else {
+		m.subagentLogVp.SetYOffset(off)
+	}
 	return m
 }
 
 func (m Model) subagentLogVPHeight() int {
-	return max(minPaneHeight, m.height-subagentLogHeaderRows-subagentLogFooterRows)
+	return max(minPaneHeight, m.height-subagentLogHeaderRows-subagentLogJumpRows-subagentLogFooterRows)
 }
 
 func (m Model) refreshSubagentLogContent() Model {
@@ -564,6 +611,10 @@ func (m Model) ensureSubagentCursorVisible() {
 func (m Model) subagentDrawerView() string {
 	cardW := m.pickerDrawerWidth()
 	live, ok, failed, total := m.subagentDrawerCounts()
+	var parts []string
+	if m.liveStatusInSubagentDrawer() {
+		parts = append(parts, m.liveStatusInDrawerView())
+	}
 	header := hintStyle.Render("sub-agents  ·  ")
 	if m.subagentDrawerCompact {
 		header += lipgloss.NewStyle().Foreground(theme.ColorText()).Render(fmt.Sprintf("%d", total))
@@ -585,9 +636,8 @@ func (m Model) subagentDrawerView() string {
 		footer := hintStyle.Width(cardW).Render(
 			truncateRunes("enter/click expand  •  esc close", cardW),
 		)
-		return lipgloss.NewStyle().Width(cardW).Render(
-			lipgloss.JoinVertical(lipgloss.Left, header, footer),
-		)
+		parts = append(parts, header, footer)
+		return lipgloss.NewStyle().Width(cardW).Render(lipgloss.JoinVertical(lipgloss.Left, parts...))
 	}
 
 	if live > 0 {
@@ -608,9 +658,8 @@ func (m Model) subagentDrawerView() string {
 	footer := hintStyle.Width(cardW).Render(
 		truncateRunes("↑/↓ select  •  → logs  •  d cancel live  •  esc close", cardW),
 	)
-	return lipgloss.NewStyle().Width(cardW).Render(
-		lipgloss.JoinVertical(lipgloss.Left, header, body, footer),
-	)
+	parts = append(parts, header, body, footer)
+	return lipgloss.NewStyle().Width(cardW).Render(lipgloss.JoinVertical(lipgloss.Left, parts...))
 }
 
 // subagentDrawerCounts returns live / ok / failed / total for drawer chrome.
@@ -661,13 +710,10 @@ func (m Model) subagentDrawerRow(row subagentRow, selected bool, width int) stri
 		name = name + "  ·  " + row.Role
 	}
 	left := prefix + diamond + "  " + st + "  " + name
-	right := row.Activity
-	if right == st {
-		right = ""
-	}
+	right := m.subagentRowRight(row, max(1, width-lipgloss.Width(left)-1))
 	gap := width - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 1 {
-		left = truncateRunes(left, max(6, width-lipgloss.Width(right)-1))
+		left = truncateRunes(left, max(subagentRowMinLeftW, width-lipgloss.Width(right)-1))
 		gap = width - lipgloss.Width(left) - lipgloss.Width(right)
 	}
 	if gap < 1 {
@@ -678,6 +724,24 @@ func (m Model) subagentDrawerRow(row subagentRow, selected bool, width int) stri
 		return lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).MaxWidth(width).Render(line)
 	}
 	return lipgloss.NewStyle().MaxWidth(width).Render(line)
+}
+
+// subagentRowRight keeps the actual resolved child model and thinking level
+// visible before the best-effort activity preview. It never substitutes a
+// vendor/model guess.
+func (m Model) subagentRowRight(row subagentRow, available int) string {
+	available = max(1, available)
+	model := firstNonEmptyStr(row.Model, "unavailable")
+	variant := firstNonEmptyStr(row.Variant, "default")
+	modelLabel := "model: " + model
+	identity := modelLabel + "  ·  thinking: " + variant
+	if activity := strings.TrimSpace(row.Activity); activity != "" && activity != strings.TrimSpace(row.Status) {
+		withActivity := identity + "  ·  " + activity
+		if lipgloss.Width(withActivity) <= available {
+			return withActivity
+		}
+	}
+	return truncateRunes(identity, available)
 }
 
 // subagentDiamond is the status mark: throb when live, green when done, red on crash.
@@ -708,6 +772,10 @@ func (m Model) subagentLogScreen() string {
 		name = m.subagentSelected.ID
 	}
 	title := "SUB-AGENT  ·  " + name
+	if model := strings.TrimSpace(m.subagentSelected.Model); model != "" {
+		title += "  ·  " + model
+	}
+	title += "  ·  thinking: " + firstNonEmptyStr(m.subagentSelected.Variant, "default")
 	if m.subagentSelected.Status != "" {
 		title += "  ·  " + m.subagentSelected.Status
 	}
@@ -734,7 +802,7 @@ func (m Model) subagentLogScreen() string {
 		"↑/↓ scroll  •  → next agent  •  ← back  •  ctrl+p thinking  •  ctrl+e tools  •  enter toggle",
 		w,
 	))
-	out := lipgloss.JoinVertical(lipgloss.Left, header, "", body, footer)
+	out := lipgloss.JoinVertical(lipgloss.Left, header, "", body, m.subagentLogJumpBarView(), footer)
 	// Guarantee full-frame paint.
 	return lipgloss.NewStyle().
 		Background(theme.ColorBg()).
@@ -764,6 +832,22 @@ func (m Model) subagentLogCloseRect() (x0, y, x1 int, ok bool) {
 	return 0, 0, 0, false
 }
 
+// subagentLogJumpBarRow is the transparent row immediately above the footer.
+func (m Model) subagentLogJumpBarRow() int {
+	return subagentLogHeaderRows + m.subagentLogVp.Height()
+}
+
+// subagentLogJumpBarView mirrors the main transcript jump row and stays
+// visually empty unless the log is scrolled away from its live tail.
+func (m Model) subagentLogJumpBarView() string {
+	w := max(1, m.width)
+	row := strings.Repeat(" ", w)
+	if m.subagentLogVp.AtBottom() {
+		return row
+	}
+	return spliceDisplay(row, lipgloss.NewStyle().Faint(true).Render(jumpDownArrow), w/centerDiv)
+}
+
 // subagentLogHit handles a mouse press on the full-screen log view.
 // [x] returns to the drawer; clicks on thinking/tool blocks expand or collapse.
 func (m Model) subagentLogHit(x, y int, button tea.MouseButton) (Model, tea.Cmd, bool) {
@@ -776,6 +860,10 @@ func (m Model) subagentLogHit(x, y int, button tea.MouseButton) (Model, tea.Cmd,
 	if x0, cy, x1, ok := m.subagentLogCloseRect(); ok && y == cy && x >= x0 && x < x1 {
 		next, cmd := m.updateSubagentLogKey(tea.KeyPressMsg{Code: tea.KeyEscape})
 		return next, cmd, true
+	}
+	if button == tea.MouseLeft && y == m.subagentLogJumpBarRow() && !m.subagentLogVp.AtBottom() {
+		m.subagentLogVp.GotoBottom()
+		return m, nil, true
 	}
 	if button == tea.MouseLeft {
 		if idx, ok := m.subagentLogItemIndexAtScreenY(y); ok {
@@ -845,7 +933,7 @@ func (m Model) renderedSubagentLogItems() []string {
 	if m.subagentLogVp.Width() > 0 {
 		renderM.transcript = m.subagentLogVp
 	}
-	out := make([]string, 0, len(m.subagentLogItems)*2)
+	out := make([]string, 0, len(m.subagentLogItems)*subagentLogRowFactor)
 	for i, it := range m.subagentLogItems {
 		if i > 0 && (it.kind == itemUser || it.kind == itemAssistant) {
 			if it.kind == itemUser {
@@ -1018,6 +1106,9 @@ func (m Model) updateSubagentLogKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 	case tea.KeyPgUp:
 		m.subagentLogVp.PageUp()
 		return m, nil
+	case tea.KeyEnd:
+		m.subagentLogVp.GotoBottom()
+		return m, nil
 	case tea.KeyEnter:
 		return m.toggleSubagentLogSelected(), nil
 	case 'd', 'D':
@@ -1047,6 +1138,10 @@ func (m Model) openSelectedSubagentLog() (Model, tea.Cmd) {
 	m.subagentLogSelected = m.lastSubagentLogMetaIndex()
 	m.subagentLogMode = true
 	m.subagentPickerMode = true // keep mode for key routing
+	// A newly opened log starts from a clean viewport so resizeSubagentLogCard
+	// follows the live tail even if the previous agent log was scrolled up.
+	m.subagentLogVp.SetContent("")
+	m.subagentLogVp.GotoTop()
 	return m.resizeSubagentLogCard(), nil
 }
 
@@ -1157,7 +1252,7 @@ func (m Model) renderSubagentLogContent() string {
 		renderM.transcript = m.subagentLogVp
 	}
 
-	out := make([]string, 0, len(m.subagentLogItems)*2)
+	out := make([]string, 0, len(m.subagentLogItems)*subagentLogRowFactor)
 	for i, it := range m.subagentLogItems {
 		if i > 0 && (it.kind == itemUser || it.kind == itemAssistant) {
 			if it.kind == itemUser {
@@ -1324,11 +1419,6 @@ func (m Model) subagentIndexAtScreenY(y int) (int, bool) {
 		return 0, false
 	}
 	return rel, true
-}
-
-// hasSubagents reports whether the current session has any sub-agent rows.
-func (m Model) hasSubagents() bool {
-	return len(m.collectSubagentRows()) > 0
 }
 
 // subagentCounts returns live and total counts for the footer label.

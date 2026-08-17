@@ -286,8 +286,8 @@ func TestClickSelectsToolCardWithoutToggle(t *testing.T) {
 
 	mm, _ := m.Update(tea.MouseClickMsg(tea.Mouse{X: 2, Y: y, Button: tea.MouseLeft}))
 	m = mm.(Model)
-	if !m.items[0].collapsed {
-		t.Fatal("click changed the tool card")
+	if m.items[0].collapsed {
+		t.Fatal("click did not expand the tool card")
 	}
 	if m.selectedItem != 0 {
 		t.Fatalf("selectedItem = %d, want 0", m.selectedItem)
@@ -362,8 +362,8 @@ func TestClickChevronWithTodosHitsPaintedRow(t *testing.T) {
 	}
 	next, _ = m.Update(tea.MouseClickMsg(tea.Mouse{X: 2, Y: yBash, Button: tea.MouseLeft}))
 	m = next.(Model)
-	if !m.items[idx].collapsed {
-		t.Fatalf("click on painted bash row %d changed collapse state", yBash)
+	if m.items[idx].collapsed {
+		t.Fatalf("click on painted bash row %d did not expand the tool", yBash)
 	}
 }
 
@@ -446,8 +446,8 @@ func TestReopenClickTogglesCollapsedAtBottom(t *testing.T) {
 			break
 		}
 	}
-	if found {
-		t.Fatalf("click on reopened bash changed collapse state: %q", viewText(m))
+	if !found {
+		t.Fatalf("click on reopened bash did not expand the tool: %q", viewText(m))
 	}
 }
 

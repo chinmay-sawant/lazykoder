@@ -826,6 +826,8 @@ func TestSubagentJobRoundTrip(t *testing.T) {
 		Status:          "queued",
 		Prompt:          "audit layout",
 		Description:     "layout",
+		Model:           "configured-child-model",
+		Variant:         "high",
 		MaxSteps:        32,
 		TimeoutMS:       60000,
 	}
@@ -836,7 +838,8 @@ func TestSubagentJobRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSubagentJob: %v", err)
 	}
-	if got.Name != "layout-audit" || got.Status != "queued" || got.Prompt != "audit layout" {
+	if got.Name != "layout-audit" || got.Status != "queued" || got.Prompt != "audit layout" ||
+		got.Model != "configured-child-model" || got.Variant != "high" {
 		t.Fatalf("got %+v", got)
 	}
 	got.Status = "completed"

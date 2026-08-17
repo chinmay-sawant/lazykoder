@@ -25,6 +25,10 @@ const (
 	maxAtMentionContext = 4000
 	maxAtPickerVisible  = 12
 	maxAtPickerFiles    = 60
+	atPickerBoxWidth    = 64
+	atPickerListMinW    = 8
+	atPickerBudgetMinW  = 4
+	atTaskExcerptWidth  = 800
 )
 
 // atPickItem is one row in the @ picker (project file or session sub-agent).
@@ -60,7 +64,7 @@ func (m Model) closeFilePicker() Model {
 func (m Model) filePickerOverlay() string {
 	sel := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText())
 	dim := lipgloss.NewStyle().Foreground(theme.ColorMute())
-	boxW := min(64, max(minPaneWidth, m.width-8))
+	boxW := min(atPickerBoxWidth, max(minPaneWidth, m.width-atPickerListMinW))
 	// Inner text width under Width(boxW).Padding(1, cardPad).Border: border
 	// and horizontal pad are outside the content cells.
 	contentW := max(minPaneWidth, boxW-cardBorder-2*cardPad)
@@ -79,7 +83,7 @@ func (m Model) filePickerOverlay() string {
 	// contentW-1 and keep the final body at contentW (no wrap inside the card).
 	listW := contentW
 	if overflow {
-		listW = max(8, contentW-1)
+		listW = max(atPickerListMinW, contentW-1)
 	}
 
 	var rows []string
@@ -199,7 +203,7 @@ func atPickerItemRow(it atPickItem, selected bool, width int, sel, dim lipgloss.
 	if rightPlain != "" {
 		// marker+label | gap | status; keep status on the same row.
 		rightW := lipgloss.Width(rightPlain)
-		leftBudget = max(4, width-rightW-1)
+		leftBudget = max(atPickerBudgetMinW, width-rightW-1)
 	}
 	leftPlain = marker + leftPlain
 	if lipgloss.Width(leftPlain) > leftBudget {
@@ -232,20 +236,6 @@ func joinAtPickerRow(left, right string, width int) string {
 		gap = 1
 	}
 	return left + strings.Repeat(" ", gap) + right
-}
-
-func statusKey(st string) string {
-	st = strings.ToLower(strings.TrimSpace(st))
-	switch st {
-	case "completed", "success", "done":
-		return "completed"
-	case "failed", "error", "denied", "cancelled", "timed_out", "crashed":
-		return "failed"
-	case "running", "pending", "queued":
-		return "running"
-	default:
-		return st
-	}
 }
 
 func (m Model) updateFilePickerKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
@@ -460,7 +450,7 @@ func (m Model) subagentSessionExcerpt(sessionID string) string {
 				}
 			}
 			if s := strings.TrimSpace(b.String()); s != "" {
-				parts = append(parts, "task: "+truncateRunes(s, 800))
+				parts = append(parts, "task: "+truncateRunes(s, atTaskExcerptWidth))
 				break
 			}
 		}
@@ -482,7 +472,7 @@ func listProjectFiles(root, filter string) []string {
 	var out []string
 	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return nil
+			return err
 		}
 		name := d.Name()
 		if d.IsDir() {
@@ -496,7 +486,7 @@ func listProjectFiles(root, filter string) []string {
 		}
 		rel, err := filepath.Rel(root, path)
 		if err != nil {
-			return nil
+			return err
 		}
 		if filter != "" && !strings.Contains(strings.ToLower(rel), filter) {
 			return nil

@@ -66,7 +66,7 @@ func TestCtrlPTogglesAllThinking(t *testing.T) {
 	}
 }
 
-func TestClickMetaHeaderDoesNotToggle(t *testing.T) {
+func TestClickMetaHeaderTogglesToolsOnly(t *testing.T) {
 	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
 	m.items = []transcriptItem{
 		{kind: itemUser, text: "prompt"},
@@ -74,7 +74,14 @@ func TestClickMetaHeaderDoesNotToggle(t *testing.T) {
 		{kind: itemTool, collapsed: true, tool: db.ToolCall{Tool: "bash", Status: "completed"}},
 	}
 	m.syncTranscript()
-	for _, needle := range []string{thinkingLabel, "bash"} {
+	for _, tc := range []struct {
+		needle  string
+		expects bool
+	}{
+		{needle: thinkingLabel, expects: true},
+		{needle: "bash", expects: false},
+	} {
+		needle := tc.needle
 		y := viewLineIndex(m, needle)
 		if y < 0 {
 			t.Fatalf("missing %q header", needle)
@@ -83,10 +90,9 @@ func TestClickMetaHeaderDoesNotToggle(t *testing.T) {
 		if !ok {
 			t.Fatalf("header %q did not map to an item", needle)
 		}
-		before := m.items[idx].collapsed
 		m = upd(m, tea.MouseClickMsg(tea.Mouse{X: 2, Y: y, Button: tea.MouseLeft}))
-		if got := m.items[idx].collapsed; got != before {
-			t.Fatalf("click on %q changed collapsed from %v to %v", needle, before, got)
+		if got := m.items[idx].collapsed; got != tc.expects {
+			t.Fatalf("click on %q collapsed = %v, want %v", needle, got, tc.expects)
 		}
 	}
 }

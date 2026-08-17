@@ -89,8 +89,9 @@ func TestSubagentPickerListsChildrenAndShowsLog(t *testing.T) {
 	if !m.subagentLogMode {
 		t.Fatal("expected log mode")
 	}
-	// Full-screen: viewport height uses entire terminal minus header/footer.
-	if m.subagentLogVp.Height() < m.height-3 {
+	// Full-screen: viewport height uses the terminal minus header, jump row,
+	// and footer.
+	if m.subagentLogVp.Height() < m.height-4 {
 		t.Fatalf("log viewport height %d too small for full screen (h=%d)", m.subagentLogVp.Height(), m.height)
 	}
 	logView := stripANSI(viewText(m))
@@ -164,6 +165,31 @@ func TestSubagentPickerListsChildrenAndShowsLog(t *testing.T) {
 	label := m.subsStatusLabel()
 	if label != "subs:1" {
 		t.Fatalf("subs label = %q, want subs:1", label)
+	}
+}
+
+func TestSubagentDrawerShowsConfiguredModel(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	m.width = 100
+	row := subagentRow{
+		ID:       "job-1",
+		Name:     "worker",
+		Role:     subagent.RoleExplore,
+		Model:    "configured-child-model",
+		Variant:  "high",
+		Status:   "running",
+		Activity: "bash  go test ./...",
+		Live:     true,
+	}
+	view := stripANSI(m.subagentDrawerRow(row, true, 92))
+	if !strings.Contains(view, "configured-child-model") {
+		t.Fatalf("sub-agent row missing configured model: %q", view)
+	}
+	if !strings.Contains(view, "thinking: high") {
+		t.Fatalf("sub-agent row missing configured thinking level: %q", view)
+	}
+	if strings.Contains(view, "deepseek") || strings.Contains(view, "gpt-") {
+		t.Fatalf("sub-agent row contains an unrelated hard-coded vendor/model: %q", view)
 	}
 }
 
@@ -294,6 +320,38 @@ func TestSubagentLogCloseXClick(t *testing.T) {
 	}
 }
 
+func TestSubagentLogStartsAtLatestAndHasJumpToLatest(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	m.width = 80
+	m.height = 24
+	m.subagentPickerMode = true
+	m.subagentLogMode = true
+	m.subagentSelected = subagentRow{ID: "agent-1", Name: "worker", Status: "running", Live: true}
+	for i := 0; i < 40; i++ {
+		m.subagentLogItems = append(m.subagentLogItems, transcriptItem{
+			kind: itemAssistant,
+			text: fmt.Sprintf("live output line %02d", i),
+		})
+	}
+	m = m.ensureSubagentBuilt()
+	m = m.resizeSubagentLogCard()
+	if !m.subagentLogVp.AtBottom() {
+		t.Fatalf("sub-agent log opened at offset %d, want latest offset %d", m.subagentLogVp.YOffset(), m.subagentLogVp.TotalLineCount()-m.subagentLogVp.Height())
+	}
+
+	m.subagentLogVp.GotoTop()
+	v := stripANSI(viewText(m))
+	if !strings.Contains(v, jumpDownArrow) {
+		t.Fatalf("scrolled sub-agent log missing jump-to-latest arrow: %q", v)
+	}
+	jumpRow := subagentLogHeaderRows + m.subagentLogVp.Height()
+	mm, _ := m.Update(tea.MouseClickMsg(tea.Mouse{X: m.width / 2, Y: jumpRow, Button: tea.MouseLeft}))
+	m = mm.(Model)
+	if !m.subagentLogVp.AtBottom() {
+		t.Fatalf("jump-to-latest click left log at offset %d", m.subagentLogVp.YOffset())
+	}
+}
+
 func TestSubagentDrawerKeepsComposerVisible(t *testing.T) {
 	st := newTestStore(t)
 	workdir := t.TempDir()
@@ -332,6 +390,33 @@ func TestSubagentDrawerKeepsComposerVisible(t *testing.T) {
 	lines := strings.Split(strings.TrimRight(v, "\n"), "\n")
 	if len(lines) > m.height {
 		t.Fatalf("view height %d > terminal %d (composer pushed off)", len(lines), m.height)
+	}
+}
+
+func TestLiveStatusSitsAboveSubagentDrawer(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 36})
+	m = mm.(Model)
+	m.subagentItems = []subagentRow{{ID: "worker", Name: "worker", Status: "running", Live: true}}
+	m.subagentPickerMode = true
+	m.subagentDrawerCompact = true
+	m.busy = true
+	m.activity = "bash  go test ./..."
+	m = m.ensureSubagentBuilt()
+	m = m.resizeSubagentDrawer()
+
+	lines := strings.Split(stripANSI(viewText(m)), "\n")
+	workingAt, drawerAt := -1, -1
+	for i, line := range lines {
+		if workingAt < 0 && strings.Contains(line, "working") {
+			workingAt = i
+		}
+		if drawerAt < 0 && strings.Contains(line, "sub-agents") {
+			drawerAt = i
+		}
+	}
+	if workingAt < 0 || drawerAt < 0 || workingAt >= drawerAt {
+		t.Fatalf("working status should be above sub-agent drawer: working=%d drawer=%d\n%s", workingAt, drawerAt, viewText(m))
 	}
 }
 

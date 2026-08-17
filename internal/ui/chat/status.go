@@ -83,8 +83,8 @@ func (m Model) statusSegmentValue(name string) string {
 			return formatCost(m.sessionCost)
 		}
 	case "tps":
-		if value := m.displayTPS(); value > 0 {
-			return formatTPS(value)
+		if value := m.tpsDisplayLabel(); value != "" {
+			return value
 		}
 	case "subs":
 		if value := m.subsStatusLabel(); value != "" {

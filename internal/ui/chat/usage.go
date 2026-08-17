@@ -17,6 +17,14 @@ import (
 // usageTimeout bounds the /usage API call.
 const usageTimeout = 10 * time.Second
 
+// Usage bar layout quantities.
+const (
+	usageBarMinW       = 2
+	usagePctBase       = 100
+	usageLabelW        = 8
+	usagePaddingAndPct = 7 // width not counted by label labelW (gap, % text)
+)
+
 // usageMsg carries the result of a GET /usage fetch.
 type usageMsg struct {
 	usage opencode.BillingUsage
@@ -25,17 +33,17 @@ type usageMsg struct {
 
 // usageBars renders a proportional bar for a usage window.
 func usageBar(percent int, width int, limited bool) string {
-	if width < 2 {
-		width = 2
+	if width < usageBarMinW {
+		width = usageBarMinW
 	}
 	clamped := percent
 	if clamped < 0 {
 		clamped = 0
 	}
-	if clamped > 100 {
-		clamped = 100
+	if clamped > usagePctBase {
+		clamped = usagePctBase
 	}
-	fill := clamped * width / 100
+	fill := clamped * width / usagePctBase
 	bar := strings.Repeat("█", fill) + strings.Repeat("░", width-fill)
 	style := lipgloss.NewStyle().Foreground(theme.ColorAccent())
 	if limited {
@@ -146,8 +154,8 @@ func (m Model) usageCardView() string {
 // usageBody renders the three usage windows with bars, percents, and reset
 // times. It is also reused by the settings card.
 func (m Model) usageBody(innerW int) string {
-	labelW := 8
-	barW := max(8, innerW-labelW-7)
+	labelW := usageLabelW
+	barW := max(usageLabelW, innerW-labelW-usagePaddingAndPct)
 	var sb strings.Builder
 	sb.WriteString(m.usageWindowLine("rolling", m.usage.Rolling, barW))
 	sb.WriteString("\n")

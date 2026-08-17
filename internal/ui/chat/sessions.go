@@ -26,6 +26,13 @@ const sessionCardHeaderRows = 2
 // card itself occupies (borders and chrome included).
 const sessionCardHeightPct = 80
 
+// sessionPad is the horizontal padding reserved on each side of a
+// session picker row.
+const sessionPad = 2
+
+// hoursPerDay is the number of hours in a day for the age label.
+const hoursPerDay = 24
+
 func (m Model) openSessionPicker() Model {
 	if m.store == nil {
 		m.sessionItems = nil
@@ -132,7 +139,7 @@ func (m Model) sessionPickerContent(width int) string {
 		} else if i > 0 {
 			b.WriteString("\n")
 		}
-		line := sessionPickerLine(sess, max(1, width-2))
+		line := sessionPickerLine(sess, max(1, width-sessionPad))
 		prefix := "  "
 		if i == m.sessionCursor {
 			prefix = "▸ "
@@ -193,8 +200,8 @@ func sessionPickerLine(sess db.Session, width int) string {
 	}
 	left := title
 	gap := width - lipgloss.Width(left) - lipgloss.Width(right)
-	if gap < 2 {
-		left = truncateRunes(left, max(1, width-lipgloss.Width(right)-2))
+	if gap < sessionPad {
+		left = truncateRunes(left, max(1, width-lipgloss.Width(right)-sessionPad))
 		gap = width - lipgloss.Width(left) - lipgloss.Width(right)
 		if gap < 1 {
 			gap = 1
@@ -216,7 +223,7 @@ func formatSessionAge(ms int64) string {
 	case d < 24*time.Hour:
 		return fmt.Sprintf("%dh ago", int(d.Hours()))
 	default:
-		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+		return fmt.Sprintf("%dd ago", int(d.Hours()/hoursPerDay))
 	}
 }
 
@@ -342,6 +349,7 @@ func (m Model) loadSession(sess *db.Session) Model {
 	m.tokensUsed = 0
 	m.sessionCost = 0
 	m.tokensPerSec = 0
+	m.tpsEstimated = false
 	m.cacheHit = 0
 	m.cacheMiss = 0
 	m.turnGenTokens = 0

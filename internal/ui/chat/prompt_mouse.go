@@ -35,9 +35,12 @@ func (s promptSelection) bounds() (start, end int) {
 }
 
 // promptContentWidth is the editable column count used by paint and hit-testing.
+// promptBorderPad is the 2-column gutter consumed by the prompt border/pad.
+const promptBorderPad = 2
+
 func (m Model) promptContentWidth() int {
-	innerW := max(minPaneWidth, m.width-2)
-	return max(minPaneWidth, innerW-2)
+	innerW := max(minPaneWidth, m.width-promptBorderPad)
+	return max(minPaneWidth, innerW-promptBorderPad)
 }
 
 // promptBoxMetrics returns the editable text rectangle (inside border, above footer).
@@ -63,11 +66,6 @@ func (m Model) promptBoxMetrics() (left, top, width, height int) {
 	// height layout: …, topBorder, text…, footer, bottomBorder [, pad]
 	top = max(0, m.height-2-h-1) // leave bottom border + footer under text
 	return left, top, w, h
-}
-
-func (m Model) pointerInPromptText(x, y int) bool {
-	left, top, w, h := m.promptHitRect()
-	return y >= top && y < top+h && x >= left && x < left+w
 }
 
 // promptHitRect uses drag-captured geometry when available (stable + fast).
@@ -438,7 +436,7 @@ func (m Model) promptBodyPaint(width, height int) string {
 		selStart, selEnd = 0, utf8.RuneCountInString(m.prompt.Value())
 	}
 
-	caret := -1
+	var caret int
 	if m.promptSel.dragging {
 		caret = m.promptSel.focus
 	} else {

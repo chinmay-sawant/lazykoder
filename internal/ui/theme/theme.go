@@ -14,12 +14,13 @@ import (
 const (
 	Bg      = "#000000"
 	Surface = "#000000"
+	Dialog  = "#111111"
 	Text    = "#eceae6"
 	Mute    = "#8a8680"
 	Accent  = "#d4a0c7"
 	Danger  = "#e06c75"
 	Border  = "#2a2a2a"
-	Good = "#9ece6a"
+	Good    = "#9ece6a"
 	// Edit diff row tints: solid soft washes on black (terminals rarely blend
 	// true alpha). Tuned like Grok Build / GitHub dark: very light greenish
 	// and reddish so the row is tinted, not painted neon.
@@ -31,6 +32,7 @@ const (
 
 func ColorBg() color.Color      { return lipgloss.Color(Bg) }
 func ColorSurface() color.Color { return lipgloss.Color(Surface) }
+func ColorDialog() color.Color  { return lipgloss.Color(Dialog) }
 func ColorText() color.Color    { return lipgloss.Color(Text) }
 func ColorMute() color.Color    { return lipgloss.Color(Mute) }
 func ColorAccent() color.Color  { return lipgloss.Color(Accent) }
@@ -88,9 +90,14 @@ func hexRGB(hex string) (r, g, b int) {
 	if len(hex) != 7 || hex[0] != '#' {
 		return 0, 0, 0
 	}
-	n, err := strconv.ParseUint(hex[1:], 16, 32)
-	if err != nil {
-		return 0, 0, 0
+	// Parse each 2-hex-char channel into a uint8-sized value so the result
+	// always fits a signed int (avoids uint64->int overflow, satisfies G115).
+	ch := func(s string) int {
+		v, err := strconv.ParseUint(s, 16, 8)
+		if err != nil {
+			return 0
+		}
+		return int(v)
 	}
-	return int(n >> 16), int((n >> 8) & 0xff), int(n & 0xff)
+	return ch(hex[1:3]), ch(hex[3:5]), ch(hex[5:7])
 }

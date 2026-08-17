@@ -1832,14 +1832,36 @@ func TestTokensPerSecUsesGeneratedNotSessionTotal(t *testing.T) {
 func TestRollingTPSUsesRecentSamples(t *testing.T) {
 	now := time.Unix(100, 0)
 	samples := []tpsSample{
-		{at: now.Add(-2 * time.Second), tokens: 20},
-		{at: now.Add(-1 * time.Second), tokens: 10},
+		{at: now.Add(-1500 * time.Millisecond), tokens: 20},
+		{at: now.Add(-500 * time.Millisecond), tokens: 10},
 	}
-	if got := rollingTPS(samples, now); got != 15 {
-		t.Fatalf("rollingTPS = %v, want 15", got)
+	if got := rollingTPS(samples, now); got != 20 {
+		t.Fatalf("rollingTPS = %v, want 20", got)
 	}
-	if got := formatTPS(120); got != ">99.9 tps" {
-		t.Fatalf("formatTPS(120) = %q, want >99.9 tps", got)
+	burst := []tpsSample{
+		{at: now.Add(-10 * time.Millisecond), tokens: 10},
+		{at: now.Add(-5 * time.Millisecond), tokens: 10},
+	}
+	if got := rollingTPS(burst, now); got != 0 {
+		t.Fatalf("short burst rollingTPS = %v, want 0 until the minimum interval", got)
+	}
+	if got := formatTPS(120); got != "120 tps" {
+		t.Fatalf("formatTPS(120) = %q, want 120 tps", got)
+	}
+}
+
+func TestDisplayTPSSurvivesSilentBusyGap(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	m.busy = true
+	m.turnStarted = time.Now().Add(-time.Second)
+	m.tokensPerSec = 80
+	if got := m.displayTPS(); got != 80 {
+		t.Fatalf("silent busy displayTPS = %v, want last known 80", got)
+	}
+
+	m.tokensPerSec = 0
+	if got := m.statusSegmentValue("tps"); got != "measuring" {
+		t.Fatalf("unmeasured busy TPS label = %q, want measuring", got)
 	}
 }
 
@@ -1851,8 +1873,20 @@ func TestFooterShowsLiveTPSWhileBusy(t *testing.T) {
 	mm, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
 	m = mm.(Model)
 	v := statusDrawerText(m)
-	if !strings.Contains(v, "80 tps") && !strings.Contains(v, "79 tps") && !strings.Contains(v, "81 tps") {
+	if !strings.Contains(v, "80 tps") && !strings.Contains(v, "79 tps") && !strings.Contains(v, "81 tps") && !strings.Contains(v, "~80 tps") {
 		t.Fatalf("busy status drawer missing live tps: %q", v)
+	}
+}
+
+func TestFooterShowsNumericHighTPS(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	m.model = "fast-model"
+	m.tokensPerSec = 120
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
+	m = mm.(Model)
+	v := stripANSI(viewText(m))
+	if strings.Contains(v, ">99.9") || !strings.Contains(v, "120 tps") {
+		t.Fatalf("footer distorted high TPS: %q", v)
 	}
 }
 

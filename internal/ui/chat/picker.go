@@ -13,6 +13,10 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
 
+// pickerRowMinLeftW is the minimum width left for the model label when a
+// provider/status column is shown on the same picker row.
+const pickerRowMinLeftW = 4
+
 func (m Model) pickerVPHeight() int {
 	reserved := lipgloss.Height(m.headerView()) + 1 + lipgloss.Height(m.promptLine()) + pickerDrawerChrome + 1
 	if m.err != "" {
@@ -113,7 +117,7 @@ func (m Model) pickerRow(id string, selected bool, width int) string {
 	}
 	gap := width - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 1 {
-		left = truncateRunes(left, max(4, width-lipgloss.Width(right)-1))
+		left = truncateRunes(left, max(pickerRowMinLeftW, width-lipgloss.Width(right)-1))
 		gap = width - lipgloss.Width(left) - lipgloss.Width(right)
 	}
 	if gap < 1 {

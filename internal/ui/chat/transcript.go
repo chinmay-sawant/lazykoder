@@ -36,6 +36,22 @@ const (
 	maxToolBodyRunes  = 6000
 	toolBodyHeadLines = 70
 	toolBodyTailLines = maxToolBodyLines - toolBodyHeadLines - 1
+
+	// estimateCharsPerToken is the rough chars-per-token divisor for the
+	// transcript estimate line.
+	estimateCharsPerToken = 4
+	// transcriptLinearPad is the 2-col inset applied to a transcript line.
+	transcriptLinearPad = 2
+	// diffStatParts is the max "+, -" segments in a diff stat.
+	diffStatParts = 2
+	// diffNumMinWidth is the minimum gutter number-column width.
+	diffNumMinWidth = 2
+	// diffBodyMinWidth is the floor width of a diff body column.
+	diffBodyMinWidth = 8
+	// diffHunkParts is the number of "-/+ range" fields in a hunk header.
+	diffHunkParts = 2
+	// diffEllipsisPad is the 2-col space reserved for the trailing ellipsis.
+	diffEllipsisPad = 2
 )
 
 type transcriptItem struct {
@@ -263,7 +279,7 @@ func estimateTokens(items []transcriptItem) int64 {
 	if n == 0 {
 		return 0
 	}
-	return int64(n / 4)
+	return int64(n / estimateCharsPerToken)
 }
 
 func (m *Model) syncTranscript() {
@@ -454,7 +470,7 @@ func frameUserPrompt(text string, width int) string {
 		}
 	}
 	if width > 0 {
-		innerW = min(innerW, max(1, width-2))
+		innerW = min(innerW, max(1, width-transcriptLinearPad))
 	}
 	innerW = max(1, innerW)
 	row := func(line, marker string) string {
@@ -1040,7 +1056,7 @@ func diffStat(diff string) (add, del int) {
 }
 
 func formatDiffStat(add, del int) string {
-	parts := make([]string, 0, 2)
+	parts := make([]string, 0, diffStatParts)
 	if add > 0 {
 		parts = append(parts, "+"+strconv.Itoa(add))
 	}
@@ -1105,12 +1121,12 @@ func renderDiff(diff string, width int) string {
 		}
 	}
 	numW := len(strconv.Itoa(maxNum))
-	if numW < 2 {
-		numW = 2
+	if numW < diffNumMinWidth {
+		numW = diffNumMinWidth
 	}
 	// " old new │ " gutter: numW + space + numW + space + │ + space
 	gutterW := numW + 1 + numW + 1 + 1 + 1
-	bodyW := max(8, width-gutterW)
+	bodyW := max(diffBodyMinWidth, width-gutterW)
 
 	addRow := diffAddStyle.Width(width).MaxWidth(width)
 	delRow := diffDelStyle.Width(width).MaxWidth(width)
@@ -1127,7 +1143,7 @@ func renderDiff(diff string, width int) string {
 			}
 			out = append(out, metaRow.Render(display))
 		default:
-			marker := " "
+			var marker string
 			var style lipgloss.Style
 			switch r.kind {
 			case 'a':
@@ -1143,7 +1159,7 @@ func renderDiff(diff string, width int) string {
 			gutter := formatDiffGutter(r.oldNum, r.newNum, numW) + "│ "
 			body := r.text
 			if lipgloss.Width(body) > bodyW-1 {
-				body = ansi.Cut(body, 0, max(1, bodyW-2)) + "…"
+				body = ansi.Cut(body, 0, max(1, bodyW-diffEllipsisPad)) + "…"
 			}
 			display := gutter + marker + body
 			if lipgloss.Width(display) > width {
@@ -1166,7 +1182,7 @@ func parseHunkHeader(line string) (oldStart, newStart int, ok bool) {
 	rest := strings.TrimSpace(strings.TrimPrefix(s, "@@"))
 	// rest like: "-12,3 +14,4 @@ optional"
 	parts := strings.Fields(rest)
-	if len(parts) < 2 {
+	if len(parts) < diffHunkParts {
 		return 0, 0, false
 	}
 	oldStart, ok1 := parseDiffRange(parts[0])

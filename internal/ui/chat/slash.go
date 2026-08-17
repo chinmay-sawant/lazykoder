@@ -9,7 +9,12 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
 
+// slashCompactMaxWidth is the compact slash palette card width cap.
 const slashCompactMaxWidth = 100
+
+// slashMinNameGap is the minimum gap (columns) between a slash name and its
+// description, plus the 2-col space left for the shorthand pad.
+const slashMinNameGap = 2
 
 type slashPaletteGroup struct {
 	title string
@@ -125,7 +130,7 @@ func slashCommandRow(cmd slashCmd, selected, compact bool, cardW, nameW int, sel
 		}
 		return nameSt.Render(line)
 	}
-	gap := max(2, nameW-lipgloss.Width(cmd.name)+2)
+	gap := max(slashMinNameGap, nameW-lipgloss.Width(cmd.name)+slashMinNameGap)
 	plain := prefix + cmd.name + strings.Repeat(" ", gap) + cmd.description
 	if lipgloss.Width(plain) > cardW {
 		plain = truncateRunes(plain, cardW)

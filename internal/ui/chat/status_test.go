@@ -65,9 +65,9 @@ func TestStatusDrawerOwnsDetailsAndArrowToggle(t *testing.T) {
 	if !strings.Contains(compact, "status ▾") {
 		t.Fatalf("compact footer missing status control: %q", compact)
 	}
-	for _, detail := range []string{"deepseek-v4-flash", "hit 800", "$0.420", "models:2"} {
-		if strings.Contains(compact, detail) {
-			t.Fatalf("detail %q leaked into compact footer: %q", detail, compact)
+	for _, detail := range []string{"deepseek-v4", "hit 800", "$0.420", "models:2"} {
+		if !strings.Contains(compact, detail) {
+			t.Fatalf("enabled detail %q missing from footer: %q", detail, compact)
 		}
 	}
 
@@ -105,6 +105,84 @@ func TestStatusDrawerClickTogglesRow(t *testing.T) {
 	m = mm.(Model)
 	if m.statusSegmentEnabled("variant") {
 		t.Fatal("click did not hide the variant detail")
+	}
+}
+
+func TestStatusDrawerClickTogglesRowWhileBusy(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	m = mm.(Model)
+	m.busy = true
+	m.activity = "thinking"
+
+	left, top, right, _, ok := m.statusChipRect()
+	if !ok {
+		t.Fatal("status chip should remain clickable while a prompt is running")
+	}
+	mm, _ = m.Update(tea.MouseClickMsg(tea.Mouse{
+		X: (left + right) / 2, Y: top, Button: tea.MouseLeft,
+	}))
+	m = mm.(Model)
+	if !m.statusMode {
+		t.Fatal("status chip click did not open drawer while busy")
+	}
+
+	y := m.statusDrawerTop() + 1 + 1
+	mm, _ = m.Update(tea.MouseClickMsg(tea.Mouse{
+		X: 4, Y: y, Button: tea.MouseLeft,
+	}))
+	m = mm.(Model)
+	if m.statusSegmentEnabled("variant") {
+		t.Fatal("busy status row click did not hide the variant detail")
+	}
+}
+
+func TestStatusDrawerRemainsEditableAfterPromptSubmit(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	m = mm.(Model)
+	m.prompt.SetValue("inspect the project")
+	m, _ = m.submit(m.prompt.Value())
+
+	left, top, right, _, ok := m.statusChipRect()
+	if !ok {
+		t.Fatal("status chip should remain clickable after prompt submit")
+	}
+	mm, _ = m.Update(tea.MouseClickMsg(tea.Mouse{
+		X: (left + right) / 2, Y: top, Button: tea.MouseLeft,
+	}))
+	m = mm.(Model)
+	if !m.statusMode {
+		t.Fatal("status chip click did not open drawer after prompt submit")
+	}
+
+	y := m.statusDrawerTop() + 1 + 1
+	mm, _ = m.Update(tea.MouseClickMsg(tea.Mouse{
+		X: 4, Y: y, Button: tea.MouseLeft,
+	}))
+	m = mm.(Model)
+	if m.statusSegmentEnabled("variant") {
+		t.Fatal("status row click did not hide the variant detail after prompt submit")
+	}
+	if m.turnCancel != nil {
+		m.turnCancel()
+	}
+}
+
+func TestModelAndVariantChipsRemainEditableWhileBusy(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 36})
+	m = mm.(Model)
+	m.model = "deepseek-v4-flash"
+	m.variant = "high"
+	m.busy = true
+	m.activity = "thinking"
+
+	if _, _, _, _, ok := m.modelStatusRect(); !ok {
+		t.Fatal("model chip is not clickable while a prompt is running")
+	}
+	if _, _, _, _, ok := m.variantStatusRect(); !ok {
+		t.Fatal("variant chip is not clickable while a prompt is running")
 	}
 }
 

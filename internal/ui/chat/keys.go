@@ -310,7 +310,6 @@ func (m Model) submit(text string) (Model, tea.Cmd) {
 	m.items = append(m.items, transcriptItem{kind: itemUser, text: text, when: time.Now().UnixMilli()})
 	m.turnItemFrom = len(m.items)
 	m.turnGenTokens = 0
-	m.tokensPerSec = 0
 	m.tpsSamples = nil
 	m.stepMetrics = false
 	m.syncTranscript()
@@ -364,7 +363,6 @@ func (m Model) resumeAfterLimit() (Model, tea.Cmd) {
 	m.items = append(m.items, transcriptItem{kind: itemNote, text: "continuing…"})
 	m.turnItemFrom = len(m.items)
 	m.turnGenTokens = 0
-	m.tokensPerSec = 0
 	m.tpsSamples = nil
 	m.stepMetrics = false
 	m.syncTranscript()
