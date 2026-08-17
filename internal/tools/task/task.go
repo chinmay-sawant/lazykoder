@@ -27,6 +27,8 @@ const (
 )
 
 // TaskArgs is the argument object for the task tool (spawn a sub-agent).
+// Child wall-clock lifetime is not a model arg; it comes from project
+// settings (agents.default_timeout_sec) via the subagent manager config.
 type TaskArgs struct {
 	Name        string `json:"name"`
 	Prompt      string `json:"prompt"`
@@ -36,7 +38,6 @@ type TaskArgs struct {
 	Variant     string `json:"variant"`
 	MaxSteps    int    `json:"max_steps"`
 	Background  bool   `json:"background"`
-	TimeoutSec  int    `json:"timeout_sec"`
 }
 
 // ListArgs is the argument object for task_list.
@@ -135,11 +136,10 @@ func specTask() opencode.ToolSpec {
 					"description": "sub-agent role",
 					"enum":        []string{RoleExplore, RolePlan, RoleGeneral},
 				},
-				"model":       map[string]any{"type": "string", "description": "model id override; empty uses parent model"},
-				"variant":     map[string]any{"type": "string", "description": "reasoning effort / variant override"},
-				"max_steps":   map[string]any{"type": "integer", "description": "max agent steps for the child"},
-				"background":  map[string]any{"type": "boolean", "description": "if true, return after spawn without waiting"},
-				"timeout_sec": map[string]any{"type": "integer", "description": "wait timeout in seconds when not background"},
+				"model":      map[string]any{"type": "string", "description": "model id override; empty uses parent model"},
+				"variant":    map[string]any{"type": "string", "description": "reasoning effort / variant override"},
+				"max_steps":  map[string]any{"type": "integer", "description": "max agent steps for the child"},
+				"background": map[string]any{"type": "boolean", "description": "if true, return after spawn without waiting"},
 			},
 			"required": []string{"prompt"},
 		},

@@ -42,7 +42,9 @@ type Spec struct {
 	Variant     string
 	MaxSteps    int
 	Background  bool
-	// Timeout is 0 to use Config.Timeout.
+	// Timeout overrides Config.Timeout when > 0. The public task tool never
+	// sets this: child lifetime is settings-owned (default_timeout_sec).
+	// Non-zero values are for tests and internal Spawn callers only.
 	Timeout time.Duration
 }
 

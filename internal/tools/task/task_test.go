@@ -100,7 +100,8 @@ func TestParseTaskArgs(t *testing.T) {
 		"variant": "high",
 		"max_steps": 8,
 		"background": true,
-		"timeout_sec": 60
+		"timeout_sec": 60,
+		"timeout_ms": 1000
 	}`)
 	a, err := ParseTaskArgs(raw)
 	if err != nil {
@@ -112,9 +113,30 @@ func TestParseTaskArgs(t *testing.T) {
 	if a.Role != RoleExplore {
 		t.Errorf("Role = %q, want %q", a.Role, RoleExplore)
 	}
-	if a.Model != "m1" || a.Variant != "high" || a.MaxSteps != 8 || !a.Background || a.TimeoutSec != 60 {
+	// timeout_* fields are not model-owned spawn args; they must be ignored.
+	if a.Model != "m1" || a.Variant != "high" || a.MaxSteps != 8 || !a.Background {
 		t.Errorf("ParseTaskArgs() = %+v, unexpected optional fields", a)
 	}
+}
+
+func TestSpecsTaskHasNoTimeoutField(t *testing.T) {
+	for _, s := range Specs() {
+		if s.Name != ToolTask {
+			continue
+		}
+		props, ok := s.Parameters["properties"].(map[string]any)
+		if !ok {
+			t.Fatal("task properties missing")
+		}
+		if _, ok := props["timeout_ms"]; ok {
+			t.Fatal("task schema still advertises timeout_ms")
+		}
+		if _, ok := props["timeout_sec"]; ok {
+			t.Fatal("task schema still advertises timeout_sec")
+		}
+		return
+	}
+	t.Fatal("task tool not found")
 }
 
 func TestParseTaskArgsRequiresPrompt(t *testing.T) {

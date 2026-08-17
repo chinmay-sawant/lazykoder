@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 )
@@ -66,10 +65,9 @@ func (h *Host) Specs() []opencode.ToolSpec {
 						"type":        "boolean",
 						"description": "If true, return immediately while the job runs (recommended for parallel agents)",
 					},
-					"timeout_ms": map[string]any{
-						"type":        "integer",
-						"description": "Optional timeout in milliseconds (0 = config default)",
-					},
+					// Wall-clock lifetime is not model-controlled: Host always
+					// uses Config.Timeout from settings (default_timeout_sec).
+					// Spec.Timeout remains for tests and internal Spawn only.
 				},
 				"required": []string{"prompt"},
 			},
@@ -175,7 +173,8 @@ type taskArgs struct {
 	Variant     string `json:"variant"`
 	MaxSteps    int    `json:"max_steps"`
 	Background  bool   `json:"background"`
-	TimeoutMS   int64  `json:"timeout_ms"`
+	// timeout_ms / timeout_sec from the model are intentionally ignored.
+	// encoding/json drops unknown fields; do not re-add timeout fields here.
 }
 
 type idArgs struct {
@@ -190,10 +189,8 @@ func (h *Host) execTask(ctx context.Context, argsJSON, partID string) (string, s
 	if strings.TrimSpace(args.Prompt) == "" {
 		return toolError("task: prompt is required")
 	}
-	var timeout time.Duration
-	if args.TimeoutMS > 0 {
-		timeout = time.Duration(args.TimeoutMS) * time.Millisecond
-	}
+	// Lifetime is settings-owned (Config.Timeout / default_timeout_sec).
+	// Leaving Spec.Timeout at 0 makes Manager.Spawn apply the config default.
 	spec := Spec{
 		Name:        args.Name,
 		Prompt:      args.Prompt,
@@ -203,7 +200,6 @@ func (h *Host) execTask(ctx context.Context, argsJSON, partID string) (string, s
 		Variant:     args.Variant,
 		MaxSteps:    args.MaxSteps,
 		Background:  args.Background,
-		Timeout:     timeout,
 	}
 	snap, err := h.Mgr.Spawn(ctx, h.ParentSessionID, partID, spec)
 	if err != nil {
