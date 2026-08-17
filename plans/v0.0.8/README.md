@@ -24,11 +24,11 @@ version is that backend.
 
 ## Overview
 
-We already track fill against the **selected** model's catalog window.
-We do not compact. `buildHistory` still sends the entire SQLite
-transcript on every step. A user can accumulate 400k tokens on a ~1M
-model (DeepSeek-class) and then pick a ~256k model. The next request
-would overflow.
+Shipped 2026-08-17. Fill is tracked against the **selected** model's
+catalog window. `buildHistory` starts at the latest compaction
+checkpoint plus the kept tail. A user can still accumulate 400k tokens
+on a ~1M model and then pick a ~256k model; the next send (or
+`/compact`) writes a checkpoint instead of overflowing.
 
 Other harnesses (Codex, Claude Code, OpenCode) do not treat "model
 changed" as a special product. They re-evaluate the **live** model's
@@ -45,24 +45,29 @@ newly selected model.
 
 ---
 
-## Current code (facts)
+## Shipped code (facts)
 
 - Window comes from `.lazykoder/models.json` (`GET /models` first,
   `models.dev` only fills zeros). Not hardcoded.
 - Footer/`/status` show `tokensUsed / ContextOf(live model)`.
-- `tokensUsed` is a high-water mark of `step-finish.tokens_total` (or
-  input+output), with a chars/4 floor. It never decreases. After a real
-  compact it must be allowed to drop.
+- `tokensUsed` is the latest request input (or `tokens_after` after
+  compact), with a chars/4 floor. It is not a lifetime peak.
 - `/model` or the footer chip updates `m.model` and `sessions.model`.
-  Same session. Next `Send` uses the new id with the full history.
-  Assistant rows store `messages.model_id`; older rows keep the old id.
+  Same session. Next `Send` uses the new id. If used exceeds
+  `percent` of the new window, a shrink hint is set and the next send
+  compacts first. Assistant rows store `messages.model_id`; older rows
+  keep the old id.
 - A switch during a busy turn is cosmetic until the next send. The
   in-flight `Agent` keeps the model it was built with.
 - `Message.Visible` is TUI history-delete only. `buildHistory` ignores
-  it. Do not reuse it as the compact hide bit.
+  it. Compact does not flip it.
 - `internal/agent/summary.go` is `LastAssistantText` for sub-agent
   handoff, not conversation compaction.
-- There is no `internal/prompts` package and no `go:embed` yet.
+- `internal/prompts` embeds `compact.md` (`prompts.Must`). Checkpoints
+  are `messages.agent = compaction` + `parts.type = compaction`.
+- Settings: `compaction.auto` (default true), `percent` (80, 5-99),
+  `keep_tokens` (15000, JSON-only). `/settings` rows are **auto-compact**
+  and **compact at**. Old `buffer` keys are ignored.
 
 ---
 
@@ -98,7 +103,7 @@ After `selectPickerItem` (and any other live-model write):
 ```
 oldWindow = ContextOf(infos, previousID)
 newWindow = ContextOf(infos, m.model)
-overflow  = tokensUsed > 0 && newWindow > 0 && tokensUsed > newWindow - buffer
+need      = NeedsCompact(tokensUsed, newWindow, percent)
 ```
 
 If overflowing: persist the new model, set `pendingCompactReason =
@@ -108,8 +113,8 @@ Do not spend tokens on picker click.
 If the new window is larger or unknown (`Context == 0`), clear the flag.
 Unknown window: skip auto-compact rather than guess.
 
-Also keep `m.session.Model` in sync with `m.model` in memory. Today only
-SQLite is updated.
+`m.session.Model` stays in sync with `m.model` in memory
+(`syncSessionModel`).
 
 ### Gate B: agent preflight (the real check)
 
@@ -117,15 +122,15 @@ At the start of each `runSteps` iteration, before `Chat` / `ChatStream`:
 
 ```
 estimate = max(tokensUsed, chars/4 of the request we are about to send)
-limit    = ContextOf(current model)
-need     = estimate > limit - max(outputReserve, buffer)
+window   = ContextOf(current model)
+need     = estimate > window * percent / 100
 ```
 
 Defaults:
 
 - `auto = true`
 - `percent = 80` (used > 80% of the live window)
-- `keep.tokens = 15_000`
+- `keep_tokens = 15_000`
 - `outputReserve = 4_096` for the summarizer
 
 Classify provider overflow errors and run **one** compact+retry. A
@@ -169,13 +174,14 @@ do not apply to our OpenCode Go client.
 
 ```
 before each model call (and after a shrink flag):
-  1. Estimate request size. Compare to ContextOf(live model) - buffer.
-  2. If under budget: send as today.
+  1. Estimate request size. Compare to percent of ContextOf(live model).
+  2. If under budget: send.
   3. Layer 0, prune (no LLM):
-       keep last 2 user turns + keep.tokens tail;
+       keep last 2 user turns + keep_tokens tail;
        older tool outputs become a short placeholder in the request only;
        do not delete SQLite rows; do not use Message.Visible.
-  4. Re-estimate. If now under budget: send.
+  4. Re-estimate. Preflight still floors on tokensUsed, so a large last
+     request still takes the LLM path even if prune would have fit.
   5. Layer 1, LLM checkpoint:
        pick summarizer (incoming, or outgoing if shrink will not fit);
        tools off, max ~4096 output;
@@ -183,7 +189,7 @@ before each model call (and after a shrink flag):
        + previous summary if any;
        persist checkpoint; buildHistory from checkpoint + tail.
   6. Layer 2, replay:
-       auto path: replay last real user text;
+       auto / shrink path: continue the current user turn;
        manual /compact: stop after the checkpoint.
   7. Provider still overflows: one compact+retry, then error.
 ```
@@ -193,8 +199,9 @@ as a historical user message ("this is a checkpoint, not new
 instructions"), then every later message. Older rows stay in SQLite and
 still paint in the transcript.
 
-Sub-agents: same preflight on the child `Agent`, using the child's
-model. A parent shrink does not rewrite a running child.
+Sub-agents: children get `CompactAuto: true` but no catalog window, so
+percent auto never fires. Overflow retry still can. A parent shrink does
+not rewrite a running child.
 
 ---
 
@@ -207,8 +214,7 @@ The summarizer instruction lives in the app:
 
 ```
 internal/prompts/
-  embed.go       // go:embed *.md
-  prompts.go     // Must("compact.md") string
+  embed.go       // go:embed *.md + Must("compact.md")
   compact.md     // the only prompt in v1
 ```
 
@@ -264,9 +270,11 @@ Add to `.lazykoder/settings.json` (no new dependency):
 }
 ```
 
-`auto` gates the preflight check. Manual `/compact` and the single
-overflow retry stay available when `auto` is false. No separate
-compaction-model setting in v1. The shrink rule is code, not config.
+`auto` gates same-model percent preflight only. Manual `/compact`,
+mid-session shrink, and the single overflow retry stay available when
+`auto` is false. `/settings` edits `auto` and `percent`. `keep_tokens`
+is JSON-only. No separate compaction-model setting in v1. The shrink
+rule is code, not config.
 
 ---
 
@@ -323,16 +331,10 @@ phase-5-gates
 
 ---
 
-## Open questions (defaults; change before implement if you disagree)
+## Decisions (shipped)
 
-1. **When to compact after a shrink:** next send (recommended) vs
-   immediately on picker select.
-2. **Confirm dialog:** none except hard failure (recommended) vs y/n
-   every shrink.
-3. **Summarizer on shrink:** outgoing larger model when incoming cannot
-   fit (recommended) vs always incoming (OpenCode; fails the 400k-on-256k
-   case).
-4. **`/compact` in the same change as auto**, or auto-only first.
-
-Recommended: 1 next-send, 2 no confirm, 3 outgoing-if-needed, 4 same
-change because the backend is shared.
+1. Compact after a shrink on the **next send**, not on picker click.
+2. No y/n confirm. Hard error if the summarizer cannot fit; session kept.
+3. Summarizer uses the outgoing larger model when the incoming window
+   cannot hold the head.
+4. `/compact` shipped in the same change as auto (shared backend).

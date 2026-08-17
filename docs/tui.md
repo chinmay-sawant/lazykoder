@@ -37,19 +37,19 @@ pickers are centered cards.
   stays compact as a clickable `status ▾` control. Use `/status` to open the
   drawer with the current model, variant, token window, cache hit/miss, cost,
   tokens/sec, sub-agent count, model count, scroll state, and prompt hint.
-	  hit is cached input tokens (`cache_read` /
-	  `prompt_cache_hit`); miss is uncached input (`prompt - hit`, or the
-	  full prompt when the API reports input and cache separately). Each
-	  count is summed since the last compact (or session start). A compact
-	  resets hit and miss to 0 because those old prefixes are no longer
-	  in the live request. Over many turns the sums can exceed the model
-	  window; that is expected (it is not a single-request fill). Each
-	  count carries its share of hit+miss. tps uses provider-reported output
-	  tokens divided by the provider step duration when usage is available.
-	  During streaming, a `~` value is a provisional estimate from recent
-	  streamed text; if no sample exists yet the drawer says `measuring`.
-	  Values above 99 are shown numerically, not as a capped greater-than
-	  label. It is never the session total.
+  Cache hit is cached input tokens (`cache_read` /
+  `prompt_cache_hit`); miss is uncached input (`prompt - hit`, or the
+  full prompt when the API reports input and cache separately). Each
+  count is summed since the last compact (or session start). A compact
+  resets hit and miss to 0 because those old prefixes are no longer
+  in the live request. Over many turns the sums can exceed the model
+  window; that is expected (it is not a single-request fill). Each
+  count carries its share of hit+miss. tps uses provider-reported output
+  tokens divided by the provider step duration when usage is available.
+  During streaming, a `~` value is a provisional estimate from recent
+  streamed text; if no sample exists yet the drawer says `measuring`.
+  Values above 99 are shown numerically, not as a capped greater-than
+  label. It is never the session total.
   Context
   windows, list prices, cache read/write prices, and reasoning variants
   come from GET /models plus the live models.dev OpenCode catalog, then
@@ -75,9 +75,13 @@ pickers are centered cards.
   (`used > window * percent / 100`). That percent is
   `compaction.percent` in `.lazykoder/settings.json` and the
   **compact at** row in `/settings` (default 80, range 5-99, steps of
-  5). Turn the feature off with **auto-compact**. `/compact` and one
-  overflow retry still work when auto is off. The recent tail kept
-  beside the summary is 15,000 tokens (`compaction.keep_tokens`).
+  5). Turn same-model auto-compact off with **auto-compact**. `/compact`,
+  a mid-session shrink, and one overflow retry still run when auto is
+  off. The recent tail kept beside the summary is 15,000 tokens
+  (`compaction.keep_tokens` in settings.json; not a `/settings` row).
+  After a compact the transcript adds a notice `context compacted` or
+  `context compacted (1000k -> 256k)`. The painted history stays
+  complete; only the next provider request shrinks.
 
   Examples at the default 80%:
 
@@ -108,9 +112,10 @@ pickers are centered cards.
   long titles truncate with an ellipsis, and the list scrolls with the wheel.
 - Empty session: a short hint in the transcript, not a blank pane.
 - `/help` or `?` (empty prompt) opens a centered key card (two columns
-  at 100+ width) listing send, slash commands including `/settings`,
-  `/usage`, `/continue`, and `/compact`, copy/quit, and undo. `esc`, `?`, or `[x]`
-  closes it.
+  at 100+ width) listing send, slash commands including `/compact`,
+  `/settings`, `/continue`, and `/status`, copy/quit, and undo. `/usage`
+  is on the slash palette (Project group), not on this card. `esc`, `?`,
+  or `[x]` closes it.
 - `/usage` opens a centered OpenCode Go usage card. It fetches the rolling,
   weekly, and monthly plan windows, showing percentage used, rate-limit
   status, and reset times. Press `r` to refresh and `esc` or `x` to close.
@@ -177,6 +182,9 @@ values are resolved for that child job, including explicit child overrides and
 configured defaults, and are read from the job snapshot or child session record. An
 empty variant is shown as `thinking: default`, meaning the provider default.
 The UI does not infer a vendor or substitute a hard-coded model.
+When the child session has step-finish usage, the row and the child log
+header also show cost and cache hit/miss (`$0.18  ·  12k/800`). Status
+cost adds those children as `subs $X`; footer cost uses `+$X`.
 
 - `/agents` (aliases `/subs`) focuses the drawer; it also opens when a
   `task` tool runs.
@@ -267,6 +275,8 @@ persist in `<cwd>/.lazykoder/settings.json`.
 | explore model | model for explore-role children (empty = inherit) |
 | step limit | on/off for the per-turn tool-step budget |
 | parent max steps | tool-calling rounds per user turn when the limit is on (1-1000, default 16) |
+| auto-compact | on/off for same-model percent preflight (default on) |
+| compact at | fire when used tokens exceed this % of the live window (5-99, steps of 5, default 80). Dimmed when auto is off, still editable |
 | sub-agents | on/off for parent `task` tools |
 | default role | `explore` / `plan` / `general` when `task` omits role |
 | max concurrent | concurrent child agents (1-20, default 4) |
@@ -295,6 +305,9 @@ concurrent). Cancelling the parent turn also cancels child jobs.
 | click a row / `◂` / `▸` | adjust that control |
 | `esc` / `x` / `q` | close |
 
+`keep_tokens` (recent tail beside the summary, default 15,000) is only
+in `.lazykoder/settings.json`. `/settings` does not edit it.
+
 When the step limit is off the agent still has a large safety bound so a
 runaway loop cannot run forever. `/model` and `/variant` still change only
 the **current session**; the settings card is the project default.
@@ -307,6 +320,25 @@ does not write a new user message. When the last turn did not hit the
 limit, `/continue` sends a normal user message of `continue` instead.
 After a step-limit error the status line also hints `/continue to keep
 going`.
+
+## Compact
+
+`/compact` summarizes older context now and stops after the checkpoint
+(no follow-up chat turn). It needs an existing session; otherwise the
+status says `nothing to compact`. Optional notes after the command
+(`/compact focus on the auth bug`) are appended to the summarizer
+prompt. Auto-compact uses the same backend when used tokens exceed
+`compaction.percent` of the live window.
+
+Switching to a smaller-window model while the session is already over
+that percent shows `next send will compact (window X -> Y)` above the
+composer. The next send (or `/compact`) writes the checkpoint. There is
+no y/n confirm. A switch during a busy turn is cosmetic until the next
+send: the in-flight agent keeps the model it was built with.
+
+While a compact call is in flight the status prompt segment says
+`compacting` and the activity line says `working  compacting`. Enter
+while busy does not run `/compact`; it force-sends the draft.
 
 Typing `/` in the chat prompt opens a full-width command popover above the
 prompt, grouped as Session / Model / Project / Help. Each row shows the

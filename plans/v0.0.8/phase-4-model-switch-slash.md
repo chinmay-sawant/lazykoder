@@ -6,7 +6,7 @@
 > **Priority:** P0
 > **Gate:** shrinking the live model sets a pending-compact hint; the
 > next send runs the phase 3 path; `/compact` works under budget;
-> settings expose `compaction.auto` / `buffer` / `keep_tokens`
+> settings expose `compaction.auto` / `percent` / `keep_tokens`
 
 ## Overview
 
@@ -17,8 +17,8 @@ send**, not on picker click.
 
 ### 4.1 Picker shrink flag
 
-- [x] `selectPickerItem` compares `tokensUsed` to
-      `ContextOf(new model) - buffer`.
+- [x] `selectPickerItem` compares `tokensUsed` with
+      `NeedsCompact(..., EffectiveCompaction().Percent)`.
 - [x] Overflow sets `pendingCompactReason = "model-shrink"` and a
       composer hint `next send will compact (window X -> Y)`.
       `TestModelShrinkSetsCompactHint`.
@@ -44,11 +44,12 @@ send**, not on picker click.
 
 ### 4.3 Settings
 
-- [x] `.lazykoder/settings.json` gains `compaction.auto` / `buffer` /
-      `keep_tokens`.
+- [x] `.lazykoder/settings.json` gains `compaction.auto` / `percent` /
+      `keep_tokens`. `/settings` edits auto and percent. `keep_tokens`
+      is JSON-only.
 - [x] Defaults apply when the block is missing.
-- [x] `auto` gates preflight only. `/compact` and the single overflow
-      retry remain available when `auto` is false.
+- [x] `auto` gates same-model percent preflight only. `/compact`, shrink,
+      and the single overflow retry remain available when `auto` is false.
 - [x] Settings tests cover load/save/default.
       `TestCompactionLoadSaveAndMissingBlock`, `TestDefault`.
 
@@ -58,6 +59,10 @@ send**, not on picker click.
       covers picker shrink hint, `/compact` slash, settings defaults.
       exit 0
 - [x] `go build ./...` passes. exit 0
+
+## Errata (as shipped)
+
+There is no `buffer` key. Trigger is `used > window * percent / 100`.
 
 ## Dependencies
 

@@ -52,6 +52,12 @@ the later phases call. No Chat request, no SQLite write, no TUI.
 - [x] `go build ./...` passes. exit 0
 - [x] No provider or SQLite in `compact_test.go` / `prompts_test.go`.
 
+## Errata (as shipped)
+
+`NeedsCompact(estimate, window, percent)` uses `percent` (5-99), not a
+`buffer` token reserve. Prune keep is `keep_tokens` (default 15,000),
+not `keep.tokens`.
+
 ## Dependencies
 
 - Catalog windows already on `modelscache.Info.Context`.

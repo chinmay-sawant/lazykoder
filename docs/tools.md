@@ -82,7 +82,7 @@ When `settings.agents.enabled` is true, the parent agent gets:
 
 Default `task` waits until the child finishes and returns a JSON summary.
 `background: true` returns a handle immediately (preferred for parallel
-spawns; follow with `task_wait`). Default child step budget is 32
+spawns; follow with `task_wait`). Default child step budget is 1000
 (configurable via settings `agents.child_max_steps` or per-spawn
 `max_steps`). If a child hits its step limit after doing work, the job
 completes with a partial summary and a note instead of status `failed`.
@@ -118,3 +118,8 @@ Each provider step writes, in order: `step-start`; `reasoning` (only when
 the API returns reasoning); `text` (only when content is present); `tool` +
 `tool_calls` for every requested tool; `step-finish` (only when usage is
 present, carrying `finish_reason`, token counts and cost).
+
+A compact run is not a field on that step. It inserts a separate
+assistant message (`messages.agent = compaction`) with
+`parts.type = compaction`. See [storage.md](storage.md) and
+[architecture.md](architecture.md).

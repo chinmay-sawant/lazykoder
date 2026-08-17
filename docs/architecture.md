@@ -16,11 +16,12 @@ owns the tool loop: it is not a wrapper around the OpenCode CLI or its global
 | `internal/workspace` | create `.lazykoder/`, open + migrate the db, ensure `.gitignore` |
 | `internal/db` | numbered migrations + session/message/part/tool store |
 | `internal/provider/opencode` | HTTP client for the OpenCode Go API |
-| `internal/agent` | turn loop: user text -> provider -> parts, tool dispatch |
+| `internal/agent` | turn loop, `buildHistory`, compact policy and summarizer run |
+| `internal/prompts` | embedded `compact.md` via `go:embed` (`prompts.Must`) |
 | `internal/subagent` | Manager + Host + AgentRunner for concurrent children |
 | `internal/policy` | bash classifier returning Allow/Ask/Deny |
 | `internal/tools` | bash, read, grep, write, edit, question, webfetch, task schemas |
-| `internal/settings` | project settings including `agents` caps |
+| `internal/settings` | project settings: slot, model, `agents` caps, `compaction` |
 | `internal/ui/chat` | transcript, prompt, status line, model picker |
 | `internal/ui/confirm` | the y/n confirm view (rm and question flows) |
 | `internal/envfile` | stdlib-only `.env` loader |
@@ -84,23 +85,20 @@ One user turn runs in `internal/agent.Send` with a hard step bound (default
 16) so a runaway model cannot spam confirm prompts:
 
 1. Persist the user message + text part (create or resume a session).
-2. Rebuild provider history from the store. If a compaction checkpoint
-   exists, history starts at that summary plus the kept tail. Older tool
-   bodies are replaced with a short placeholder in the request only.
-3. Preflight compact when the estimate exceeds `compaction.percent` of
-   the live model's window (`used > window * percent / 100`; default
-   80, configurable in `/settings`), or when the user just shrank the
-   model onto a smaller window that is already over that percent. The
-   summarizer uses `internal/prompts/compact.md`, tools off. A
-   1M-to-256k switch summarizes with the outgoing model when the
-   incoming window cannot hold the history. The kept tail is 15,000
-   tokens (`compaction.keep_tokens`).
+2. Rebuild provider history from the store (`buildHistory`). If a
+   compaction checkpoint exists, history starts at that summary plus the
+   kept tail. Older tool bodies become `[old tool result cleared]` in
+   the request only.
+3. Preflight compact when needed (see Compaction). Then rebuild history
+   again so the next call sees the checkpoint.
 4. Call the provider with the advertised tool set (base tools + task tools
    when a `SubagentHost` is wired). One provider overflow retries after a
    compact; a second overflow is returned as an error.
-5. Write parts: `step-start`, `reasoning` (when present), `text` (when
-   present), `tool` + `tool_calls` rows, `compaction` (checkpoint),
-   `step-finish` (when usage is present).
+5. A normal chat step writes `step-start`, `reasoning` (when present),
+   `text` (when present), `tool` + `tool_calls` rows, and `step-finish`
+   (when usage is present). A compact run writes a **separate** assistant
+   message (`messages.agent = compaction`) with one `parts.type =
+   compaction` envelope. It is not a field on the chat step.
 6. For each tool call, classify and execute (see safety + tools docs).
    Task-family tools in one step run concurrently under the subagent
    semaphore; other tools stay sequential.
@@ -109,6 +107,60 @@ One user turn runs in `internal/agent.Send` with a hard step bound (default
 
 Everything the loop needs for a resumed session lives in the store; there is
 no in-memory tool state for the parent transcript.
+
+## Compaction
+
+The TUI still paints the full human transcript. Compaction only shrinks
+what the next provider call sees.
+
+**Trigger.** Auto-compact fires when
+`max(tokensUsed, chars/4 of the request) > window * percent / 100`.
+Default `percent` is 80 (range 5-99). Exactly 80% does not fire. Unknown
+window (`0`) never fires. Estimate is 4 characters per token.
+
+**Four paths.**
+
+| Path | Gated by `compaction.auto`? |
+| --- | --- |
+| Same-model preflight over the percent threshold | yes |
+| Mid-session shrink (`reason = model-shrink`) | no |
+| One provider overflow retry (`reason = overflow`) | no |
+| Manual `/compact` (`reason = manual`) | no |
+
+`auto: false` turns off same-model percent preflight only. `/compact`,
+shrink-on-next-send, and the overflow retry still run.
+
+**Settings** live in `.lazykoder/settings.json`:
+
+```json
+"compaction": { "auto": true, "percent": 80, "keep_tokens": 15000 }
+```
+
+`/settings` exposes **auto-compact** and **compact at** (5% steps).
+`keep_tokens` is JSON-only (default 15,000). `0` or omitted is treated
+as 15,000. There is no `buffer` key; an old `buffer` field is ignored.
+
+**History.** The latest `compaction` part wins. `buildHistory` injects
+one synthetic user message (`This session continues from a compacted
+conversation...` plus the summary), then messages from
+`tail_start_message_id` onward. SQLite rows are never deleted.
+`messages.visible` is TUI history-delete only and is ignored here.
+
+**Summarizer.** Tools off, `MaxTokens` 4096, prompt from
+`internal/prompts/compact.md` (eight headings). Extra `/compact` notes
+append a Compact instructions block. If the incoming window cannot hold
+the head, the outgoing (larger) model writes the checkpoint. A huge head
+is split and combined. Empty summary or a head that still cannot fit is
+a hard error; the session is kept.
+
+**Meters.** Token fill is the latest request input, or the checkpoint
+`tokens_after` (summary + tail). It is not a lifetime peak. Parent cache
+hit/miss reset to 0 at compact, then grow again. Cost uses
+`parts.cost` when set, otherwise `messages.model_id` plus
+`.lazykoder/models.json` prices.
+
+**Children.** Child agents get `CompactAuto: true` but no catalog
+window, so percent auto never runs for them. Overflow retry still can.
 
 ## Sub-agents
 

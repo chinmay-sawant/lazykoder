@@ -1,20 +1,21 @@
 # lazykoder documentation
 
 Index of the docs for the lazykoder TUI agent harness. The docs complement the
-live plan ledgers in `plans/v0.0.1/`; the ledgers are the source of truth for
+live plan ledgers in `plans/v0.0.x/`; the ledgers are the source of truth for
 status and closure gates, these pages explain the design and usage.
 
 ## Parts
 
 | Doc | Covers |
 | --- | --- |
-| [architecture.md](architecture.md) | package map, launch sequence, provider, model handling |
+| [architecture.md](architecture.md) | package map, launch sequence, provider, agent loop, compaction |
 | [storage.md](storage.md) | SQLite schema, migrations, store API, ids and timestamps |
 | [safety.md](safety.md) | policy classifier, the confirm view, the executor gate |
-| [tools.md](tools.md) | the six tools, agent loop wiring, part types |
-| [tui.md](tui.md) | screens, keys, model picker, session replay |
+| [tools.md](tools.md) | base tools, task tools, agent loop wiring, part types |
+| [tui.md](tui.md) | screens, keys, `/compact`, `/settings`, `/status`, session replay |
 | [development.md](development.md) | build, run, test, environment, project layout |
 | [plans.md](plans.md) | how the plan ledgers work and what is shipped |
+| [tips.md](tips.md) | rotating in-app hints (keep in sync with `internal/tips`) |
 
 ## Quick map
 
@@ -23,9 +24,11 @@ main.go                         init workspace, load key, start tea program
 internal/workspace              mkdir .lazykoder, open db, append gitignore
 internal/db                     migrations + session/message/part/tool store
 internal/provider/opencode      HTTP client for OpenCode Go
-internal/agent                  turn loop: user text -> provider -> parts
+internal/agent                  turn loop, history, compact checkpoint
+internal/prompts                go:embed compact.md summarizer prompt
+internal/settings               project defaults: slot, model, agents, compaction
 internal/policy                 bash classifier + Decision (allow/deny/ask)
-internal/tools                  bash, read, write, edit, question, webfetch
+internal/tools                  bash, read, grep, write, edit, question, webfetch, task
 internal/ui/chat                transcript, prompt, status, model picker
 internal/ui/confirm             y/n confirm view (rm + questions)
 internal/envfile                stdlib-only .env loader

@@ -17,7 +17,7 @@ snapshots:
 | `v0.0.2/phase-3-runner-storage.md` | AgentRunner + child sessions |
 | `v0.0.2/phase-4-tui-parallel.md` | parallel tasks, confirm queue, TUI |
 | `v0.0.4/README.md` | SQLite schema FKs + indexes |
-| `v0.0.5/README.md` | 2026-08-17 TUI layout + settings UX (not started) |
+| `v0.0.5/README.md` | 2026-08-17 TUI layout + settings UX (implemented) |
 | `v0.0.5/phase-1-trust-overlays.md` | opaque cards, `@` viewport, settings safety rows, `/help` |
 | `v0.0.5/phase-2-chrome-settings.md` | slash palette, todos, footer chips, settings card |
 | `v0.0.5/phase-3-polish-compact.md` | resume/model polish, overlay recipe, 80x24 |
@@ -50,13 +50,19 @@ human runs them.
 - Model list at startup + interactive model picker
 - `lk` binary via the Makefile
 
+## Shipped later
+
+- v0.0.2: parent `task` tools and concurrent child agents
+- v0.0.5-v0.0.7: settings card, status drawer, usage, transcript polish
+- v0.0.8: auto-compact, `/compact`, mid-session shrink hint, live fill
+  meters (not a lifetime peak), child cost on `/agents` and status
+
 ## What 0.0.1 deliberately does not do
 
 - Other providers (OpenAI, Anthropic, Gemini)
 - OpenCode CLI embedding / local opencode server
 - Reading OpenCode's global `~/.local/share/opencode/opencode.db`
 - Auto-run of any `rm`, sticky tool permissions
-- Live tokens/sec, status-segment toggles, and todowrite (phase 4 complete)
 
 TUI findings from the 2026-08-16 review live in `plans/v0.0.1/findings/`
 so they stay next to the harness they audit. New product versions still

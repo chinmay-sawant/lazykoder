@@ -27,11 +27,13 @@ One full verification pass after phases 1-4.
 ### 5.2 Docs
 
 - [x] `docs/architecture.md` agent loop mentions preflight compact and
-      checkpointed `buildHistory`. Stale "key `m` opens the picker" line
-      now says `/model` or the footer chip.
+      checkpointed `buildHistory`. Compaction is a separate assistant
+      message, not a field on the chat step. Stale "key `m` opens the
+      picker" line now says `/model` or the footer chip.
 - [x] `docs/tui.md` documents `tokensUsed / window`, the shrink hint,
-      and `/compact`.
-- [x] `docs/plans.md` already lists this folder.
+      `/compact`, `/settings` compact rows, and the compact notice.
+- [x] `docs/storage.md` documents `parts.type = compaction`.
+- [x] `docs/plans.md` lists this folder.
 
 ### 5.3 Manual TUI (human)
 

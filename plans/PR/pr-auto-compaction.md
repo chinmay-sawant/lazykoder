@@ -5,8 +5,8 @@ Ship auto-compaction so long sessions and mid-session model shrinks do not overf
 ## Motivation / context
 
 - Plans: `plans/v0.0.8/` (all five phases complete)
-- Branch: `feature/auto-compaction` (2 commits on top of master)
-- Walkthrough: `temps/compact-explained.html`
+- Branch: `feature/auto-compaction` (on top of master)
+- Docs: `docs/architecture.md` (Compaction), `docs/tui.md`, `docs/storage.md`
 
 Without this, `buildHistory` sent the full SQLite transcript on every step. A 1M-window session switched to a 256k model would overflow. Status tokens stayed at the high-water mark after `/compact`, and cost used the currently selected model's prices for every historical step.
 

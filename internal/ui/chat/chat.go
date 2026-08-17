@@ -365,7 +365,7 @@ var slashCommands = []slashCmd{
 	{name: "/refresh", description: "reload the model list into models.json"},
 	{name: "/usage", description: "show OpenCode Go plan usage (rolling, weekly, monthly)"},
 	{name: "/status", description: "open the status drawer and toggle details"},
-	{name: "/settings", description: "project defaults (model, steps, agents, safety)", aliases: []string{"slot"}},
+	{name: "/settings", description: "project defaults (model, agents, compaction, safety)", aliases: []string{"slot"}},
 	{name: "/continue", description: "resume after a step-limit stop (or send continue)"},
 	{name: "/compact", description: "summarize older context now (optional notes)"},
 	{name: "/help", description: "keyboard shortcuts (?, also /keys)", aliases: []string{"keys"}},

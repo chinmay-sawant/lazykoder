@@ -36,9 +36,10 @@ internal/
   db/                         schema, migrations, store API
   envfile/                    .env loader
   provider/opencode/          OpenCode Go HTTP client
-  agent/                      turn loop, part mapping, tool dispatch
+  agent/                      turn loop, history, compact, tool dispatch
+  prompts/                    embedded compact.md summarizer prompt
   subagent/                   Manager, Host, AgentRunner (concurrency)
-  settings/                   project settings including agents caps
+  settings/                   project settings: slot, model, agents, compaction
   policy/                     bash classifier
   tools/{bash,read,grep,write,
          edit,question,
@@ -47,6 +48,7 @@ internal/
   ui/confirm/                 y/n confirm view
 plans/v0.0.1/                0.0.1 plan ledgers
 plans/v0.0.2/                sub-agent plan ledgers
+plans/v0.0.8/                auto-compaction + mid-session model switch
 docs/                         this documentation set
 skills/                       agent-harness conventions (AGENTS.md)
 ```
