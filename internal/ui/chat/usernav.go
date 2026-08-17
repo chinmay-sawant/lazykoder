@@ -2,12 +2,17 @@ package chat
 
 import (
 	"strings"
+	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
+
+// userNavTipExpireMsg hides the rail label bubble after userNavTipDuration.
+type userNavTipExpireMsg struct{ gen uint64 }
 
 const (
 	// Full-size circle glyphs (not "·") so the rail stays readable.
@@ -15,12 +20,16 @@ const (
 	userNavMarkActive = "⬤"
 	userNavMarkHover  = "◉"
 	userNavTooltipMax = 28
+	// userNavPadCols is blank columns between timestamps and the rail ticks.
+	userNavPadCols = 2
 	// userNavRailCols is the far-right column reserved for the nav ticks.
 	userNavRailCols = 1
 	// userNavHitPad is extra rows above/below the mark cluster that still hit.
 	userNavHitPad = 2
 	// userNavHitXExtra allows clicks a couple columns left of the rail.
 	userNavHitXExtra = 2
+	// userNavTipDuration is how long the label bubble stays after show.
+	userNavTipDuration = 10 * time.Second
 )
 
 // userTurnMark is one progress tick for a user message.
@@ -46,7 +55,7 @@ func (m Model) hasUserNav() bool {
 // (one column). Otherwise one column is reserved for the scrollbar track.
 func (m Model) transcriptChromeCols() int {
 	if m.hasUserNav() {
-		return userNavRailCols
+		return userNavPadCols + userNavRailCols
 	}
 	return 1
 }
@@ -178,7 +187,7 @@ func (m Model) overlayUserNavRail(view string, contentW, height int) string {
 	hover := m.userNavHover
 	tipIdx := hover
 	if tipIdx < 0 {
-		tipIdx = active
+		tipIdx = m.userNavTip
 	}
 
 	lines := strings.Split(view, "\n")
@@ -208,8 +217,9 @@ func (m Model) overlayUserNavRail(view string, contentW, height int) string {
 			}
 		}
 		mi, isMark := byRow[y]
+		pad := strings.Repeat(" ", userNavPadCols)
 		if !isMark {
-			lines[y] = line + " "
+			lines[y] = line + pad + " "
 			continue
 		}
 		var mark string
@@ -221,7 +231,7 @@ func (m Model) overlayUserNavRail(view string, contentW, height int) string {
 		default:
 			mark = idle.Render(userNavMarkIdle)
 		}
-		lines[y] = line + mark
+		lines[y] = line + pad + mark
 	}
 
 	if tipIdx >= 0 && tipIdx < len(marks) {
@@ -247,7 +257,7 @@ func (m Model) overlayUserNavRail(view string, contentW, height int) string {
 					rail = hot.Render(userNavMarkHover)
 				}
 			}
-			lines[y] = left + tipStyled + rail
+			lines[y] = left + tipStyled + strings.Repeat(" ", userNavPadCols) + rail
 		}
 	}
 	return strings.Join(lines, "\n")
@@ -301,15 +311,33 @@ func (m Model) userNavRailColumn() int {
 
 // jumpToUserTurn scrolls the transcript so the given user item is at the top
 // and keeps that mark selected so its label bubble stays visible.
-func (m Model) jumpToUserTurn(markIdx int) Model {
+func (m Model) jumpToUserTurn(markIdx int) (Model, tea.Cmd) {
 	marks := m.userTurnMarks()
 	if markIdx < 0 || markIdx >= len(marks) {
-		return m
+		return m, nil
 	}
 	m.transcript.SetWidth(m.transcriptContentWidth())
 	m.transcript.SetHeight(max(minPaneHeight, m.transcriptRenderHeight()))
 	m.userNavHover = markIdx
 	m.transcript.SetYOffset(marks[markIdx].ContentY)
 	m.selectedItem = marks[markIdx].ItemIdx
-	return m
+	return m.showUserNavTip(markIdx)
+}
+
+// showUserNavTip paints the label bubble for idx and starts the 10s hide timer.
+func (m Model) showUserNavTip(idx int) (Model, tea.Cmd) {
+	if idx < 0 {
+		return m, nil
+	}
+	m.userNavTip = idx
+	m.userNavTipGen++
+	gen := m.userNavTipGen
+	return m, tea.Tick(userNavTipDuration, func(time.Time) tea.Msg {
+		return userNavTipExpireMsg{gen: gen}
+	})
+}
+
+// showActiveUserNavTip shows the bubble for the section now in view.
+func (m Model) showActiveUserNavTip() (Model, tea.Cmd) {
+	return m.showUserNavTip(m.activeUserTurnIdx(m.userTurnMarks()))
 }

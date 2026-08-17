@@ -61,13 +61,13 @@ func TestUserNavRailJumpAndHover(t *testing.T) {
 	if col := m.userNavRailColumn(); col != m.width-1 {
 		t.Fatalf("railCol=%d, want %d", col, m.width-1)
 	}
-	// Rail replaces scrollbar: only one chrome column.
-	if m.transcriptContentWidth() != m.width-1 {
-		t.Fatalf("contentW=%d, want %d", m.transcriptContentWidth(), m.width-1)
+	// Rail + pad replace scrollbar: pad columns plus the tick column.
+	if m.transcriptContentWidth() != m.width-userNavPadCols-userNavRailCols {
+		t.Fatalf("contentW=%d, want %d", m.transcriptContentWidth(), m.width-userNavPadCols-userNavRailCols)
 	}
 
 	before := m.transcript.YOffset()
-	m = m.jumpToUserTurn(1)
+	m, _ = m.jumpToUserTurn(1)
 	if m.selectedItem != marks[1].ItemIdx {
 		t.Fatalf("selectedItem = %d, want %d", m.selectedItem, marks[1].ItemIdx)
 	}
@@ -154,6 +154,7 @@ func TestUserNavActiveTracksScrollAndShowsBubble(t *testing.T) {
 	if got := m.activeUserTurnIdx(marks); got != 0 {
 		t.Fatalf("top active=%d, want 0", got)
 	}
+	m, _ = m.showActiveUserNavTip()
 	plain := stripANSI(viewText(m))
 	if !strings.Contains(plain, "turn one about todos") {
 		t.Fatalf("top scroll bubble missing:\n%s", plain)
@@ -163,6 +164,7 @@ func TestUserNavActiveTracksScrollAndShowsBubble(t *testing.T) {
 	if got := m.activeUserTurnIdx(marks); got != 1 {
 		t.Fatalf("mid active=%d, want 1", got)
 	}
+	m, _ = m.showActiveUserNavTip()
 	plain = stripANSI(viewText(m))
 	if !strings.Contains(plain, "turn two about layout") {
 		t.Fatalf("mid scroll bubble missing:\n%s", plain)
@@ -172,9 +174,21 @@ func TestUserNavActiveTracksScrollAndShowsBubble(t *testing.T) {
 	if got := m.activeUserTurnIdx(marks); got != 2 {
 		t.Fatalf("bottom active=%d, want 2", got)
 	}
+	m, _ = m.showActiveUserNavTip()
 	plain = stripANSI(viewText(m))
 	if !strings.Contains(plain, "turn three about dots") {
 		t.Fatalf("bottom scroll bubble missing:\n%s", plain)
+	}
+
+	// After the 10s timer the bubble hides; the active tick stays.
+	mm, _ = m.Update(userNavTipExpireMsg{gen: m.userNavTipGen})
+	m = mm.(Model)
+	if m.userNavTip != -1 {
+		t.Fatalf("tip after expire=%d, want -1", m.userNavTip)
+	}
+	plain = stripANSI(viewText(m))
+	if strings.Contains(plain, "turn three about dots") {
+		t.Fatalf("bubble still sticky after expire:\n%s", plain)
 	}
 }
 

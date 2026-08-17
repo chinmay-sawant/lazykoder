@@ -223,6 +223,10 @@ type Model struct {
 
 	// userNavHover is the Medium-style right-rail mark under the pointer (-1 = none).
 	userNavHover int
+	// userNavTip is the mark whose label bubble is visible (-1 = hidden).
+	userNavTip int
+	// userNavTipGen invalidates stale 10s hide timers when the tip is refreshed.
+	userNavTipGen uint64
 
 	pulse     int
 	pulseOn   bool
@@ -399,6 +403,7 @@ func New(opts Options) Model {
 		historyCursor:       -1,
 		pendingHistoryIndex: -1,
 		userNavHover:        -1,
+		userNavTip:          -1,
 		cachePath:           opts.CachePath,
 		transcript:          viewport.New(viewport.WithWidth(defaultWidth-1), viewport.WithHeight(defaultHeight-chromeLines)),
 		prompt:              newPromptArea(defaultWidth),
@@ -593,6 +598,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case copyNoticeMsg:
 		m.copyNotice = ""
 		return m, nil
+	case userNavTipExpireMsg:
+		if msg.gen != m.userNavTipGen {
+			return m, nil
+		}
+		// Keep the bubble while the pointer is still on a tick.
+		if m.userNavHover < 0 {
+			m.userNavTip = -1
+		}
+		return m, nil
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -721,7 +735,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.transcript = vp
 		// Drop rail hover so the label bubble follows the active section.
 		m.userNavHover = -1
-		return m, nil
+		return m.showActiveUserNavTip()
 	case tea.MouseClickMsg:
 		return m.mousePress(msg)
 	case tea.MouseMotionMsg:
@@ -760,9 +774,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if idx, ok := m.userNavIndexAtScreen(mu.X, mu.Y); ok {
 			m.userNavHover = idx
 		}
-		// Always return the model so the tooltip/mark style repaints while
-		// the pointer moves across the rail (including leave -> clear).
-		if m.userNavHover != prevNav || m.userNavHover >= 0 {
+		if m.userNavHover != prevNav {
+			if m.userNavHover >= 0 {
+				return m.showUserNavTip(m.userNavHover)
+			}
+			return m, nil
+		}
+		if m.userNavHover >= 0 {
 			return m, nil
 		}
 		return m, nil

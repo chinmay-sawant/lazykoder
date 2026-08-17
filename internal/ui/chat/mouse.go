@@ -42,7 +42,7 @@ func (m Model) mousePress(msg tea.MouseClickMsg) (Model, tea.Cmd) {
 	if mu.Button == tea.MouseLeft {
 		if idx, ok := m.userNavIndexAtScreen(mu.X, mu.Y); ok {
 			m = m.clearTextSelection()
-			return m.jumpToUserTurn(idx), nil
+			return m.jumpToUserTurn(idx)
 		}
 	}
 	if mu.Button == tea.MouseLeft && m.sessionPickerMode {
