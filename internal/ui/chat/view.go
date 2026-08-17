@@ -937,7 +937,9 @@ func (m Model) variantStatusRect() (left, top, right, bottom int, ok bool) {
 }
 
 func (m Model) footerChipRect(chip string) (left, top, right, bottom int, ok bool) {
-	if chip == "" || m.busy || m.pickerMode || m.sessionPickerMode || m.subagentPickerMode || m.settingsMode {
+	// Allow hits while the sub-agent drawer or slash menu is open; only
+	// suppress when another full-screen/modal chrome owns the mouse.
+	if chip == "" || m.busy || m.pickerMode || m.sessionPickerMode || m.settingsMode || m.subagentLogMode {
 		return 0, 0, 0, 0, false
 	}
 	plain, y, found := m.composerFooterPlainLine()
@@ -945,9 +947,9 @@ func (m Model) footerChipRect(chip string) (left, top, right, bottom int, ok boo
 		return 0, 0, 0, 0, false
 	}
 	needles := []string{chip}
-	if base := strings.TrimSpace(strings.TrimSuffix(chip, "▾")); base != "" && base != chip {
-		needles = append(needles, base)
-		needles = append(needles, strings.TrimSpace(base))
+	base := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(chip), "▾"))
+	if base != "" && base != chip {
+		needles = append(needles, base+" ▾", base+"▾", base)
 	}
 	for _, n := range needles {
 		if n == "" {
@@ -956,10 +958,60 @@ func (m Model) footerChipRect(chip string) (left, top, right, bottom int, ok boo
 		if start, end, hit := displaySpan(plain, n); hit {
 			// One column of slack on the left. Do not pad right into
 			// the next chip (model ▾ sits beside variant ▾).
-			return max(0, start-1), y, end, y + 2, true
+			return max(0, start-1), y, end, y + 1, true
 		}
 	}
+	// Footer may truncate long model ids; use chevron order on the row.
+	// modelStatusRect / variantStatusRect pass labels that identify the slot.
+	idx := 0
+	if footerChipIsVariantLabel(chip) {
+		idx = 1
+	}
+	if start, end, hit := footerChevronChipSpan(plain, idx); hit {
+		return max(0, start-1), y, end, y + 1, true
+	}
 	return 0, 0, 0, 0, false
+}
+
+func footerChipIsVariantLabel(chip string) bool {
+	base := strings.ToLower(strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(chip), "▾")))
+	switch base {
+	case "default", "none", "low", "medium", "high", "xhigh", "max", "minimal":
+		return true
+	default:
+		return false
+	}
+}
+
+// footerChevronChipSpan finds the idx-th "token ▾" chip on the footer row
+// (0 = model, 1 = variant) by scanning painted chevrons right-to-left tokens.
+func footerChevronChipSpan(plain string, idx int) (start, end int, ok bool) {
+	plain = ansi.Strip(plain)
+	runes := []rune(plain)
+	cols := make([]int, len(runes)+1)
+	for i, r := range runes {
+		cols[i+1] = cols[i] + max(1, lipgloss.Width(string(r)))
+	}
+	var chips [][2]int
+	for i, r := range runes {
+		if r != '▾' && r != '▼' {
+			continue
+		}
+		endCol := cols[i+1]
+		j := i - 1
+		if j >= 0 && runes[j] == ' ' {
+			j--
+		}
+		for j >= 0 && runes[j] != ' ' && runes[j] != '│' && runes[j] != '|' {
+			j--
+		}
+		startCol := cols[j+1]
+		chips = append(chips, [2]int{startCol, endCol})
+	}
+	if idx < 0 || idx >= len(chips) {
+		return 0, 0, false
+	}
+	return chips[idx][0], chips[idx][1], true
 }
 
 // composerFooterPlainLine is the painted composer footer row (enter send + chips).

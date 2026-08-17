@@ -22,6 +22,55 @@ func (m Model) jumpBarRow() int {
 func (m Model) mousePress(msg tea.MouseClickMsg) (Model, tea.Cmd) {
 	mu := msg.Mouse()
 	m.copyNotice = ""
+	// Model / variant chips live on the composer footer. Handle them before
+	// the prompt and sub-agent drawer so those never swallow chip clicks
+	// (including while the sub-agent strip is open).
+	if mu.Button == tea.MouseLeft && !m.pickerMode && !m.settingsMode && !m.sessionPickerMode && !m.subagentLogMode && !m.busy {
+		if hit, which := m.footerChipHit(mu.X, mu.Y); hit {
+			m = m.clearTextSelection()
+			m = m.clearPromptSelection()
+			// Free vertical space for the model list when the agents strip is open.
+			if m.subagentPickerMode {
+				m = m.closeSubagentPicker()
+			}
+			if m.slashMode {
+				m.slashMode = false
+				m.slashCursor = 0
+			}
+			if which == "variant" {
+				return m.openVariantPicker(), nil
+			}
+			return m.openPicker(), nil
+		}
+	}
+	// Sub-agent drawer sits above the composer: handle it before prompt hits
+	// so the compact strip is not stolen by the input box geometry.
+	if mu.Button == tea.MouseLeft && m.subagentPickerMode && !m.subagentLogMode {
+		if m.subagentDrawerCompact {
+			// Compact strip: any click expands (same as enter).
+			if m.pointerInSubagentDrawer(mu.Y) || m.subagentHeaderAt(mu.Y) {
+				m = m.clearTextSelection()
+				m = m.clearPromptSelection()
+				return m.expandSubagentDrawer(), nil
+			}
+		} else {
+			// Full list: title collapses to summary; rows open logs.
+			if m.subagentHeaderAt(mu.Y) {
+				m = m.clearTextSelection()
+				m = m.clearPromptSelection()
+				return m.collapseSubagentDrawerToSummary(), nil
+			}
+			if idx, ok := m.subagentIndexAtScreenY(mu.Y); ok {
+				m = m.clearTextSelection()
+				m = m.clearPromptSelection()
+				m.subagentCursor = idx
+				return m.openSelectedSubagentLog()
+			}
+			if m.pointerInSubagentDrawer(mu.Y) {
+				return m, nil
+			}
+		}
+	}
 	// Composer click-to-caret / drag-select (before transcript hits).
 	if next, cmd, hit := m.mousePressPrompt(mu); hit {
 		return next, cmd
@@ -64,39 +113,12 @@ func (m Model) mousePress(msg tea.MouseClickMsg) (Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	if mu.Button == tea.MouseLeft && m.subagentPickerMode && !m.subagentLogMode {
-		// Title: full list → compact summary; compact → close.
-		if m.subagentHeaderAt(mu.Y) {
-			if m.subagentDrawerCompact {
-				return m.closeSubagentPicker(), nil
-			}
-			return m.collapseSubagentDrawerToSummary(), nil
-		}
-		// Compact body/footer expands back to the full list.
-		if m.subagentDrawerCompact && m.pointerInSubagentDrawer(mu.Y) {
-			return m.expandSubagentDrawer(), nil
-		}
-		if idx, ok := m.subagentIndexAtScreenY(mu.Y); ok {
-			m.subagentCursor = idx
-			return m.openSelectedSubagentLog()
-		}
-		// Footer / padding of the drawer: do not fall through to other hits.
-		if m.pointerInSubagentDrawer(mu.Y) {
-			return m, nil
-		}
-	}
 	if !m.pickerMode && !m.slashMode && !m.subagentPickerMode {
 		if left, top, right, bottom, ok := m.subsStatusRect(); ok && mu.X >= left && mu.X < right && mu.Y >= top && mu.Y < bottom {
 			m = m.clearTextSelection()
 			return m.openSubagentPicker(), nil
 		}
-		if hit, which := m.footerChipHit(mu.X, mu.Y); hit {
-			m = m.clearTextSelection()
-			if which == "variant" {
-				return m.openVariantPicker(), nil
-			}
-			return m.openPicker(), nil
-		}
+		// model/variant chips are handled earlier so they work with drawer open
 		if m.helpMode {
 			if x0, y, x1, ok := m.helpCloseRect(); ok && mu.Y == y && mu.X >= x0 && mu.X < x1 {
 				m.helpMode = false

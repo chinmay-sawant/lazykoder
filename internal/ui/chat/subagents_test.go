@@ -534,15 +534,54 @@ func TestSubagentHeaderClickCollapsesDrawer(t *testing.T) {
 	if !m.subagentPickerMode || !m.subagentDrawerCompact {
 		t.Fatal("header click should collapse to the compact summary drawer")
 	}
-	// Second header click closes the summary strip.
+	// Compact strip click expands back to the full list (same as enter).
 	headerY, ok = m.subagentHeaderScreenY()
 	if !ok {
 		t.Fatal("compact header row not found")
 	}
 	mm, _ = m.Update(tea.MouseClickMsg(tea.Mouse{X: 4, Y: headerY, Button: tea.MouseLeft}))
 	m = mm.(Model)
-	if m.subagentPickerMode {
-		t.Fatal("second header click should close the drawer")
+	if !m.subagentPickerMode {
+		t.Fatal("compact click should keep the drawer open")
+	}
+	if m.subagentDrawerCompact {
+		t.Fatal("compact click should expand to the full list")
+	}
+}
+
+func TestCompactSubagentDrawerClickExpands(t *testing.T) {
+	st := newTestStore(t)
+	workdir := t.TempDir()
+	parent, err := st.CreateSession(context.Background(), db.Session{Directory: workdir, Title: "main"})
+	if err != nil {
+		t.Fatalf("parent: %v", err)
+	}
+	pid := parent.ID
+	if _, err := st.CreateSession(context.Background(), db.Session{
+		Directory: workdir, Title: "worker-1", ParentSessionID: &pid, Kind: db.SessionKindSubagent,
+	}); err != nil {
+		t.Fatalf("child: %v", err)
+	}
+	m := New(Options{Store: st, Workdir: workdir, Session: &parent})
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 36})
+	m = mm.(Model)
+	m = m.collapseSubagentDrawerToSummary()
+	if !m.subagentPickerMode || !m.subagentDrawerCompact {
+		t.Fatal("expected compact drawer")
+	}
+	// Click footer row of the compact strip (below the title).
+	top, ok := m.subagentHeaderScreenY()
+	if !ok {
+		t.Fatal("compact header not found")
+	}
+	mm, _ = m.Update(tea.MouseClickMsg(tea.Mouse{X: 10, Y: top + 1, Button: tea.MouseLeft}))
+	m = mm.(Model)
+	if m.subagentDrawerCompact || !m.subagentPickerMode {
+		t.Fatalf("footer click should expand: compact=%v open=%v", m.subagentDrawerCompact, m.subagentPickerMode)
+	}
+	v := stripANSI(viewText(m))
+	if !strings.Contains(v, "worker-1") {
+		t.Fatalf("expanded drawer missing agent row: %q", v)
 	}
 }
 

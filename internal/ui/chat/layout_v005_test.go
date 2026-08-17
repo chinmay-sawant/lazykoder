@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -223,6 +224,39 @@ func TestFooterChipRectsMatchPaintedLine(t *testing.T) {
 	cur = next.(Model)
 	if !cur.pickerMode || cur.pickerKind != pickerKindVariant {
 		t.Fatalf("variant chip click: pickerMode=%v kind=%q", cur.pickerMode, cur.pickerKind)
+	}
+}
+
+func TestFooterChipsClickWithSubagentDrawerOpen(t *testing.T) {
+	st := newTestStore(t)
+	workdir := t.TempDir()
+	parent, err := st.CreateSession(context.Background(), db.Session{Directory: workdir, Title: "main"})
+	if err != nil {
+		t.Fatalf("session: %v", err)
+	}
+	pid := parent.ID
+	if _, err := st.CreateSession(context.Background(), db.Session{
+		Directory: workdir, Title: "worker", ParentSessionID: &pid, Kind: db.SessionKindSubagent,
+	}); err != nil {
+		t.Fatalf("child: %v", err)
+	}
+	m := New(Options{Store: st, Client: deadClient(), Workdir: workdir, Session: &parent})
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 36})
+	m = mm.(Model)
+	m = m.collapseSubagentDrawerToSummary()
+	if !m.subagentPickerMode {
+		t.Fatal("expected sub-agent strip open")
+	}
+	ml, mt, mr, _, ok := m.modelStatusRect()
+	if !ok {
+		t.Fatal("model chip should stay clickable with sub-agent drawer open")
+	}
+	mm, _ = m.Update(tea.MouseClickMsg(tea.Mouse{
+		X: (ml + mr) / 2, Y: mt, Button: tea.MouseLeft,
+	}))
+	m = mm.(Model)
+	if !m.pickerMode || m.pickerKind != pickerKindModel {
+		t.Fatalf("model chip click with drawer open: pickerMode=%v kind=%q", m.pickerMode, m.pickerKind)
 	}
 }
 

@@ -581,7 +581,7 @@ func (m Model) subagentDrawerView() string {
 			header = truncateRunes(header, cardW)
 		}
 		footer := hintStyle.Width(cardW).Render(
-			truncateRunes("enter expand  •  click title close  •  esc close", cardW),
+			truncateRunes("enter/click expand  •  esc close", cardW),
 		)
 		return lipgloss.NewStyle().Width(cardW).Render(
 			lipgloss.JoinVertical(lipgloss.Left, header, footer),
@@ -1241,7 +1241,7 @@ func (m Model) subagentHeaderScreenY() (int, bool) {
 }
 
 // subagentHeaderAt reports whether screen row y is the drawer title line
-// ("sub-agents · …"). Full list: collapse to summary. Compact: close drawer.
+// ("sub-agents · …"). Full list: collapse to summary. Compact: expand list.
 func (m Model) subagentHeaderAt(y int) bool {
 	top, ok := m.subagentHeaderScreenY()
 	return ok && y == top
