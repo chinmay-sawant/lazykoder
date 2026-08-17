@@ -61,6 +61,8 @@ func (m Model) filePickerOverlay() string {
 	sel := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText())
 	dim := lipgloss.NewStyle().Foreground(theme.ColorMute())
 	boxW := min(64, max(minPaneWidth, m.width-8))
+	// Inner text width under Width(boxW).Padding(1, cardPad).Border: border
+	// and horizontal pad are outside the content cells.
 	contentW := max(minPaneWidth, boxW-cardBorder-2*cardPad)
 
 	cursor := m.filePickerCursor
@@ -73,6 +75,8 @@ func (m Model) filePickerOverlay() string {
 	}
 	start, end := atPickerWindow(n, cursor, maxAtPickerVisible)
 	overflow := n > maxAtPickerVisible
+	// withScrollbar pads to its width then appends one column, so pass
+	// contentW-1 and keep the final body at contentW (no wrap inside the card).
 	listW := contentW
 	if overflow {
 		listW = max(8, contentW-1)
@@ -80,13 +84,13 @@ func (m Model) filePickerOverlay() string {
 
 	var rows []string
 	if n == 0 {
-		rows = append(rows, dim.Render("no matches"))
+		rows = append(rows, dim.Width(contentW).Render("no matches"))
 	} else {
 		lastKind := ""
 		for i := start; i < end; i++ {
 			it := m.filePickerItems[i]
 			if it.Kind != lastKind {
-				rows = append(rows, dim.Render(atPickerSectionTitle(it.Kind)))
+				rows = append(rows, dim.Width(listW).MaxWidth(listW).Render(atPickerSectionTitle(it.Kind)))
 				lastKind = it.Kind
 			}
 			rows = append(rows, atPickerItemRow(it, i == cursor, listW, sel, dim))
@@ -99,20 +103,24 @@ func (m Model) filePickerOverlay() string {
 		if span > 0 {
 			percent = float64(start) / float64(span)
 		}
-		body = withScrollbar(body, contentW, len(rows), percent, true)
+		body = withScrollbar(body, listW, len(rows), percent, true)
 	}
 
-	head := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).Render("@ files & sub-agents")
+	title := "@ files & sub-agents"
 	if m.filePickerFilter != "" {
-		head = lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).Render("@ " + m.filePickerFilter)
+		title = "@ " + m.filePickerFilter
 	}
-	foot := hintStyle.Render("↑/↓ select  •  enter insert  •  esc close")
+	head := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).
+		Width(contentW).MaxWidth(contentW).
+		Render(truncateRunes(title, contentW))
+	foot := hintStyle.Width(contentW).MaxWidth(contentW).
+		Render(truncateRunes("↑/↓ select  •  enter insert  •  esc close", contentW))
 	content := lipgloss.JoinVertical(lipgloss.Left, head, body, foot)
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(theme.ColorBorder()).
 		Background(theme.ColorBg()).
-		Padding(1, 2).
+		Padding(1, cardPad).
 		Width(boxW).
 		Render(content)
 }
@@ -160,22 +168,24 @@ func atPickerItemRow(it atPickItem, selected bool, width int, sel, dim lipgloss.
 	liveSt := lipgloss.NewStyle().Foreground(theme.ColorAccent())
 	goodSt := lipgloss.NewStyle().Foreground(theme.ColorGood())
 	badSt := lipgloss.NewStyle().Foreground(theme.ColorDanger())
-	left := it.Label
-	if it.Kind == atKindAgent {
-		left = "agent  " + it.Label
-	}
 	marker := "  "
 	style := dim
 	if selected {
 		marker = "▸ "
 		style = sel
 	}
-	right := ""
+	// Build the left label as plain text first so truncation cannot split
+	// ANSI sequences, then style the finished cells.
+	leftPlain := it.Label
+	if it.Kind == atKindAgent {
+		leftPlain = "agent  " + it.Label
+	}
+	rightPlain := ""
+	var rightStyle lipgloss.Style
 	if it.Kind == atKindAgent && it.Status != "" {
 		st := it.Status
-		diamond := lipgloss.NewStyle().Foreground(theme.StatusColor(statusKey(st))).Render(theme.StatusDiamond)
-		rightRaw := diamond + " " + st
-		rightStyle := dim
+		rightPlain = theme.StatusDiamond + " " + st
+		rightStyle = dim
 		if it.Live {
 			rightStyle = liveSt
 		} else if isFailedSubStatus(st) {
@@ -183,11 +193,34 @@ func atPickerItemRow(it atPickItem, selected bool, width int, sel, dim lipgloss.
 		} else if isTerminalSubStatus(st) {
 			rightStyle = goodSt
 		}
-		right = rightStyle.Render(rightRaw)
 	}
-	return joinAtPickerRow(style.Render(marker+left), right, width)
+
+	leftBudget := width
+	if rightPlain != "" {
+		// marker+label | gap | status; keep status on the same row.
+		rightW := lipgloss.Width(rightPlain)
+		leftBudget = max(4, width-rightW-1)
+	}
+	leftPlain = marker + leftPlain
+	if lipgloss.Width(leftPlain) > leftBudget {
+		leftPlain = truncateRunes(leftPlain, leftBudget)
+	}
+	left := style.Render(leftPlain)
+	if rightPlain == "" {
+		// Pad/clip to width so every row is exactly one terminal line.
+		pad := width - lipgloss.Width(left)
+		if pad > 0 {
+			return left + strings.Repeat(" ", pad)
+		}
+		return left
+	}
+	right := rightStyle.Render(rightPlain)
+	return joinAtPickerRow(left, right, width)
 }
 
+// joinAtPickerRow right-aligns status against label within exactly width
+// columns. left and right are already styled; their display widths must
+// already fit (enforced in atPickerItemRow).
 func joinAtPickerRow(left, right string, width int) string {
 	if right == "" {
 		return left
@@ -196,31 +229,9 @@ func joinAtPickerRow(left, right string, width int) string {
 	rw := lipgloss.Width(right)
 	gap := width - lw - rw
 	if gap < 1 {
-		maxLeft := max(4, width-rw-1)
-		if lw > maxLeft {
-			left = truncateAtLabel(left, maxLeft)
-			lw = lipgloss.Width(left)
-		}
-		gap = max(1, width-lw-rw)
+		gap = 1
 	}
 	return left + strings.Repeat(" ", gap) + right
-}
-
-func truncateAtLabel(s string, maxW int) string {
-	if lipgloss.Width(s) <= maxW {
-		return s
-	}
-	if maxW <= 1 {
-		return "…"
-	}
-	r := []rune(s)
-	for n := len(r); n > 0; n-- {
-		t := string(r[:n-1]) + "…"
-		if lipgloss.Width(t) <= maxW {
-			return t
-		}
-	}
-	return "…"
 }
 
 func statusKey(st string) string {

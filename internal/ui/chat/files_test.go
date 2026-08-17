@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 func TestAtPickerFilesReachable(t *testing.T) {
@@ -153,4 +154,69 @@ func cursorRowPainted(overlay string, m Model) bool {
 		return false
 	}
 	return strings.Contains(overlay, needle)
+}
+
+// TestFilePickerOverlayNoWrap guards the layout bug where withScrollbar was
+// passed contentW and still appended a thumb column, so every agent row
+// wrapped and the card painted blank lines of only ░/█ between agents.
+func TestFilePickerOverlayNoWrap(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "hello.go"), []byte("package main\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: dir})
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 36})
+	m = mm.(Model)
+	for i := 0; i < 16; i++ {
+		st := "completed"
+		if i%3 == 0 {
+			st = "timed_out"
+		}
+		m.subagentItems = append(m.subagentItems, subagentRow{
+			ID:     fmt.Sprintf("agent-%02d", i),
+			Name:   fmt.Sprintf("layout-agent-%02d-with-a-longish-name", i),
+			Status: st,
+		})
+	}
+	m = m.openFilePicker()
+	overlay := m.filePickerOverlay()
+	plain := stripANSI(overlay)
+	boxW := min(64, max(minPaneWidth, m.width-8))
+
+	for i, line := range strings.Split(overlay, "\n") {
+		if w := lipgloss.Width(line); w > boxW {
+			t.Fatalf("line %d width %d > boxW %d: %q", i, w, boxW, stripANSI(line))
+		}
+	}
+
+	// Orphan scrollbar-only body rows are the wrap signature of the bug.
+	for i, line := range strings.Split(plain, "\n") {
+		trim := strings.TrimSpace(line)
+		if trim == "█" || trim == "░" {
+			t.Fatalf("orphan scrollbar row %d: %q\nfull:\n%s", i, line, plain)
+		}
+	}
+
+	// Agent name and status share one painted row.
+	var agentLine string
+	for _, line := range strings.Split(plain, "\n") {
+		if strings.Contains(line, "layout-agent-00") {
+			agentLine = line
+			break
+		}
+	}
+	if agentLine == "" {
+		t.Fatalf("missing agent row:\n%s", plain)
+	}
+	if !strings.Contains(agentLine, "timed_out") && !strings.Contains(agentLine, "◆") {
+		t.Fatalf("status not on same row as agent name: %q", agentLine)
+	}
+	if !strings.Contains(plain, "sub-agents") {
+		t.Fatalf("missing sub-agents section:\n%s", plain)
+	}
+
+	// Overflow must keep body + scrollbar inside contentW (no second wrap pass).
+	if !strings.Contains(plain, "█") && !strings.Contains(plain, "░") {
+		t.Fatalf("expected scrollbar with 16 agents:\n%s", plain)
+	}
 }
