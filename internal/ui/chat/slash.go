@@ -201,6 +201,10 @@ func (m Model) runSlash(name string) (Model, tea.Cmd) {
 		return m, m.refreshModels
 	case "/usage":
 		return m.openUsageModal(), m.fetchUsage()
+	case "/status":
+		m.statusMode = true
+		m.statusCursor = 0
+		return m, nil
 	case "/settings", "/slot":
 		return m.openSettings(), m.maybeFetchUsage()
 	case "/agents", "/subs", "/subagents":
@@ -278,6 +282,9 @@ func filterSlashItems(partial string) []slashCmd {
 		}
 	}
 	for _, cmd := range slashCommands {
+		if cmd.name == "/status" && partial == "" {
+			continue
+		}
 		if seen[cmd.name] || !matchesSlashPartial(cmd, partial) {
 			continue
 		}

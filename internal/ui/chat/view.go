@@ -15,6 +15,11 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
 
+const (
+	maxDisplayTPS = 99.9
+	minWholeTPS   = 10
+)
+
 // View renders the picker card, slash menu, confirm overlay, or the chat layout.
 func (m Model) View() tea.View {
 	return m.newView(m.frame())
@@ -333,6 +338,9 @@ func (m Model) promptLine() string {
 }
 
 func (m Model) composerFooter(width int) string {
+	if m.statusMode {
+		return m.statusPickerView(width)
+	}
 	left := m.composerLeft()
 	right := m.fitFooterRight(max(4, width-lipgloss.Width(left)-1))
 	gap := width - lipgloss.Width(left) - lipgloss.Width(right)
@@ -352,22 +360,26 @@ func (m Model) footerStats() string {
 
 func (m Model) footerPieces() (tokens, cache, cost, tps string) {
 	window := modelscache.ContextOf(m.modelInfos, m.modelLabel())
-	switch {
-	case m.tokensUsed > 0 && window > 0:
-		tokens = formatTokens(m.tokensUsed) + "/" + formatTokens(int64(window))
-	case m.tokensUsed > 0:
-		tokens = formatTokens(m.tokensUsed)
-	case window > 0:
-		tokens = "0/" + formatTokens(int64(window))
+	if m.statusSegmentEnabled("tokens") {
+		switch {
+		case m.tokensUsed > 0 && window > 0:
+			tokens = formatTokens(m.tokensUsed) + "/" + formatTokens(int64(window))
+		case m.tokensUsed > 0:
+			tokens = formatTokens(m.tokensUsed)
+		case window > 0:
+			tokens = "0/" + formatTokens(int64(window))
+		}
 	}
-	if m.cacheHit > 0 || m.cacheMiss > 0 {
+	if m.statusSegmentEnabled("tokens") && (m.cacheHit > 0 || m.cacheMiss > 0) {
 		cache = formatCache(m.cacheHit, m.cacheMiss)
 	}
-	if m.tokensUsed > 0 || m.cacheHit > 0 || m.cacheMiss > 0 || m.sessionCost > 0 {
+	if m.statusSegmentEnabled("cost") && (m.tokensUsed > 0 || m.cacheHit > 0 || m.cacheMiss > 0 || m.sessionCost > 0) {
 		cost = formatCost(m.sessionCost)
 	}
-	if n := m.displayTPS(); n > 0 {
-		tps = formatTPS(n)
+	if m.statusSegmentEnabled("tps") {
+		if n := m.displayTPS(); n > 0 {
+			tps = formatTPS(n)
+		}
 	}
 	return tokens, cache, cost, tps
 }
@@ -382,6 +394,18 @@ func (m Model) footerStatParts() []string {
 	}
 	if s := m.subsStatusLabel(); s != "" {
 		parts = append(parts, s)
+	}
+	parts = append(parts, m.footerExtraSegments()...)
+	return parts
+}
+
+func (m Model) footerExtraSegments() []string {
+	var parts []string
+	if m.statusSegmentEnabled("models") && len(m.models) > 0 {
+		parts = append(parts, fmt.Sprintf("models:%d", len(m.models)))
+	}
+	if m.statusSegmentEnabled("scroll") && m.transcript.TotalLineCount() > m.transcript.Height() {
+		parts = append(parts, "scroll ↑↓")
 	}
 	return parts
 }
@@ -403,11 +427,14 @@ func (m Model) subsStatusLabel() string {
 }
 
 func (m Model) fitFooterRight(budget int) string {
-	model := m.modelChipLabel()
-	variant := m.variantChipLabel()
+	model := ""
+	if m.statusSegmentEnabled("model") {
+		model = strings.TrimSpace(m.modelChipLabel() + "  " + m.variantChipLabel())
+	}
 	tokens, cache, cost, tps := m.footerPieces()
 	subs := m.subsStatusLabel()
-	chips := strings.TrimSpace(model + "  " + variant)
+	extras := m.footerExtraSegments()
+	chips := model
 	try := func(lead string, bits ...string) string {
 		parts := make([]string, 0, len(bits))
 		for _, b := range bits {
@@ -434,28 +461,29 @@ func (m Model) fitFooterRight(budget int) string {
 		}
 		return ""
 	}
-	if s := try(chips, tokens, cache, cost, tps, subs); s != "" {
+	withExtras := func(bits ...string) []string { return append(bits, extras...) }
+	if s := try(chips, withExtras(tokens, cache, cost, tps, subs)...); s != "" {
 		return s
 	}
-	if s := try(model, tokens, cache, cost, tps, subs); s != "" {
+	if s := try(model, withExtras(tokens, cache, cost, tps, subs)...); s != "" {
 		return s
 	}
-	if s := try(chips, tokens, cache, cost, subs); s != "" {
+	if s := try(chips, withExtras(tokens, cache, cost, subs)...); s != "" {
 		return s
 	}
-	if s := try(model, tokens, cache, cost, subs); s != "" {
+	if s := try(model, withExtras(tokens, cache, cost, subs)...); s != "" {
 		return s
 	}
-	if s := try(model, tokens, cache, subs); s != "" {
+	if s := try(model, withExtras(tokens, cache, subs)...); s != "" {
 		return s
 	}
-	if s := try(model, cache, subs); s != "" {
+	if s := try(model, withExtras(cache, subs)...); s != "" {
 		return s
 	}
-	if s := try(model, subs); s != "" {
+	if s := try(model, withExtras(subs)...); s != "" {
 		return s
 	}
-	if s := try("", tokens, cache, cost, tps); s != "" {
+	if s := try("", withExtras(tokens, cache, cost, tps)...); s != "" {
 		return s
 	}
 	if s := try("", cache); s != "" {
@@ -528,13 +556,19 @@ func formatCost(usd float64) string {
 }
 
 func formatTPS(n float64) string {
-	if n >= 10 {
+	if n > maxDisplayTPS {
+		return ">99.9 tps"
+	}
+	if n >= minWholeTPS {
 		return fmt.Sprintf("%.0f tps", n)
 	}
 	return fmt.Sprintf("%.1f tps", n)
 }
 
 func (m Model) composerLeft() string {
+	if !m.statusSegmentEnabled("prompt") {
+		return ""
+	}
 	switch {
 	case m.err != "":
 		return errStyle.Render("error")

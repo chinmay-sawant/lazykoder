@@ -187,7 +187,13 @@ var schemaMigrations = [][]string{
 
 // schemaVersion is the highest applied migration number (includes rebuilds
 // implemented as Go steps rather than pure SQL slices).
-const schemaVersion = 9
+const (
+	migrationSessionsFK = 7
+	migrationJobsFK     = 8
+	migrationTodos      = 9
+	migrationSegments   = 10
+	schemaVersion       = migrationSegments
+)
 
 // Migrate runs numbered migrations. schema_migrations records the applied
 // versions after first open. Idempotent: a second call is a no-op.
@@ -205,13 +211,13 @@ func (s *Store) Migrate(ctx context.Context) error {
 	for i := current + 1; i <= schemaVersion; i++ {
 		var err error
 		switch i {
-		case 7:
+		case migrationSessionsFK:
 			err = s.migrateV7SessionsParentFK(ctx)
-		case 8:
+		case migrationJobsFK:
 			err = s.migrateV8SubagentJobsFK(ctx)
-		case 9:
+		case migrationTodos:
 			// Model-driven todos (phase 4.5): full-list replace per session.
-			err = s.applyMigration(ctx, 9, []string{
+			err = s.applyMigration(ctx, migrationTodos, []string{
 				`CREATE TABLE todos (
   session_id   TEXT    NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   seq          INTEGER NOT NULL,
@@ -221,6 +227,12 @@ func (s *Store) Migrate(ctx context.Context) error {
   PRIMARY KEY (session_id, seq)
 )`,
 				`CREATE INDEX idx_todos_session ON todos(session_id, seq)`,
+			})
+		case migrationSegments:
+			// Footer visibility is session state so resume restores the same
+			// status-line layout. JSON keeps the column additive and extensible.
+			err = s.applyMigration(ctx, migrationSegments, []string{
+				`ALTER TABLE sessions ADD COLUMN status_segments TEXT NOT NULL DEFAULT '["model","tps","tokens","cost","scroll","models","prompt"]'`,
 			})
 		default:
 			if i < 1 || i > len(schemaMigrations) {

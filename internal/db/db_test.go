@@ -580,6 +580,26 @@ func TestUpdateSessionVariant(t *testing.T) {
 	}
 }
 
+func TestUpdateSessionSegmentsRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	sess, err := s.CreateSession(ctx, Session{Directory: "/a"})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if err := s.UpdateSessionSegments(ctx, sess.ID, []string{"tps", "model", "tps", "unknown"}); err != nil {
+		t.Fatalf("UpdateSessionSegments: %v", err)
+	}
+	got, err := s.GetSession(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	want := []string{"tps", "model"}
+	if strings.Join(got.StatusSegments, ",") != strings.Join(want, ",") {
+		t.Fatalf("segments = %v, want %v", got.StatusSegments, want)
+	}
+}
+
 func TestCreateSessionListedByProjectRoot(t *testing.T) {
 	ctx := context.Background()
 	s := openTestStore(t)

@@ -1829,6 +1829,20 @@ func TestTokensPerSecUsesGeneratedNotSessionTotal(t *testing.T) {
 	}
 }
 
+func TestRollingTPSUsesRecentSamples(t *testing.T) {
+	now := time.Unix(100, 0)
+	samples := []tpsSample{
+		{at: now.Add(-2 * time.Second), tokens: 20},
+		{at: now.Add(-1 * time.Second), tokens: 10},
+	}
+	if got := rollingTPS(samples, now); got != 15 {
+		t.Fatalf("rollingTPS = %v, want 15", got)
+	}
+	if got := formatTPS(120); got != ">99.9 tps" {
+		t.Fatalf("formatTPS(120) = %q, want >99.9 tps", got)
+	}
+}
+
 func TestFooterShowsLiveTPSWhileBusy(t *testing.T) {
 	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
 	m.busy = true

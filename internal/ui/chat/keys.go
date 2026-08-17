@@ -316,6 +316,8 @@ func (m Model) submit(text string) (Model, tea.Cmd) {
 	m.turnItemFrom = len(m.items)
 	m.turnGenTokens = 0
 	m.tokensPerSec = 0
+	m.tpsSamples = nil
+	m.stepMetrics = false
 	m.syncTranscript()
 	m.turnSeq++
 	seq := m.turnSeq
@@ -368,6 +370,8 @@ func (m Model) resumeAfterLimit() (Model, tea.Cmd) {
 	m.turnItemFrom = len(m.items)
 	m.turnGenTokens = 0
 	m.tokensPerSec = 0
+	m.tpsSamples = nil
+	m.stepMetrics = false
 	m.syncTranscript()
 	m.turnSeq++
 	seq := m.turnSeq
@@ -531,7 +535,7 @@ func (m Model) promptEditing() bool {
 	if m.subagentLogMode {
 		return false
 	}
-	return !m.confirmMode && !m.askMode && !m.helpMode && !m.usageMode && !m.settingsMode && !m.filePickerMode && !m.pickerMode && !m.sessionPickerMode && !m.slashMode
+	return !m.confirmMode && !m.askMode && !m.helpMode && !m.usageMode && !m.settingsMode && !m.statusMode && !m.filePickerMode && !m.pickerMode && !m.sessionPickerMode && !m.slashMode
 }
 
 func (m Model) selectedHistoryItem() (inputHistoryItem, bool) {

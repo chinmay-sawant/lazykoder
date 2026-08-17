@@ -24,6 +24,40 @@ type Session struct {
 	Status          string
 	ParentSessionID *string // set for kind=subagent
 	Kind            string  // main | subagent; empty treated as main
+	StatusSegments  []string
+}
+
+// StatusSegmentNames are the persisted footer segment identifiers.
+var StatusSegmentNames = []string{"model", "tps", "tokens", "cost", "scroll", "models", "prompt"}
+
+// DefaultStatusSegments returns a fresh copy of the default footer layout.
+func DefaultStatusSegments() []string {
+	return append([]string(nil), StatusSegmentNames...)
+}
+
+// NormalizeStatusSegments removes unknown and duplicate identifiers. An empty
+// result means the caller should use the default layout.
+func NormalizeStatusSegments(values []string) []string {
+	allowed := make(map[string]struct{}, len(StatusSegmentNames))
+	for _, name := range StatusSegmentNames {
+		allowed[name] = struct{}{}
+	}
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, name := range values {
+		if _, ok := allowed[name]; !ok {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		out = append(out, name)
+	}
+	if len(out) == 0 {
+		return DefaultStatusSegments()
+	}
+	return out
 }
 
 // Message is one provider round-trip within a session.

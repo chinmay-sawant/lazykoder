@@ -95,6 +95,8 @@ const (
 	// pulseInterval and pulseSteps throb the in-progress reply rail.
 	pulseInterval = 70 * time.Millisecond
 	pulseSteps    = 16
+	// tpsSampleWindow bounds the live rolling rate calculation.
+	tpsSampleWindow = 10
 )
 
 var (
@@ -191,6 +193,8 @@ type Model struct {
 	turnStarted   time.Time
 	turnGenTokens int64
 	turnItemFrom  int
+	tpsSamples    []tpsSample
+	stepMetrics   bool
 
 	confirmCh   chan confirmRequest
 	askCh       chan askRequest
@@ -227,7 +231,10 @@ type Model struct {
 	// todos is the session checklist from todowrite (shown under the header).
 	todos []db.Todo
 	// todosExpanded shows the checklist bodies; default is the one-line strip.
-	todosExpanded bool
+	todosExpanded  bool
+	statusSegments []string
+	statusMode     bool
+	statusCursor   int
 
 	// userNavHover is the Medium-style right-rail mark under the pointer (-1 = none).
 	userNavHover int
@@ -332,6 +339,11 @@ type textSelection struct {
 
 type copyNoticeMsg struct{}
 
+type tpsSample struct {
+	at     time.Time
+	tokens int64
+}
+
 var slashCommands = []slashCmd{
 	{name: "/new", description: "start a new session and clear the transcript"},
 	{name: "/resume", description: "open past sessions (ctrl+s, also /session)", aliases: []string{"sessions", "session"}},
@@ -340,6 +352,7 @@ var slashCommands = []slashCmd{
 	{name: "/agents", description: "open the sub-agent drawer and logs", aliases: []string{"subs", "subagents"}},
 	{name: "/refresh", description: "reload the model list into models.json"},
 	{name: "/usage", description: "show OpenCode Go plan usage (rolling, weekly, monthly)"},
+	{name: "/status", description: "toggle footer status segments"},
 	{name: "/settings", description: "project defaults (model, steps, agents, safety)", aliases: []string{"slot"}},
 	{name: "/continue", description: "resume after a step-limit stop (or send continue)"},
 	{name: "/help", description: "keyboard shortcuts (?, also /keys)", aliases: []string{"keys"}},
@@ -450,10 +463,12 @@ func New(opts Options) Model {
 		}
 		m.replay(m.session.ID)
 		m = m.loadTodos()
+		m.statusSegments = db.NormalizeStatusSegments(m.session.StatusSegments)
 	} else {
 		// New run: seed live model/variant from project defaults.
 		m.model = cfg.EffectiveModel()
 		m.variant = cfg.EffectiveVariant()
+		m.statusSegments = db.DefaultStatusSegments()
 	}
 	return m
 }
@@ -719,6 +734,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.settingsMode {
 			return m.updateSettingsKey(msg)
 		}
+		if m.statusMode {
+			return m.updateStatusKey(msg)
+		}
 		if m.filePickerMode {
 			return m.updateFilePickerKey(msg)
 		}
@@ -854,6 +872,18 @@ func (m Model) applyEvent(ev agent.Event) Model {
 		if ev.Tool.Tool == "todowrite" {
 			m = m.applyTodosFromTool(ev.Tool)
 		}
+	case agent.EventTokenDelta:
+		if ev.TokenDelta > 0 {
+			m.tpsSamples = append(m.tpsSamples, tpsSample{at: time.Now(), tokens: ev.TokenDelta})
+			if len(m.tpsSamples) > tpsSampleWindow {
+				m.tpsSamples = m.tpsSamples[len(m.tpsSamples)-tpsSampleWindow:]
+			}
+		}
+	case agent.EventStepMetrics:
+		m.stepMetrics = true
+		if ev.TokensOutput > 0 && ev.ElapsedMS > 0 {
+			m.tokensPerSec = tokensPerSec(ev.TokensOutput, time.Duration(ev.ElapsedMS)*time.Millisecond)
+		}
 	case agent.EventError:
 		if ev.Err != nil && !isCancelErr(ev.Err) {
 			m.err = ev.Err.Error()
@@ -916,7 +946,7 @@ func (m Model) finishTurn(err error) Model {
 		m.pulseOn = false
 	}
 	m.syncTranscript()
-	if !m.turnStarted.IsZero() {
+	if !m.stepMetrics && !m.turnStarted.IsZero() {
 		m.tokensPerSec = tokensPerSec(m.generatedThisTurn(), time.Since(m.turnStarted))
 	}
 	m.bumpTokenFloor()
@@ -937,9 +967,32 @@ func tokensPerSec(generated int64, elapsed time.Duration) float64 {
 
 func (m Model) displayTPS() float64 {
 	if m.busy && !m.turnStarted.IsZero() {
+		if n := rollingTPS(m.tpsSamples, time.Now()); n > 0 {
+			return n
+		}
 		return tokensPerSec(m.generatedThisTurn(), time.Since(m.turnStarted))
 	}
 	return m.tokensPerSec
+}
+
+func rollingTPS(samples []tpsSample, now time.Time) float64 {
+	if len(samples) == 0 {
+		return 0
+	}
+	var total int64
+	first := samples[0].at
+	for _, sample := range samples {
+		if sample.tokens > 0 {
+			total += sample.tokens
+		}
+		if sample.at.Before(first) {
+			first = sample.at
+		}
+	}
+	if total <= 0 || now.Before(first) {
+		return 0
+	}
+	return tokensPerSec(total, now.Sub(first))
 }
 
 func (m Model) generatedThisTurn() int64 {

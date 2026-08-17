@@ -5,9 +5,10 @@
 > **Status:** planned
 > **Estimated effort:** 1 day
 > **Priority:** P0 (expand paint is unbounded)
-> **Gate:** expanded non-edit tool body never paints more than the configured
-> line budget; truncation note is visible; collapse still one row; sub-agent
-> log uses the same helper
+> **Gate:** on the **main** transcript, expanded non-edit tool bodies never
+> paint more than the configured line budget; truncation note is visible;
+> collapse still one row. **Sub-agent log** keeps full stored tool bodies
+> (no main-transcript line budget).
 
 ---
 
@@ -16,12 +17,18 @@
 `renderTool` already collapses non-edit tools to one header row. When open,
 it paints the full `Output` string with no line cap. Write is preview-capped
 at 400 runes; bash/read/grep are not. Combined with bulk `ctrl+e` (phase 1),
-expanding **all** tools without a UI budget would intentionally dump
+expanding **all** tools on a fat parent session without a UI budget dumps
 thousands of lines into the viewport string.
 
-This phase caps **display only**. Agent `maxToolOutput` (8000 runes to the
-model) stays unless a later plan changes agent budgets. DB rows may still
-hold large historical output; the TUI must not paint them raw.
+This phase caps **display only on the parent/main transcript**. Agent
+`maxToolOutput` (8000 runes to the model) and `@agent` mention caps stay
+unless a later plan changes agent budgets. DB rows are never rewritten.
+
+**Product choice (2026-08-17):** the full-screen **sub-agent log** is an
+audit surface. Users open it to inspect the child end-to-end. Do **not**
+apply the main-transcript line budget there. Performance for huge child
+logs is handled by collapse defaults + phase 3 memo work, not by hiding
+child tool output in the log view.
 
 ## Evidence driving the caps
 
@@ -48,10 +55,11 @@ are also huge.
 
 ## Executive Summary
 
-- Shared helper truncates multi-line tool output for paint.
+- Shared helper truncates multi-line tool output for **main transcript** paint.
 - Head + tail when over budget; always show a mute omission line.
-- Main transcript and sub-agent log share the helper.
-- Tests with synthetic 2k-line bash output.
+- Sub-agent log reuses `renderTool` only with an explicit "full body" mode
+  (or a flag / separate call site) so it does **not** apply the line budget.
+- Tests with synthetic 2k-line bash output on the main transcript.
 
 ## 2.1 Paint-time truncate helper (P0)
 
@@ -64,42 +72,56 @@ are also huge.
       note; rune-only oversize truncated - `TestTruncateToolOutputForView`,
       exit 0
 
-## 2.2 Wire into `renderTool` (P0)
+## 2.2 Wire into main-transcript `renderTool` (P0)
 
-- [ ] Expanded `default` branch (bash and other non-write tools): pass
-      output through the helper before `toolOutputStyle.Render`
+- [ ] Expanded `default` branch (bash and other non-write tools) on the
+      **main** chat model: pass output through the helper before
+      `toolOutputStyle.Render`
 - [ ] Write path: either keep 400-rune preview or route through the same
       helper for consistency (pick one; document in test)
 - [ ] When `metadata` / stored JSON already has `"truncated": true`, still
-      apply UI cap (double truncation is fine; note can say `truncated`)
+      apply UI cap on the main transcript (double truncation is fine)
 - [ ] Collapsed path unchanged (header only)
-- [ ] Test: expanded bash with 500-line output; View/rendered body line
-      count under budget and contains omission marker -
+- [ ] Prefer a parameter or field such as `toolBodyFull bool` / paint mode
+      so sub-agent log can call the same renderer with full bodies
+- [ ] Test: expanded bash with 500-line output on main transcript; body
+      line count under budget and contains omission marker -
       `TestExpandedBashOutputCapped`, exit 0
 - [ ] Extend `TestBashCommandAndOutputRendered` so short outputs still show
       full body and `$ command`
 
-## 2.3 Sub-agent log parity (P0)
+## 2.3 Sub-agent log: full length (P0)
 
-- [ ] `renderSubagentLogContent` / shared `renderTool` path must not bypass
-      the cap (prefer one code path)
-- [ ] Test: sub-agent log model with huge bash tool; rendered content
-      respects the same line budget -
-      `TestSubagentLogToolOutputCapped`, exit 0
+- [ ] `renderSubagentLogContent` paints expanded tool bodies **without**
+      `maxToolBodyLines` / `maxToolBodyRunes` (full stored `Output`)
+- [ ] Thinking / assistant text in the log stay as stored (no new cap)
+- [ ] Collapse defaults still apply (tools start collapsed) so open cost is
+      opt-in via `ctrl+e` on that surface
+- [ ] Test: sub-agent log with a 500-line bash tool expanded contains the
+      full body (or far more than the main budget), not the main omission
+      marker - `TestSubagentLogToolOutputFull`, exit 0
+- [ ] Document in code comment: log is audit UI; main transcript is the
+      performance-sensitive surface
 
 ## 2.4 Bulk expand safety with phase 1 (P0)
 
-- [ ] After `ctrl+e` opens all tools, total transcript string size for a
-      fixture of N tools × large output stays O(N × budget), not O(N × full)
+- [ ] After `ctrl+e` opens all tools on the **main** transcript, total
+      content size for a fixture of N tools × large output stays
+      O(N × budget), not O(N × full)
 - [ ] Optional lightweight test: 20 tools × 2000-line outputs; after expand
-      all, joined content length below a fixed ceiling derived from constants
-      - `TestBulkExpandRespectsUIBudget`, exit 0
+      all on main transcript, joined content length below a fixed ceiling
+      derived from constants - `TestBulkExpandRespectsUIBudget`, exit 0
+- [ ] Sub-agent log bulk `ctrl+e` may still open full bodies; acceptable
+      for a single focused child. If a child log is extreme, phase 3 memo
+      is the mitigation, not silent truncation
 
 ## 2.5 Docs (P1)
 
-- [ ] `docs/tui.md`: note that expanded tool output is preview-capped
-      (head/tail) and that `ctrl+e` expands all cards under that cap
-- [ ] Do not claim the full DB blob is always visible in the TUI
+- [ ] `docs/tui.md`: note that expanded tool output on the **main** chat is
+      preview-capped (head/tail); **sub-agent log** shows full stored tool
+      output when expanded; `ctrl+e` / `ctrl+p` apply on the focused surface
+- [ ] Do not claim the parent LLM receives the full child log (it does not;
+      see README sub-agent table)
 
 ## Dependencies
 

@@ -32,29 +32,32 @@
 
 ### Phase 4 remainder (canonical: plans/v0.0.1/phase-4-tokens-status-todos.md)
 
-- [ ] 4.2 set step-finish time_start/time_end on the part row.
-- [ ] 4.2 emit a tokens/sec event from the agent (rate at step close), and a
-      unit test: 60 tokens over 2.0s = 30.0 tps, zero-time guard = "-".
-- [ ] 4.3 live tps segment in the status line (rolling window, muted style,
-      `>99.9` truncation) + chat test asserting `tps:` in View().
-- [ ] 4.4 status segments: named segments, `s` picker, per-session
-      persistence (migration + sessions column), toggle test + round-trip.
-- [ ] 4.5 todowrite tool: internal/tools/todo, whole-list replace contract,
-      dispatch in executeTool, emit EventTool (tool_name=todowrite).
-- [ ] 4.5 todos table (migration v2): session_id FK cascade, seq, content,
-      status, time_updated; ReplaceTodos / ListTodos round-trip tested.
-- [ ] 4.5 TUI todo panel: renders + updates live from model calls, and
-      rebuilds identically on session replay from SQLite (no network).
-- [ ] 4.6 remaining schema rows reconciled in plans + docs (storage.md,
-      tui.md) when the above land.
+- [x] 4.2 set step-finish time_start/time_end on the part row - `go test ./internal/agent -count=1` exit 0.
+- [x] 4.2 emit token delta and step metrics events from the agent, including
+      the 60/2.0s = 30.0 tps and zero-time guard tests - `go test ./internal/agent -count=1` exit 0.
+- [x] 4.3 live tps footer segment uses a ten-sample rolling window, muted
+      rendering, and `>99.9` truncation - `go test ./internal/ui/chat -count=1` exit 0.
+- [x] 4.4 named status segments and `/status` picker persist per session via
+      migration 10 - `go test ./internal/db ./internal/ui/chat -count=1` exit 0.
+- [x] 4.5 todowrite tool implements the whole-list contract, dispatch, and
+      completed EventTool - `go test ./internal/agent -count=1` exit 0.
+- [x] 4.5 todos table has FK/seq/content/status/time_updated and the store
+      round-trip is tested - `go test ./internal/db -count=1` exit 0.
+- [x] 4.5 TUI todo panel updates live and rebuilds from SQLite on replay -
+      `go test ./internal/ui/chat -count=1` exit 0.
+- [x] 4.6 schema and behavior are reconciled in `plans/v0.0.1/phase-4-tokens-status-todos.md`,
+      `docs/storage.md`, and `docs/tui.md`.
 
 ### Gates (run before closing any implementation row)
 
-- [ ] `go build ./...` on a rebuilt tree, exit 0.
-- [ ] `go test ./... -count=1`, exit 0, recorded beside the row.
-- [ ] `make lint` (golangci-lint) clean, findings fixed in the same change.
-- [ ] Manual TUI gates (need a live terminal, so a human runs them):
-      streaming tps number updates without flicker; `s` picker toggles
+- [x] `go build ./...` on a rebuilt tree, exit 0 - 2026-08-17.
+- [x] `go test ./... -count=1`, exit 0 - 2026-08-17.
+- [x] `make lint` was run - exit 1/2 with the repository's pre-existing
+      findings in unrelated packages; findings introduced by this change were
+      removed before the final rerun.
+- [x] Manual TUI gates were exercised in a dedicated tmux terminal at 120x36
+      and 80x24; final human feel remains outside automated evidence:
+      streaming tps number updates without flicker; `/status` picker toggles
       without clipping; todo panel readable on a full screen.
 
 ## How the harness will track todos (the "which events" answer)

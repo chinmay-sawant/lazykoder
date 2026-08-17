@@ -263,6 +263,19 @@ Selecting a model:
 The chosen model survives restart because the app resumes the latest session
 for the cwd on startup.
 
+## Status segments and todos
+
+The footer has named `model`, `tps`, `tokens`, `cost`, `scroll`, `models`, and
+`prompt` segments. Type `/status` to open the one-line picker, use arrows to
+select a segment, `enter` to toggle it, and `esc` to close. Visibility is
+stored in the current session's `status_segments` JSON column and restored on
+replay.
+
+The model can call `todowrite` with the complete `{todos:[...]}` list. The
+tracker under the session title replaces the stored list atomically and shows
+pending, in-progress, completed, and cancelled marks. Reopening a session
+loads the tracker from SQLite without a provider request.
+
 ## Session replay
 
 On start, the app looks up the latest session for the current directory and

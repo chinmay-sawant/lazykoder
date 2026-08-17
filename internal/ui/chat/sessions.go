@@ -347,6 +347,9 @@ func (m Model) loadSession(sess *db.Session) Model {
 	m.turnGenTokens = 0
 	m.turnItemFrom = 0
 	m.turnStarted = time.Time{}
+	m.statusMode = false
+	m.statusCursor = 0
+	m.statusSegments = db.DefaultStatusSegments()
 	m.prompt.SetValue("")
 	m.session = sess
 	if sess != nil {
@@ -358,6 +361,7 @@ func (m Model) loadSession(sess *db.Session) Model {
 		if m.store != nil {
 			m.replay(sess.ID)
 			m = m.loadTodos()
+			m.statusSegments = db.NormalizeStatusSegments(sess.StatusSegments)
 		}
 	} else {
 		m.todos = nil

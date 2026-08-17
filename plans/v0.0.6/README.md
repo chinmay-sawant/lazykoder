@@ -116,17 +116,36 @@ string is rebuilt and fingerprinted even when only the live tail changed.
    If any tool is expanded, collapse all; if all are collapsed, expand all.
 5. **`ctrl+p` toggles all thinking blocks** with the same all-open /
    all-closed rule (not only the last reasoning item).
-6. **UI truncation** on expanded tool output (head + tail + note). Full
-   dump is not the default paint path.
-7. **Render-path work** after keybindings + truncate so long sessions stay
+6. **UI truncation** on expanded tool output in the **parent/main
+   transcript** only (head + tail + note). Full dump is not the default
+   paint path there.
+7. **Sub-agent log stays full length** when you open a child's log. That
+   surface is an audit view: paint the stored tool/thinking bodies without
+   the main-transcript line budget. DB is still never rewritten by this
+   plan. (Parent LLM still receives only summaries / mention excerpts with
+   their existing caps; that is separate from the log UI.)
+8. **Render-path work** after keybindings + truncate so long sessions stay
    usable while streaming.
+
+### Sub-agents vs the 8000 model cap (reference)
+
+| Path | What the parent LLM gets | Cap today |
+| --- | --- | --- |
+| Child session in SQLite | Full child transcript (tools, text) as stored | Per-tool caps when the *child* agent ran tools (`maxToolOutput` on child bash/read/etc.) |
+| `task` / `task_wait` / `task_status` JSON to parent | Status + short summary (not full child log) | Summary often from `LastAssistantText` (reuses 8000); task JSON itself is not re-clipped by a second 8000 in `execTaskTool` |
+| `@agent:name` on send | Injected block appended to the send payload only | **`maxAtMentionContext = 4000`** runes per mention (includes task excerpt + last reply + last tool) |
+| Sub-agent log TUI (`/agents` → enter) | N/A (you read it; not auto-sent to LLM) | v0.0.6: **no UI line budget** (full stored bodies) |
+
+v0.0.6 does **not** raise or remove `maxToolOutput` / `maxAtMentionContext`.
+If product later wants the parent model to see a full child log, that is a
+separate agent-budget plan, not paint truncation.
 
 ## Phase files (live ledgers)
 
 | File | Priority | Goal |
 | --- | --- | --- |
 | [phase-1-meta-keys.md](phase-1-meta-keys.md) | P0 | Remove `t`/`e`/click toggle; `ctrl+e` all tools; `ctrl+p` all thinking; docs/help |
-| [phase-2-tool-output-truncate.md](phase-2-tool-output-truncate.md) | P0 | Cap expanded tool body paint; head+tail; same for sub-agent log |
+| [phase-2-tool-output-truncate.md](phase-2-tool-output-truncate.md) | P0 | Cap expanded tool body paint on **main** transcript; sub-agent log stays full |
 | [phase-3-render-path.md](phase-3-render-path.md) | P1 | Cheaper fingerprint, per-item memo, avoid full rebuild on every delta |
 
 ## Out of scope (explicit)
@@ -135,8 +154,9 @@ string is rebuilt and fingerprinted even when only the live tail changed.
   phase 3 if still needed).
 - Lazy-loading tool output from SQLite on expand (follow-up if resume RAM
   is the bottleneck).
-- Changing `maxToolOutput` for the model (keep 8000 unless a later plan
-  revisits agent budgets).
+- Changing `maxToolOutput` or `maxAtMentionContext` for the model (keep
+  current agent budgets unless a later plan revisits them).
+- Sending the full sub-agent log to the parent LLM automatically.
 - New dependencies.
 
 ## Dependencies

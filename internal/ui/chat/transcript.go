@@ -516,6 +516,9 @@ func (m Model) plainTranscriptRows() []string {
 
 func (m *Model) applyPart(p db.Part) {
 	switch p.Type {
+	case "step-start":
+		m.tpsSamples = nil
+		m.stepMetrics = false
 	case "text":
 		if p.Text == nil {
 			return
