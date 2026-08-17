@@ -28,6 +28,12 @@ snapshots:
 | `v0.0.7/README.md` | status visibility and OpenCode account profiles |
 | `v0.0.7/phase-1-status-drawer.md` | compact status footer and persisted status drawer |
 | `v0.0.7/phase-2-opencode-accounts.md` | dynamic OpenCode account profiles and active selection |
+| `v0.0.8/README.md` | auto-compaction and mid-session model switch |
+| `v0.0.8/phase-1-policy-prompts.md` | embedded compact prompt and pure policy helpers |
+| `v0.0.8/phase-2-history-checkpoint.md` | request-time prune and compaction-part history |
+| `v0.0.8/phase-3-llm-compact.md` | tools-off summarizer call and overflow retry |
+| `v0.0.8/phase-4-model-switch-slash.md` | picker shrink hint, `/compact`, settings |
+| `v0.0.8/phase-5-gates.md` | full test/build and architecture/TUI docs |
 
 Each checklist row is marked `[x]` only when the gate actually passed, with
 the command and exit code recorded beside the row. Rows are never checked
