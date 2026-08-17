@@ -65,8 +65,9 @@ pickers are centered cards.
   session. Rows stay on one line (newlines in a title collapse to spaces);
   long titles truncate with an ellipsis, and the list scrolls with the wheel.
 - Empty session: a short hint in the transcript, not a blank pane.
-- `/help` or `?` (empty prompt) opens a centered key card with
-  shortcuts in two columns. `esc` or `?` closes it.
+- `/help` or `?` (empty prompt) opens a centered key card (two columns
+  at 100+ width) listing send, slash commands including `/settings` and
+  `/continue`, copy/quit, and undo. `esc`, `?`, or `[x]` closes it.
 - `@` in the prompt opens a project file picker. Enter inserts `@path`.
 - Dragging across transcript rows selects and copies the range on mouse
   release; a temporary `text copied` notice appears above the prompt. The
@@ -194,13 +195,22 @@ persist in `<cwd>/.lazykoder/settings.json`.
 
 | Row | What it controls |
 | --- | --- |
-| default model | model for new sessions (default `deepseek-v4-flash`) |
-| default variant | default reasoning effort (`default` / low / medium / high / max) |
+| new-session model | model for new sessions (default `deepseek-v4-flash`) |
+| new-session variant | default reasoning effort (`default` / low / medium / high / max) |
+| child model override | model every child inherits (empty = inherit parent) |
+| explore model | model for explore-role children (empty = inherit) |
 | step limit | on/off for the per-turn tool-step budget |
-| max steps | tool-calling rounds per user turn when the limit is on (1-128, default 16) |
+| parent max steps | tool-calling rounds per user turn when the limit is on (1-1000, default 16) |
 | sub-agents | on/off for parent `task` tools |
+| default role | `explore` / `plan` / `general` when `task` omits role |
 | max concurrent | concurrent child agents (1-20, default 4) |
-| child max steps | step budget for each child agent (default 32) |
+| max queued | spawn queue size (default 40, cap 100) |
+| child max steps | step budget for each child agent (default 1000) |
+| child timeout | wall-clock timeout (`10m` at 600s; 0 = off) |
+| parallel writers | allow more than one general-role writer |
+| child bash confirms | `ask parent` or `deny` |
+| parent bash allowlist | on/off; parent-only, children are not filtered |
+| allowed executables | chip/count editor for the parent allowlist |
 
 When sub-agents are running, the footer may show `subs:N/M` (active / max
 concurrent). Cancelling the parent turn also cancels child jobs.
@@ -229,9 +239,10 @@ After a step-limit error the status line also hints `/continue to keep
 going`.
 
 Typing `/` in the chat prompt opens a full-width command popover above the
-prompt. Each row shows the command name on the left and its description after
-it. `↑`/`↓` select, `enter` or a click runs the command, `esc` closes and
-leaves `/` in the prompt.
+prompt, grouped as Session / Model / Project / Help. Each row shows the
+command name on the left and its description after it (on narrow terminals
+the description sits on the footer). `↑`/`↓` select, `enter` or a click
+runs the command, `esc` closes and leaves `/` in the prompt.
 
 Selecting a model:
 

@@ -29,7 +29,7 @@ const (
 	// userNavHitXExtra allows clicks a couple columns left of the rail.
 	userNavHitXExtra = 2
 	// userNavTipDuration is how long the label bubble stays after show.
-	userNavTipDuration = 10 * time.Second
+	userNavTipDuration = 2 * time.Second
 )
 
 // userTurnMark is one progress tick for a user message.

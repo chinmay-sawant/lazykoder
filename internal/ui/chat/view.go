@@ -27,6 +27,9 @@ func (m Model) View() tea.View {
 	if m.settingsMode {
 		return m.newView(m.settingsScreen())
 	}
+	if m.helpMode {
+		return m.newView(m.helpScreen())
+	}
 	screen := m.chatScreen()
 	overlayH := m.composerTop()
 	if m.confirmMode {
@@ -34,9 +37,6 @@ func (m Model) View() tea.View {
 	}
 	if m.askMode {
 		screen = overlayOn(screen, m.width, overlayH, m.askOverlay())
-	}
-	if m.helpMode {
-		screen = overlayOn(screen, m.width, overlayH, m.helpOverlay())
 	}
 	if m.filePickerMode {
 		screen = overlayOn(screen, m.width, overlayH, m.filePickerOverlay())
@@ -186,7 +186,7 @@ func (m Model) liveStatusView() string {
 	status := m.workRailMark() + " " + busyStyle.Render("working") + "  " + hintStyle.Render(label)
 	status = lipgloss.NewStyle().Width(w).MaxWidth(w).Render(truncateRunes(status, w))
 	if !m.busy {
-		return status
+		return "\n" + status
 	}
 	// Busy action strip (Grok Build-style): cancel / send now / edit draft.
 	draft := strings.TrimSpace(m.prompt.Value())
@@ -195,7 +195,7 @@ func (m Model) liveStatusView() string {
 		actions = "enter send now  •  esc cancel  •  type to edit draft"
 	}
 	actionLine := hintStyle.Width(w).Render(truncateRunes(actions, w))
-	return status + "\n" + actionLine
+	return "\n" + status + "\n" + actionLine
 }
 
 // jumpBarVisible reports whether the transcript is scrolled up so the
@@ -239,10 +239,13 @@ func (m Model) alertText() string {
 	return ""
 }
 
-// tipsVisible reports whether the rotating usage tip should show on the
-// alert row: only while the user is doing nothing (idle, no overlay).
+// tipsVisible reports whether the rotating usage tip should show.
+// Compact terminals keep tips out of the transcript gutter (they collide).
 func (m Model) tipsVisible() bool {
 	if m.busy || m.quitConfirm || m.copyNotice != "" {
+		return false
+	}
+	if m.width < 100 {
 		return false
 	}
 	return m.promptEditing()
@@ -371,10 +374,12 @@ func (m Model) subsStatusLabel() string {
 }
 
 func (m Model) fitFooterRight(budget int) string {
-	model := m.modelDisplayLabel()
+	model := m.modelChipLabel()
+	variant := m.variantChipLabel()
 	tokens, cache, cost, tps := m.footerPieces()
 	subs := m.subsStatusLabel()
-	try := func(includeModel bool, bits ...string) string {
+	chips := strings.TrimSpace(model + "  " + variant)
+	try := func(lead string, bits ...string) string {
 		parts := make([]string, 0, len(bits))
 		for _, b := range bits {
 			if b != "" {
@@ -382,15 +387,15 @@ func (m Model) fitFooterRight(budget int) string {
 			}
 		}
 		stats := strings.Join(parts, "  ")
-		if includeModel {
-			right := joinFooter(model, stats)
+		if lead != "" {
+			right := joinFooter(lead, stats)
 			if lipgloss.Width(right) <= budget {
 				return right
 			}
 			if stats != "" {
-				modelBudget := budget - lipgloss.Width(stats) - 2
-				if modelBudget >= 4 {
-					return truncateRunes(model, modelBudget) + "  " + stats
+				chipBudget := budget - lipgloss.Width(stats) - 2
+				if chipBudget >= 4 {
+					return truncateRunes(lead, chipBudget) + "  " + stats
 				}
 			}
 			return ""
@@ -400,31 +405,37 @@ func (m Model) fitFooterRight(budget int) string {
 		}
 		return ""
 	}
-	if s := try(true, tokens, cache, cost, tps, subs); s != "" {
+	if s := try(chips, tokens, cache, cost, tps, subs); s != "" {
 		return s
 	}
-	if s := try(true, tokens, cache, cost, subs); s != "" {
+	if s := try(model, tokens, cache, cost, tps, subs); s != "" {
 		return s
 	}
-	if s := try(true, tokens, cache, subs); s != "" {
+	if s := try(chips, tokens, cache, cost, subs); s != "" {
 		return s
 	}
-	if s := try(true, cache, subs); s != "" {
+	if s := try(model, tokens, cache, cost, subs); s != "" {
 		return s
 	}
-	if s := try(true, subs); s != "" {
+	if s := try(model, tokens, cache, subs); s != "" {
 		return s
 	}
-	if s := try(false, tokens, cache, cost, tps); s != "" {
+	if s := try(model, cache, subs); s != "" {
 		return s
 	}
-	if s := try(false, cache); s != "" {
+	if s := try(model, subs); s != "" {
+		return s
+	}
+	if s := try("", tokens, cache, cost, tps); s != "" {
+		return s
+	}
+	if s := try("", cache); s != "" {
 		return s
 	}
 	if cache != "" {
 		return truncateRunes(cache, budget)
 	}
-	return truncateRunes(model, budget)
+	return truncateRunes(chips, budget)
 }
 
 func joinFooter(model, stats string) string {
@@ -502,7 +513,7 @@ func (m Model) composerLeft() string {
 		if strings.TrimSpace(m.prompt.Value()) != "" {
 			return busyStyle.Render("enter send now")
 		}
-		return busyStyle.Render("working · esc cancel")
+		return hintStyle.Render("edit")
 	default:
 		if _, ok := m.selectedHistoryItem(); ok {
 			return hintStyle.Render("history: ↑/↓ previous/next")
@@ -556,11 +567,11 @@ func (m Model) transcriptView() string {
 	w := max(minPaneWidth, m.width)
 	if len(m.items) == 0 {
 		empty := strings.Join([]string{
-			lipgloss.NewStyle().Foreground(theme.ColorText()).Bold(true).Render("new run"),
+			lipgloss.NewStyle().Foreground(theme.ColorText()).Bold(true).Render("new session"),
 			hintStyle.Render("ask anything about this project"),
-			hintStyle.Render("/ commands   @ files   ctrl+s history"),
+			hintStyle.Render("/ commands   @ files   ? help   /settings"),
 		}, "\n")
-		return lipgloss.NewStyle().Width(w).Height(h).Render(empty)
+		return lipgloss.NewStyle().Width(w).Height(h).Align(lipgloss.Center, lipgloss.Center).Render(empty)
 	}
 	vp := m.paintedTranscript()
 	view := vp.View()
@@ -577,52 +588,109 @@ func (m Model) transcriptView() string {
 	return withScrollbar(view, contentW, h, vp.ScrollPercent(), overflow)
 }
 
+func (m Model) helpScreen() string {
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, m.helpOverlay())
+}
+
 func (m Model) helpOverlay() string {
 	rows := [][2]string{
 		{"enter", "send / send now if busy"},
 		{"shift+enter", "newline"},
 		{"/", "commands"},
-		{"ctrl+s", "resume"},
-		{"/model", "switch model"},
-		{"/variant", "reasoning effort"},
+		{"/new", "new session"},
+		{"/resume", "past sessions (ctrl+s)"},
+		{"/continue", "after a step-limit stop"},
+		{"/settings", "project defaults"},
 		{"/agents", "sub-agents + logs"},
+		{"/model", "switch live model"},
+		{"/variant", "reasoning effort"},
+		{"/refresh", "reload models.json"},
 		{"@", "mention a file"},
-		{"click model", "switch"},
-		{"t / e", "thinking / expand tool"},
-		{"esc", "cancel turn"},
+		{"click model", "switch model"},
+		{"t / e", "thinking / last tool"},
+		{"ctrl+e", "expand last tool (any prompt)"},
+		{"esc", "cancel turn; twice clears"},
 		{"ctrl+a", "select all"},
-		{"ctrl+←/→", "jump words"},
-		{"ctrl+home/end", "input start/end"},
-		{"ctrl+c", "copy / quit"},
+		{"ctrl+z", "undo prompt"},
+		{"c", "copy selection"},
+		{"ctrl+c", "copy; empty: quit twice"},
 	}
+	keyStyle := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText())
+	actStyle := hintStyle
 	keyW := 0
 	for _, row := range rows {
 		if w := lipgloss.Width(row[0]); w > keyW {
 			keyW = w
 		}
 	}
-	innerW := min(56, max(minPaneWidth, m.width-12))
-	title := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).Width(innerW).Render("keys")
-	var body strings.Builder
-	body.WriteString(title)
-	for _, row := range rows {
-		gap := max(2, keyW-lipgloss.Width(row[0])+2)
-		line := row[0] + strings.Repeat(" ", gap) + row[1]
-		if lipgloss.Width(line) > innerW {
-			line = truncateRunes(line, innerW)
+	innerW := min(64, max(minPaneWidth, m.overlayWidth()-cardBorder-4))
+	twoCol := m.width >= 100
+	colW := innerW
+	if twoCol {
+		colW = max(28, (innerW-2)/2)
+	}
+	title := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).Render("keys")
+	closeBtn := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).Render("[x]")
+	gap := max(1, innerW-lipgloss.Width(title)-lipgloss.Width(closeBtn))
+	header := title + strings.Repeat(" ", gap) + closeBtn
+
+	format := func(row [2]string, width int) string {
+		line := keyStyle.Render(row[0]) + strings.Repeat(" ", max(2, keyW-lipgloss.Width(row[0])+2)) + actStyle.Render(row[1])
+		if lipgloss.Width(line) > width {
+			return truncateRunes(row[0]+"  "+row[1], width)
 		}
-		body.WriteString("\n")
-		body.WriteString(hintStyle.Width(innerW).Render(line))
+		return line
+	}
+	var body strings.Builder
+	if twoCol {
+		mid := (len(rows) + 1) / 2
+		for i := 0; i < mid; i++ {
+			if i > 0 {
+				body.WriteString("\n")
+			}
+			left := format(rows[i], colW)
+			right := ""
+			if i+mid < len(rows) {
+				right = format(rows[i+mid], colW)
+			}
+			pad := max(1, innerW-lipgloss.Width(left)-lipgloss.Width(right))
+			body.WriteString(left + strings.Repeat(" ", pad) + right)
+		}
+	} else {
+		for i, row := range rows {
+			if i > 0 {
+				body.WriteString("\n")
+			}
+			body.WriteString(format(row, innerW))
+		}
 	}
 	body.WriteString("\n")
-	closeGap := max(2, keyW-lipgloss.Width("esc or ?")+2)
-	body.WriteString(hintStyle.Width(innerW).Render("esc or ?" + strings.Repeat(" ", closeGap) + "close"))
+	body.WriteString(hintStyle.Width(innerW).Render("esc or ?  close"))
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(theme.ColorBorder()).
 		Background(theme.ColorBg()).
-		Padding(0, 2).
-		Render(body.String())
+		Padding(1, 2).
+		Width(min(m.overlayWidth(), innerW+cardBorder+4)).
+		Render(lipgloss.JoinVertical(lipgloss.Left, header, body.String()))
+}
+
+func (m Model) helpCloseRect() (x0, y, x1 int, ok bool) {
+	if !m.helpMode {
+		return 0, 0, 0, false
+	}
+	for i, line := range strings.Split(m.helpScreen(), "\n") {
+		plain := ansi.Strip(line)
+		if !strings.Contains(plain, "keys") || !strings.Contains(plain, "[x]") {
+			continue
+		}
+		start, end, found := displaySpan(plain, "[x]")
+		if !found {
+			continue
+		}
+		return max(0, start-1), i, end + 1, true
+	}
+	return 0, 0, 0, false
 }
 
 func (m Model) headerView() string {
@@ -634,52 +702,70 @@ func (m Model) headerView() string {
 	}
 	sep := hintStyle.Render("  ·  ")
 	w := max(minPaneWidth, m.width)
-	right := hintStyle.Render(cwd)
-	avail := w - lipgloss.Width(brand) - lipgloss.Width(sep) - lipgloss.Width(right) - lipgloss.Width(sep)
+	showCwd := cwd != "" && cwd != "lazykoder" && cwd != "."
+	right := ""
+	if showCwd {
+		right = hintStyle.Render(cwd)
+	}
+	rightW := 0
+	if right != "" {
+		rightW = lipgloss.Width(sep) + lipgloss.Width(right)
+	}
+	avail := w - lipgloss.Width(brand) - lipgloss.Width(sep) - rightW
 	if avail < 8 {
 		row1 := truncateRunes(brand+"  "+title, w)
-		row2 := truncateRunes(cwd, w)
-		return row1 + "\n" + hintStyle.Render(row2)
+		if showCwd {
+			return row1 + "\n" + hintStyle.Render(truncateRunes(cwd, w))
+		}
+		return row1
 	}
 	title = truncateRunes(title, avail)
-	return brand + sep + lipgloss.NewStyle().Foreground(theme.ColorText()).Render(title) + sep + right
+	line := brand + sep + lipgloss.NewStyle().Foreground(theme.ColorText()).Render(title)
+	if right != "" {
+		line += sep + right
+	}
+	return line
 }
 
 func (m Model) confirmOverlay() string {
-	inner := m.confirm.View()
+	innerW := max(minPaneWidth, m.overlayWidth()-cardBorder-4)
+	inner := lipgloss.NewStyle().Width(innerW).Render(m.confirm.View())
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("1")).
+		BorderForeground(theme.ColorDanger()).
+		Background(theme.ColorBg()).
 		Padding(1, 2).
+		Width(min(m.overlayWidth(), innerW+cardBorder+4)).
 		Render(inner)
 }
 
 func (m Model) askOverlay() string {
 	q := m.askQuestion
-	header := q.Header
-	if header == "" {
-		header = "question"
-	}
+	innerW := max(minPaneWidth, m.overlayWidth()-cardBorder-4)
 	var b strings.Builder
-	b.WriteString(lipgloss.NewStyle().Bold(true).Render(q.Question))
-	b.WriteString("\n")
-	b.WriteString(hintStyle.Render(header))
+	b.WriteString(lipgloss.NewStyle().Bold(true).Width(innerW).Render(q.Question))
+	if strings.TrimSpace(q.Header) != "" {
+		b.WriteString("\n")
+		b.WriteString(hintStyle.Width(innerW).Render(q.Header))
+	}
 	b.WriteString("\n")
 	for i, opt := range q.Options {
 		prefix := "  "
 		style := hintStyle
 		if i == m.askCursor {
 			prefix = "▸ "
-			style = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15"))
+			style = lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText())
 		}
-		b.WriteString(style.Render(fmt.Sprintf("%s%d. %s", prefix, i+1, opt)))
+		b.WriteString(style.MaxWidth(innerW).Render(fmt.Sprintf("%s%d. %s", prefix, i+1, opt)))
 		b.WriteString("\n")
 	}
 	b.WriteString(hintStyle.Render("j/k select  •  enter confirm  •  esc cancel"))
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("8")).
+		BorderForeground(theme.ColorBorder()).
+		Background(theme.ColorBg()).
 		Padding(1, 2).
+		Width(min(m.overlayWidth(), innerW+cardBorder+4)).
 		Render(strings.TrimRight(b.String(), "\n"))
 }
 
@@ -730,7 +816,7 @@ func withScrollbar(v string, width, height int, percent float64, overflow bool) 
 	}
 	thumb := int(percent * float64(height-1))
 	track := lipgloss.NewStyle().Faint(true).Render("░")
-	thumbCell := lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Render("█")
+	thumbCell := lipgloss.NewStyle().Foreground(theme.ColorText()).Render("█")
 	var b strings.Builder
 	for i, line := range lines {
 		if i > 0 {
@@ -767,15 +853,35 @@ func splitPaneWidths(total int) (left, right int) {
 }
 
 func (m Model) modelStatusRect() (left, top, right, bottom int, ok bool) {
-	if m.busy || m.pickerMode || m.sessionPickerMode || m.subagentPickerMode || m.settingsMode {
+	return m.footerChipRect(m.modelChipLabel())
+}
+
+func (m Model) variantStatusRect() (left, top, right, bottom int, ok bool) {
+	return m.footerChipRect(m.variantChipLabel())
+}
+
+func (m Model) footerChipRect(chip string) (left, top, right, bottom int, ok bool) {
+	if chip == "" || m.busy || m.pickerMode || m.sessionPickerMode || m.subagentPickerMode || m.settingsMode {
 		return 0, 0, 0, 0, false
 	}
 	leftW := lipgloss.Width(m.composerLeft())
-	label := m.fitFooterRight(max(4, max(minPaneWidth, m.width)-2-leftW-1))
+	budget := max(4, max(minPaneWidth, m.width)-2-leftW-1)
+	footer := m.fitFooterRight(budget)
+	idx := strings.Index(footer, strings.TrimSuffix(chip, " ▾"))
+	if idx < 0 {
+		idx = strings.Index(footer, chip)
+	}
+	if idx < 0 {
+		return 0, 0, 0, 0, false
+	}
 	top = m.composerFooterTop()
-	right = m.width - 1
-	left = max(0, right-lipgloss.Width(label))
-	return left, top, right, top + 1, true
+	footerLeft := max(0, m.width-1-lipgloss.Width(footer))
+	left = footerLeft + lipgloss.Width(footer[:idx])
+	right = left + lipgloss.Width(chip)
+	if right > left {
+		return left, top, right, top + 1, true
+	}
+	return 0, 0, 0, 0, false
 }
 
 // composerFooterTop is the screen Y of the composer footer row (model/subs chips).

@@ -20,8 +20,16 @@ token:
 invocation). Recursive/force flags (`-r`, `-rf`, `-fr`, `-R` forms,
 `--recursive`) set `Decision.Destructive = true`.
 
-There is no allow-list, no sticky approval, no "remember this path". Each
-call is classified fresh.
+Each call is classified fresh. There is no sticky "remember this path"
+approval.
+
+Project settings can optionally enable a **parent** bash allowlist
+(`agents.bash_allowlist_enabled` plus `agents.bash_allowlist`). When on,
+the parent agent only runs executables on that list (plus the usual
+policy gate). Child agents do **not** inherit this list.
+
+Child destructive bash follows `agents.bash_confirm`: `parent` routes the
+y/n card to the user; `deny` refuses ask-class bash with no prompt.
 
 ## Executor gate
 

@@ -480,17 +480,20 @@ func TestCloseDrawerStaysClosedUntilNewSpawn(t *testing.T) {
 		t.Fatal("drawer re-opened when no new job ids")
 	}
 
-	// A brand-new child (spawn) should open the drawer again.
+	// A brand-new child reloads rows but does not steal the transcript.
 	if _, err := st.CreateSession(context.Background(), db.Session{
 		Directory: workdir, Title: "child-b", ParentSessionID: &pid, Kind: db.SessionKindSubagent,
 	}); err != nil {
 		t.Fatalf("child-b: %v", err)
 	}
 	m = m.openSubagentDrawerIfNew()
-	if !m.subagentPickerMode {
-		t.Fatal("drawer should open when a new sub-agent appears")
+	if m.subagentPickerMode {
+		t.Fatal("drawer should stay closed on spawn; use /agents or the subs chip")
 	}
 	if len(m.subagentItems) != 2 {
 		t.Fatalf("rows = %d, want 2", len(m.subagentItems))
+	}
+	if got := m.subsStatusLabel(); !strings.Contains(got, "subs:") {
+		t.Fatalf("subs chip missing after spawn: %q", got)
 	}
 }

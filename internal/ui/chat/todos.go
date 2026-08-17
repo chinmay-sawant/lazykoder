@@ -99,7 +99,10 @@ func (m Model) todoPanelView() string {
 		head += hintStyle.Render("  ·  ")
 		head += lipgloss.NewStyle().Foreground(theme.ColorAccent()).Render("in progress")
 	}
-	head = lipgloss.NewStyle().Width(w).MaxWidth(w).Render(truncateRunes(head, w))
+	head = lipgloss.NewStyle().Width(w).MaxWidth(w).Render(head)
+	if !m.todosExpanded {
+		return head
+	}
 
 	var b strings.Builder
 	b.WriteString(head)
@@ -118,6 +121,14 @@ func (m Model) todoPanelView() string {
 		shown++
 	}
 	return b.String()
+}
+
+func (m Model) toggleTodos() Model {
+	if len(m.todos) == 0 {
+		return m
+	}
+	m.todosExpanded = !m.todosExpanded
+	return m
 }
 
 func hasInProgressTodo(items []db.Todo) bool {

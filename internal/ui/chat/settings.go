@@ -19,11 +19,18 @@ import (
 const (
 	settingsRowModel = iota
 	settingsRowVariant
+	settingsRowChildModel
+	settingsRowExploreModel
 	settingsRowLimit
 	settingsRowSteps
 	settingsRowAgentsEnabled
+	settingsRowAgentsRole
 	settingsRowAgentsConcurrent
+	settingsRowAgentsQueued
 	settingsRowAgentsChildSteps
+	settingsRowAgentsTimeout
+	settingsRowAgentsWriters
+	settingsRowBashConfirm
 	settingsRowAllowlistEnabled
 	settingsRowAllowlist
 	settingsRowCount
@@ -32,6 +39,23 @@ const (
 	settingsCardChromeRows = 4
 	// settingsCardHeaderRows: top border + header before the first list row.
 	settingsCardHeaderRows = 2
+	// settingsTimeoutStepSec is the child-timeout stepper increment.
+	settingsTimeoutStepSec = 30
+	// settingsMaxQueuedCap matches settings.maxMaxQueued (1-100).
+	settingsMaxQueuedCap = 100
+	// settingsAllowlistPreviewBudget is how much of innerW names may use
+	// before the allowlist collapses to "N allowed".
+	settingsAllowlistPreviewBudget = 3
+	// settingsCardVertPad is the Padding(1, 2) vertical inset.
+	settingsCardVertPad = 1
+	// settingsCardHorzPad is the Padding(1, 2) horizontal inset.
+	settingsCardHorzPad = 2
+)
+
+const (
+	settingsLineHeader = iota + 1
+	settingsLineHint
+	settingsLineRow
 )
 
 // openSettings opens the full-screen settings card (same layout family as
@@ -39,6 +63,8 @@ const (
 func (m Model) openSettings() Model {
 	m.settingsMode = true
 	m.settingsCursor = settingsRowModel
+	m.settingsEdit = false
+	m.settingsEditValue = ""
 	m.slashMode = false
 	m.slashCursor = 0
 	m.pickerMode = false
@@ -54,6 +80,8 @@ func (m Model) closeSettings() Model {
 	m.settingsMode = false
 	m.settingsCursor = 0
 	m.settingsPickDefault = false
+	m.settingsEdit = false
+	m.settingsEditValue = ""
 	return m
 }
 
@@ -66,7 +94,7 @@ func (m Model) settingsScreen() string {
 // settingsCardView is the bordered settings card (resume / help style).
 func (m Model) settingsCardView() string {
 	cardW := m.overlayWidth()
-	innerW := max(minPaneWidth, cardW-cardBorder-2*cardPad)
+	innerW := max(minPaneWidth, cardW-cardBorder-2*settingsCardHorzPad)
 
 	title := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).Render("SETTINGS")
 	closeBtn := m.settingsCloseLabel()
@@ -75,36 +103,73 @@ func (m Model) settingsCardView() string {
 
 	sel := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText())
 	normal := lipgloss.NewStyle().Foreground(theme.ColorMute())
+	mute := hintStyle
+	dim := lipgloss.NewStyle().Foreground(theme.ColorMute()).Faint(true)
+
 	var body strings.Builder
-	for i, line := range m.settingsRows(innerW) {
+	for i, line := range m.settingsPaintLines(innerW) {
 		if i > 0 {
 			body.WriteString("\n")
 		}
-		if i == m.settingsCursor {
-			body.WriteString(sel.MaxWidth(innerW).Render(line))
-		} else {
-			body.WriteString(normal.MaxWidth(innerW).Render(line))
+		text := line.text
+		if line.kind == settingsLineHint || line.kind == settingsLineHeader {
+			text = truncateRunes(text, innerW)
+		}
+		switch {
+		case line.kind == settingsLineRow && line.row == m.settingsCursor:
+			body.WriteString(sel.MaxWidth(innerW).Render(text))
+		case line.kind == settingsLineHeader || line.kind == settingsLineHint:
+			body.WriteString(mute.MaxWidth(innerW).Render(text))
+		case line.dim:
+			body.WriteString(dim.MaxWidth(innerW).Render(text))
+		default:
+			body.WriteString(normal.MaxWidth(innerW).Render(text))
 		}
 	}
-	footer := hintStyle.Width(innerW).Render(truncateRunes(
-		"j/k move  •  ←/→ adjust  •  enter pick  •  click  •  esc/[x] close",
-		innerW,
-	))
-	content := lipgloss.JoinVertical(lipgloss.Left, header, body.String(), footer)
+
+	foot := "j/k move  •  ←/→ adjust  •  enter pick  •  click  •  esc/[x] close"
+	if m.settingsEdit {
+		foot = "enter save  •  esc cancel"
+	}
+	footer := hintStyle.Width(innerW).Render(truncateRunes(foot, innerW))
+
+	// Blank row after SETTINGS, then the sectioned body, then the footer.
+	content := lipgloss.JoinVertical(lipgloss.Left, header, "", body.String(), footer)
+	minInner := m.settingsCardMinInnerHeight()
+	if extra := minInner - lipgloss.Height(content); extra > 0 {
+		content = lipgloss.JoinVertical(lipgloss.Left, header, "", body.String(), strings.Repeat("\n", extra-1), footer)
+	}
+
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(theme.ColorBorder()).
 		Background(theme.ColorBg()).
-		Padding(0, cardPad).
+		Padding(settingsCardVertPad, settingsCardHorzPad).
 		Width(cardW).
 		Render(content)
+}
+
+func (m Model) settingsCardMinInnerHeight() int {
+	minCard := max(minPaneHeight+settingsCardChromeRows, m.height*sessionCardHeightPct/percentBase)
+	inner := minCard - cardBorder - 2*settingsCardVertPad
+	if inner < minPaneHeight {
+		return minPaneHeight
+	}
+	return inner
 }
 
 func (m Model) settingsCloseLabel() string {
 	return lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).Render("[x]")
 }
 
-func (m Model) settingsRows(innerW int) []string {
+type settingsPaintLine struct {
+	kind int
+	row  int
+	text string
+	dim  bool
+}
+
+func (m Model) settingsPaintLines(innerW int) []settingsPaintLine {
 	modelVal := m.projectSettings.Model.Default
 	if modelVal == "" {
 		modelVal = settings.DefaultModelID
@@ -113,35 +178,141 @@ func (m Model) settingsRows(innerW int) []string {
 	if variantVal == "" {
 		variantVal = "default"
 	}
+	childVal := m.projectSettings.Agents.ModelOverride
+	if childVal == "" {
+		childVal = "inherit"
+	}
+	exploreVal := m.projectSettings.Agents.ExploreModel
+	if exploreVal == "" {
+		exploreVal = "inherit"
+	}
 	limitOn := "off"
 	if m.projectSettings.Slot.LimitEnabled {
 		limitOn = "on"
 	}
 	stepsVal := fmt.Sprintf("◂ %d ▸", m.projectSettings.Slot.MaxSteps)
+	stepsDim := false
 	if !m.projectSettings.Slot.LimitEnabled {
-		stepsVal = fmt.Sprintf("%d (off)", m.projectSettings.Slot.MaxSteps)
+		stepsVal = "limit off (safety cap still applies)"
+		stepsDim = true
 	}
 	agentsOn := "off"
 	if m.projectSettings.Agents.Enabled {
 		agentsOn = "on"
 	}
-	concurrentVal := fmt.Sprintf("◂ %d ▸", m.projectSettings.Agents.MaxConcurrent)
-	childStepsVal := fmt.Sprintf("◂ %d ▸", m.projectSettings.Agents.ChildMaxSteps)
-	allowlistVal := strings.Join(m.projectSettings.Agents.BashAllowlist, ", ")
+	roleVal := m.projectSettings.Agents.DefaultRole
+	if roleVal == "" {
+		roleVal = "explore"
+	}
+	confirmVal := "ask parent"
+	if m.projectSettings.Agents.BashConfirm == "deny" {
+		confirmVal = "deny"
+	}
+	allowlistVal := formatAllowlistValue(m.projectSettings.Agents.BashAllowlist, innerW)
 	if m.settingsEdit {
 		allowlistVal = m.settingsEditValue
 	}
-	return []string{
-		settingsKVRow(m.settingsCursor == settingsRowModel, "default model", "◂ "+modelVal+" ▸", innerW),
-		settingsKVRow(m.settingsCursor == settingsRowVariant, "default variant", "◂ "+variantVal+" ▸", innerW),
-		settingsKVRow(m.settingsCursor == settingsRowLimit, "step limit", "["+limitOn+"]", innerW),
-		settingsKVRow(m.settingsCursor == settingsRowSteps, "max steps", stepsVal, innerW),
-		settingsKVRow(m.settingsCursor == settingsRowAgentsEnabled, "sub-agents", "["+agentsOn+"]", innerW),
-		settingsKVRow(m.settingsCursor == settingsRowAgentsConcurrent, "max concurrent", concurrentVal, innerW),
-		settingsKVRow(m.settingsCursor == settingsRowAgentsChildSteps, "child max steps", childStepsVal, innerW),
-		settingsKVRow(m.settingsCursor == settingsRowAllowlistEnabled, "bash allowlist", "["+boolOn(m.projectSettings.Agents.BashAllowlistEnabled)+"]", innerW),
-		settingsKVRow(m.settingsCursor == settingsRowAllowlist, "allowed executables", allowlistVal, innerW),
+
+	out := make([]settingsPaintLine, 0, settingsRowCount+8)
+	out = append(out, settingsPaintLine{kind: settingsLineHeader, row: -1, text: "model"})
+	out = append(out,
+		m.settingsPaintRow(settingsRowModel, "◂ "+modelVal+" ▸", innerW, false),
+		m.settingsPaintRow(settingsRowVariant, "◂ "+variantVal+" ▸", innerW, false),
+		m.settingsPaintRow(settingsRowChildModel, "◂ "+childVal+" ▸", innerW, false),
+		m.settingsPaintRow(settingsRowExploreModel, "◂ "+exploreVal+" ▸", innerW, false),
+		settingsPaintLine{kind: settingsLineHint, row: -1, text: "live /model and /variant do not change these defaults"},
+		settingsPaintLine{kind: settingsLineHeader, row: -1, text: "agent loop"},
+		m.settingsPaintRow(settingsRowLimit, "["+limitOn+"]", innerW, false),
+		m.settingsPaintRow(settingsRowSteps, stepsVal, innerW, stepsDim),
+		settingsPaintLine{kind: settingsLineHeader, row: -1, text: "sub-agents"},
+		m.settingsPaintRow(settingsRowAgentsEnabled, "["+agentsOn+"]", innerW, false),
+		m.settingsPaintRow(settingsRowAgentsRole, "◂ "+roleVal+" ▸", innerW, false),
+		m.settingsPaintRow(settingsRowAgentsConcurrent, fmt.Sprintf("◂ %d ▸", m.projectSettings.Agents.MaxConcurrent), innerW, false),
+		m.settingsPaintRow(settingsRowAgentsQueued, fmt.Sprintf("◂ %d ▸", m.projectSettings.Agents.MaxQueued), innerW, false),
+		m.settingsPaintRow(settingsRowAgentsChildSteps, fmt.Sprintf("◂ %d ▸", m.projectSettings.Agents.ChildMaxSteps), innerW, false),
+		m.settingsPaintRow(settingsRowAgentsTimeout, "◂ "+formatSettingsTimeout(m.projectSettings.Agents.DefaultTimeoutSec)+" ▸", innerW, false),
+		m.settingsPaintRow(settingsRowAgentsWriters, "["+boolOn(m.projectSettings.Agents.AllowParallelWriters)+"]", innerW, false),
+		settingsPaintLine{kind: settingsLineHeader, row: -1, text: "safety"},
+		m.settingsPaintRow(settingsRowBashConfirm, "◂ "+confirmVal+" ▸", innerW, false),
+		m.settingsPaintRow(settingsRowAllowlistEnabled, "["+boolOn(m.projectSettings.Agents.BashAllowlistEnabled)+"]", innerW, false),
+		m.settingsPaintRow(settingsRowAllowlist, allowlistVal, innerW, false),
+		settingsPaintLine{kind: settingsLineHint, row: -1, text: "children are not filtered by this list"},
+	)
+	return out
+}
+
+func (m Model) settingsPaintRow(row int, value string, innerW int, dim bool) settingsPaintLine {
+	return settingsPaintLine{
+		kind: settingsLineRow,
+		row:  row,
+		text: settingsKVRow(m.settingsCursor == row, settingsRowLabel(row), value, innerW),
+		dim:  dim,
 	}
+}
+
+func settingsRowLabel(row int) string {
+	switch row {
+	case settingsRowModel:
+		return "new-session model"
+	case settingsRowVariant:
+		return "new-session variant"
+	case settingsRowChildModel:
+		return "child model override"
+	case settingsRowExploreModel:
+		return "explore model"
+	case settingsRowLimit:
+		return "step limit"
+	case settingsRowSteps:
+		return "parent max steps"
+	case settingsRowAgentsEnabled:
+		return "sub-agents"
+	case settingsRowAgentsRole:
+		return "default role"
+	case settingsRowAgentsConcurrent:
+		return "max concurrent"
+	case settingsRowAgentsQueued:
+		return "max queued"
+	case settingsRowAgentsChildSteps:
+		return "child max steps"
+	case settingsRowAgentsTimeout:
+		return "child timeout"
+	case settingsRowAgentsWriters:
+		return "parallel writers"
+	case settingsRowBashConfirm:
+		return "child bash confirms"
+	case settingsRowAllowlistEnabled:
+		return "parent bash allowlist"
+	case settingsRowAllowlist:
+		return "allowed executables"
+	default:
+		return ""
+	}
+}
+
+func formatSettingsTimeout(sec int) string {
+	if sec <= 0 {
+		return "off"
+	}
+	if sec%60 == 0 {
+		return fmt.Sprintf("%dm", sec/60)
+	}
+	if sec < 60 {
+		return fmt.Sprintf("%ds", sec)
+	}
+	return fmt.Sprintf("%dm%ds", sec/60, sec%60)
+}
+
+func formatAllowlistValue(names []string, innerW int) string {
+	n := len(names)
+	if n == 0 {
+		return "0 allowed"
+	}
+	joined := strings.Join(names, ", ")
+	budget := max(8, innerW/settingsAllowlistPreviewBudget)
+	if lipgloss.Width(joined) <= budget {
+		return joined
+	}
+	return fmt.Sprintf("%d allowed", n)
 }
 
 func boolOn(on bool) string {
@@ -233,6 +404,10 @@ func (m Model) activateSettingsRow() (Model, tea.Cmd) {
 			m.model = m.projectSettings.Model.Default
 		}
 		return m.openKindPicker(pickerKindVariant), nil
+	case settingsRowChildModel:
+		return m.cycleChildModel(1), nil
+	case settingsRowExploreModel:
+		return m.cycleExploreModel(1), nil
 	case settingsRowLimit:
 		return m.setLimitEnabled(!m.projectSettings.Slot.LimitEnabled), nil
 	case settingsRowSteps:
@@ -241,10 +416,20 @@ func (m Model) activateSettingsRow() (Model, tea.Cmd) {
 		}
 	case settingsRowAgentsEnabled:
 		return m.setAgentsEnabled(!m.projectSettings.Agents.Enabled), nil
+	case settingsRowAgentsRole:
+		return m.cycleAgentsRole(1), nil
 	case settingsRowAgentsConcurrent:
 		return m.setAgentsConcurrent(m.projectSettings.Agents.MaxConcurrent + 1), nil
+	case settingsRowAgentsQueued:
+		return m.setAgentsQueued(m.projectSettings.Agents.MaxQueued + 1), nil
 	case settingsRowAgentsChildSteps:
 		return m.setAgentsChildSteps(m.projectSettings.Agents.ChildMaxSteps + 1), nil
+	case settingsRowAgentsTimeout:
+		return m.setAgentsTimeout(m.projectSettings.Agents.DefaultTimeoutSec + settingsTimeoutStepSec), nil
+	case settingsRowAgentsWriters:
+		return m.setAgentsWriters(!m.projectSettings.Agents.AllowParallelWriters), nil
+	case settingsRowBashConfirm:
+		return m.cycleBashConfirm(1), nil
 	case settingsRowAllowlistEnabled:
 		return m.setAllowlistEnabled(!m.projectSettings.Agents.BashAllowlistEnabled), nil
 	case settingsRowAllowlist:
@@ -270,20 +455,38 @@ func (m Model) adjustSettings(delta int) Model {
 		return m.cycleDefaultModel(delta)
 	case settingsRowVariant:
 		return m.cycleDefaultVariant(delta)
+	case settingsRowChildModel:
+		return m.cycleChildModel(delta)
+	case settingsRowExploreModel:
+		return m.cycleExploreModel(delta)
 	case settingsRowLimit:
 		if delta != 0 {
 			return m.setLimitEnabled(!m.projectSettings.Slot.LimitEnabled)
 		}
 	case settingsRowSteps:
-		return m.setMaxSteps(m.projectSettings.Slot.MaxSteps + delta)
+		if m.projectSettings.Slot.LimitEnabled {
+			return m.setMaxSteps(m.projectSettings.Slot.MaxSteps + delta)
+		}
 	case settingsRowAgentsEnabled:
 		if delta != 0 {
 			return m.setAgentsEnabled(!m.projectSettings.Agents.Enabled)
 		}
+	case settingsRowAgentsRole:
+		return m.cycleAgentsRole(delta)
 	case settingsRowAgentsConcurrent:
 		return m.setAgentsConcurrent(m.projectSettings.Agents.MaxConcurrent + delta)
+	case settingsRowAgentsQueued:
+		return m.setAgentsQueued(m.projectSettings.Agents.MaxQueued + delta)
 	case settingsRowAgentsChildSteps:
 		return m.setAgentsChildSteps(m.projectSettings.Agents.ChildMaxSteps + delta)
+	case settingsRowAgentsTimeout:
+		return m.setAgentsTimeout(m.projectSettings.Agents.DefaultTimeoutSec + delta*settingsTimeoutStepSec)
+	case settingsRowAgentsWriters:
+		if delta != 0 {
+			return m.setAgentsWriters(!m.projectSettings.Agents.AllowParallelWriters)
+		}
+	case settingsRowBashConfirm:
+		return m.cycleBashConfirm(delta)
 	case settingsRowAllowlistEnabled:
 		if delta != 0 {
 			return m.setAllowlistEnabled(!m.projectSettings.Agents.BashAllowlistEnabled)
@@ -291,6 +494,7 @@ func (m Model) adjustSettings(delta int) Model {
 	case settingsRowAllowlist:
 		if delta != 0 {
 			m.settingsEdit = true
+			m.settingsEditValue = strings.Join(m.projectSettings.Agents.BashAllowlist, ", ")
 		}
 	}
 	return m
@@ -306,10 +510,20 @@ func (m Model) toggleSettingsRow() Model {
 		}
 	case settingsRowAgentsEnabled:
 		return m.setAgentsEnabled(!m.projectSettings.Agents.Enabled)
+	case settingsRowAgentsRole:
+		return m.cycleAgentsRole(1)
 	case settingsRowAgentsConcurrent:
 		return m.setAgentsConcurrent(m.projectSettings.Agents.MaxConcurrent + 1)
+	case settingsRowAgentsQueued:
+		return m.setAgentsQueued(m.projectSettings.Agents.MaxQueued + 1)
 	case settingsRowAgentsChildSteps:
 		return m.setAgentsChildSteps(m.projectSettings.Agents.ChildMaxSteps + 1)
+	case settingsRowAgentsTimeout:
+		return m.setAgentsTimeout(m.projectSettings.Agents.DefaultTimeoutSec + settingsTimeoutStepSec)
+	case settingsRowAgentsWriters:
+		return m.setAgentsWriters(!m.projectSettings.Agents.AllowParallelWriters)
+	case settingsRowBashConfirm:
+		return m.cycleBashConfirm(1)
 	case settingsRowAllowlistEnabled:
 		return m.setAllowlistEnabled(!m.projectSettings.Agents.BashAllowlistEnabled)
 	case settingsRowAllowlist:
@@ -319,6 +533,10 @@ func (m Model) toggleSettingsRow() Model {
 		return m.cycleDefaultModel(1)
 	case settingsRowVariant:
 		return m.cycleDefaultVariant(1)
+	case settingsRowChildModel:
+		return m.cycleChildModel(1)
+	case settingsRowExploreModel:
+		return m.cycleExploreModel(1)
 	}
 	return m
 }
@@ -355,6 +573,78 @@ func (m Model) cycleDefaultVariant(delta int) Model {
 		idx += len(list)
 	}
 	return m.setDefaultVariant(list[idx])
+}
+
+func (m Model) inheritModelChoices() []string {
+	out := []string{""}
+	seen := map[string]bool{"": true}
+	for _, id := range m.models {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
+}
+
+func (m Model) cycleChildModel(delta int) Model {
+	list := m.inheritModelChoices()
+	idx := indexOfString(list, m.projectSettings.Agents.ModelOverride)
+	if idx < 0 {
+		idx = 0
+	}
+	idx = (idx + delta) % len(list)
+	if idx < 0 {
+		idx += len(list)
+	}
+	m.projectSettings.Agents.ModelOverride = list[idx]
+	return m.rebuildSubMgr().persistSettings()
+}
+
+func (m Model) cycleExploreModel(delta int) Model {
+	list := m.inheritModelChoices()
+	idx := indexOfString(list, m.projectSettings.Agents.ExploreModel)
+	if idx < 0 {
+		idx = 0
+	}
+	idx = (idx + delta) % len(list)
+	if idx < 0 {
+		idx += len(list)
+	}
+	m.projectSettings.Agents.ExploreModel = list[idx]
+	return m.rebuildSubMgr().persistSettings()
+}
+
+func (m Model) cycleAgentsRole(delta int) Model {
+	list := []string{"explore", "plan", "general"}
+	cur := m.projectSettings.Agents.DefaultRole
+	idx := indexOfString(list, cur)
+	if idx < 0 {
+		idx = 0
+	}
+	idx = (idx + delta) % len(list)
+	if idx < 0 {
+		idx += len(list)
+	}
+	m.projectSettings.Agents.DefaultRole = list[idx]
+	return m.rebuildSubMgr().persistSettings()
+}
+
+func (m Model) cycleBashConfirm(delta int) Model {
+	list := []string{"parent", "deny"}
+	cur := m.projectSettings.Agents.BashConfirm
+	idx := indexOfString(list, cur)
+	if idx < 0 {
+		idx = 0
+	}
+	idx = (idx + delta) % len(list)
+	if idx < 0 {
+		idx += len(list)
+	}
+	m.projectSettings.Agents.BashConfirm = list[idx]
+	return m.rebuildSubMgr().persistSettings()
 }
 
 func (m Model) defaultVariantChoices() []string {
@@ -456,9 +746,33 @@ func (m Model) setAgentsConcurrent(n int) Model {
 		n = settings.MaxMaxConcurrent
 	}
 	m.projectSettings.Agents.MaxConcurrent = n
+	if m.projectSettings.Agents.MaxQueued < n {
+		m.projectSettings.Agents.MaxQueued = n
+	}
 	m = m.rebuildSubMgr()
 	m = m.persistSettings()
 	return m
+}
+
+func (m Model) setAgentsQueued(n int) Model {
+	n = clampSettingsQueued(n, m.projectSettings.Agents.MaxConcurrent)
+	m.projectSettings.Agents.MaxQueued = n
+	m = m.rebuildSubMgr()
+	m = m.persistSettings()
+	return m
+}
+
+func clampSettingsQueued(n, concurrent int) int {
+	if n < 1 {
+		n = 1
+	}
+	if n > settingsMaxQueuedCap {
+		n = settingsMaxQueuedCap
+	}
+	if n < concurrent {
+		n = concurrent
+	}
+	return n
 }
 
 func (m Model) setAgentsChildSteps(n int) Model {
@@ -469,6 +783,23 @@ func (m Model) setAgentsChildSteps(n int) Model {
 		n = settings.MaxMaxSteps
 	}
 	m.projectSettings.Agents.ChildMaxSteps = n
+	m = m.rebuildSubMgr()
+	m = m.persistSettings()
+	return m
+}
+
+func (m Model) setAgentsTimeout(n int) Model {
+	if n < 0 {
+		n = 0
+	}
+	m.projectSettings.Agents.DefaultTimeoutSec = n
+	m = m.rebuildSubMgr()
+	m = m.persistSettings()
+	return m
+}
+
+func (m Model) setAgentsWriters(on bool) Model {
+	m.projectSettings.Agents.AllowParallelWriters = on
 	m = m.rebuildSubMgr()
 	m = m.persistSettings()
 	return m
@@ -527,24 +858,39 @@ func (m Model) settingsCloseRect() (x0, y, x1 int, ok bool) {
 }
 
 // settingsRowAtScreenY maps a click row to a settings control row by
-// scanning the painted full-screen card (same approach as the resume list).
+// scanning the painted full-screen card for the row label.
 func (m Model) settingsRowAtScreenY(y int) (row int, ok bool) {
 	if !m.settingsMode {
 		return 0, false
 	}
-	listTop := m.settingsListScreenTop()
-	if y < listTop || y >= listTop+settingsRowCount {
-		return 0, false
+	return settingsRowFromPaintedLine(plainLine(m.settingsScreen(), y))
+}
+
+func settingsRowFromPaintedLine(plain string) (row int, ok bool) {
+	for r := 0; r < settingsRowCount; r++ {
+		if settingsLineHasLabel(plain, settingsRowLabel(r)) {
+			return r, true
+		}
 	}
-	return y - listTop, true
+	return 0, false
+}
+
+// settingsLineHasLabel reports whether plain is a KV control row for label,
+// not a lone section header such as "sub-agents".
+func settingsLineHasLabel(plain, label string) bool {
+	if label == "" {
+		return false
+	}
+	return strings.Contains(plain, "▸ "+label) || strings.Contains(plain, "  "+label)
 }
 
 // settingsListScreenTop is the first settings control row on the painted
-// screen: the line after the SETTINGS header.
+// screen (new-session model).
 func (m Model) settingsListScreenTop() int {
+	label := settingsRowLabel(settingsRowModel)
 	for i, line := range strings.Split(m.settingsScreen(), "\n") {
-		if strings.Contains(ansi.Strip(line), "SETTINGS") {
-			return i + 1
+		if settingsLineHasLabel(ansi.Strip(line), label) {
+			return i
 		}
 	}
 	// Fallback: centered card formula (border + header).
@@ -570,29 +916,7 @@ func (m Model) settingsHit(x, y int, button tea.MouseButton) (Model, tea.Cmd, bo
 		return m, nil, true
 	}
 	m.settingsCursor = row
-	line := ""
-	if rows := m.settingsRows(max(minPaneWidth, m.overlayWidth()-cardBorder-2*cardPad)); row >= 0 && row < len(rows) {
-		line = rows[row]
-	}
-	// Align control X to the painted card: find the row text on the full
-	// screen and use that line for glyph spans.
-	for _, screenLine := range strings.Split(m.settingsScreen(), "\n") {
-		plain := ansi.Strip(screenLine)
-		if strings.Contains(plain, strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(line, "▸ "), "  "))) ||
-			(row == settingsRowModel && strings.Contains(plain, "default model")) ||
-			(row == settingsRowVariant && strings.Contains(plain, "default variant")) ||
-			(row == settingsRowLimit && strings.Contains(plain, "step limit")) ||
-			(row == settingsRowSteps && strings.Contains(plain, "max steps")) {
-			// Prefer the painted line that has the row label.
-			if (row == settingsRowModel && strings.Contains(plain, "default model")) ||
-				(row == settingsRowVariant && strings.Contains(plain, "default variant")) ||
-				(row == settingsRowLimit && strings.Contains(plain, "step limit")) ||
-				(row == settingsRowSteps && strings.Contains(plain, "max steps")) {
-				line = plain
-				break
-			}
-		}
-	}
+	line := plainLine(m.settingsScreen(), y)
 	switch row {
 	case settingsRowModel:
 		if dec, inc := hitStepChevrons(line, x); dec {
@@ -616,6 +940,20 @@ func (m Model) settingsHit(x, y int, button tea.MouseButton) (Model, tea.Cmd, bo
 			return next, cmd, true
 		}
 		return m.cycleDefaultVariant(1), nil, true
+	case settingsRowChildModel:
+		if dec, inc := hitStepChevrons(line, x); dec {
+			return m.cycleChildModel(-1), nil, true
+		} else if inc {
+			return m.cycleChildModel(1), nil, true
+		}
+		return m.cycleChildModel(1), nil, true
+	case settingsRowExploreModel:
+		if dec, inc := hitStepChevrons(line, x); dec {
+			return m.cycleExploreModel(-1), nil, true
+		} else if inc {
+			return m.cycleExploreModel(1), nil, true
+		}
+		return m.cycleExploreModel(1), nil, true
 	case settingsRowLimit:
 		return m.setLimitEnabled(!m.projectSettings.Slot.LimitEnabled), nil, true
 	case settingsRowSteps:
@@ -633,6 +971,58 @@ func (m Model) settingsHit(x, y int, button tea.MouseButton) (Model, tea.Cmd, bo
 			}
 			return m.setMaxSteps(m.projectSettings.Slot.MaxSteps - 1), nil, true
 		}
+		return m, nil, true
+	case settingsRowAgentsEnabled:
+		return m.setAgentsEnabled(!m.projectSettings.Agents.Enabled), nil, true
+	case settingsRowAgentsRole:
+		if dec, inc := hitStepChevrons(line, x); dec {
+			return m.cycleAgentsRole(-1), nil, true
+		} else if inc {
+			return m.cycleAgentsRole(1), nil, true
+		}
+		return m.cycleAgentsRole(1), nil, true
+	case settingsRowAgentsConcurrent:
+		if dec, inc := hitStepChevrons(line, x); dec {
+			return m.setAgentsConcurrent(m.projectSettings.Agents.MaxConcurrent - 1), nil, true
+		} else if inc {
+			return m.setAgentsConcurrent(m.projectSettings.Agents.MaxConcurrent + 1), nil, true
+		}
+		return m.setAgentsConcurrent(m.projectSettings.Agents.MaxConcurrent + 1), nil, true
+	case settingsRowAgentsQueued:
+		if dec, inc := hitStepChevrons(line, x); dec {
+			return m.setAgentsQueued(m.projectSettings.Agents.MaxQueued - 1), nil, true
+		} else if inc {
+			return m.setAgentsQueued(m.projectSettings.Agents.MaxQueued + 1), nil, true
+		}
+		return m.setAgentsQueued(m.projectSettings.Agents.MaxQueued + 1), nil, true
+	case settingsRowAgentsChildSteps:
+		if dec, inc := hitStepChevrons(line, x); dec {
+			return m.setAgentsChildSteps(m.projectSettings.Agents.ChildMaxSteps - 1), nil, true
+		} else if inc {
+			return m.setAgentsChildSteps(m.projectSettings.Agents.ChildMaxSteps + 1), nil, true
+		}
+		return m.setAgentsChildSteps(m.projectSettings.Agents.ChildMaxSteps + 1), nil, true
+	case settingsRowAgentsTimeout:
+		if dec, inc := hitStepChevrons(line, x); dec {
+			return m.setAgentsTimeout(m.projectSettings.Agents.DefaultTimeoutSec - settingsTimeoutStepSec), nil, true
+		} else if inc {
+			return m.setAgentsTimeout(m.projectSettings.Agents.DefaultTimeoutSec + settingsTimeoutStepSec), nil, true
+		}
+		return m.setAgentsTimeout(m.projectSettings.Agents.DefaultTimeoutSec + settingsTimeoutStepSec), nil, true
+	case settingsRowAgentsWriters:
+		return m.setAgentsWriters(!m.projectSettings.Agents.AllowParallelWriters), nil, true
+	case settingsRowBashConfirm:
+		if dec, inc := hitStepChevrons(line, x); dec {
+			return m.cycleBashConfirm(-1), nil, true
+		} else if inc {
+			return m.cycleBashConfirm(1), nil, true
+		}
+		return m.cycleBashConfirm(1), nil, true
+	case settingsRowAllowlistEnabled:
+		return m.setAllowlistEnabled(!m.projectSettings.Agents.BashAllowlistEnabled), nil, true
+	case settingsRowAllowlist:
+		m.settingsEdit = true
+		m.settingsEditValue = strings.Join(m.projectSettings.Agents.BashAllowlist, ", ")
 		return m, nil, true
 	}
 	return m, nil, true

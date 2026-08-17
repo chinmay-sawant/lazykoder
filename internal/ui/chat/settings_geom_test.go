@@ -23,10 +23,10 @@ func TestSettingsGeomMatchesPaintedView(t *testing.T) {
 		if strings.Contains(line, "SETTINGS") && strings.Contains(line, "[x]") {
 			xLine = i
 		}
-		if strings.Contains(line, "default model") {
+		if settingsLineHasLabel(line, "new-session model") {
 			modelLine = i
 		}
-		if strings.Contains(line, "max steps") {
+		if settingsLineHasLabel(line, "parent max steps") {
 			stepsLine = i
 		}
 	}
@@ -57,22 +57,22 @@ func TestSettingsGeomMatchesPaintedView(t *testing.T) {
 
 	m = m.openSettings()
 	before := m.projectSettings.Slot.MaxSteps
-	stepsLine, decX := paintedControlCol(stripANSI(viewText(m)), "max steps", "◂")
+	stepsLine, decX := paintedControlCol(stripANSI(viewText(m)), "parent max steps", "◂")
 	if stepsLine < 0 || decX < 0 {
-		t.Fatal("max steps / ◂ not painted")
+		t.Fatal("parent max steps / ◂ not painted")
 	}
-	wantRowY := m.settingsListScreenTop() + settingsRowSteps
-	if stepsLine != wantRowY {
-		t.Fatalf("steps Y: painted=%d computed=%d", stepsLine, wantRowY)
+	gotRow, ok := m.settingsRowAtScreenY(stepsLine)
+	if !ok || gotRow != settingsRowSteps {
+		t.Fatalf("steps Y: painted=%d row=%d ok=%v", stepsLine, gotRow, ok)
 	}
 	mm, _ = m.Update(tea.MouseClickMsg(tea.Mouse{X: decX, Y: stepsLine, Button: tea.MouseLeft}))
 	m = mm.(Model)
 	if m.projectSettings.Slot.MaxSteps != before-1 {
 		t.Fatalf("click ◂ at (%d,%d): got %d want %d", decX, stepsLine, m.projectSettings.Slot.MaxSteps, before-1)
 	}
-	stepsLine, incX := paintedControlCol(stripANSI(viewText(m)), "max steps", "▸")
+	stepsLine, incX := paintedControlCol(stripANSI(viewText(m)), "parent max steps", "▸")
 	if stepsLine < 0 || incX < 0 {
-		t.Fatal("max steps / ▸ not painted after decrease")
+		t.Fatal("parent max steps / ▸ not painted after decrease")
 	}
 	mm, _ = m.Update(tea.MouseClickMsg(tea.Mouse{X: incX, Y: stepsLine, Button: tea.MouseLeft}))
 	m = mm.(Model)
@@ -80,16 +80,16 @@ func TestSettingsGeomMatchesPaintedView(t *testing.T) {
 		t.Fatalf("click ▸ at (%d,%d): got %d want %d", incX, stepsLine, m.projectSettings.Slot.MaxSteps, before)
 	}
 
-	// Model row y must match list top.
+	// Model row y is the first focusable painted row.
 	m = m.openSettings()
-	if modelLine := findLine(stripANSI(viewText(m)), "default model"); modelLine != m.settingsListScreenTop()+settingsRowModel {
+	if modelLine := findLineLabel(stripANSI(viewText(m)), "new-session model"); modelLine != m.settingsListScreenTop() {
 		t.Fatalf("model Y: painted=%d computed=%d", modelLine, m.settingsListScreenTop())
 	}
 }
 
-func findLine(view, needle string) int {
+func findLineLabel(view, label string) int {
 	for i, line := range strings.Split(view, "\n") {
-		if strings.Contains(line, needle) {
+		if settingsLineHasLabel(line, label) {
 			return i
 		}
 	}
@@ -101,7 +101,10 @@ func findLine(view, needle string) int {
 // used so the value chevron wins over the row selection marker.
 func paintedControlCol(view, needle, token string) (row, col int) {
 	for i, line := range strings.Split(view, "\n") {
-		if !strings.Contains(line, needle) {
+		if !settingsLineHasLabel(line, needle) && !strings.Contains(line, needle) {
+			continue
+		}
+		if needle == "parent max steps" && !settingsLineHasLabel(line, needle) {
 			continue
 		}
 		var start int

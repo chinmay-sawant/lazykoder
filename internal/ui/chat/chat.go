@@ -102,7 +102,7 @@ var (
 	busyStyle      = lipgloss.NewStyle().Foreground(theme.ColorAccent())
 	hintStyle      = lipgloss.NewStyle().Foreground(theme.ColorMute())
 	userStyle      = lipgloss.NewStyle().Foreground(theme.ColorAccent())
-	roleStyle      = lipgloss.NewStyle().Foreground(theme.ColorMute()).Bold(true)
+	roleStyle      = lipgloss.NewStyle().Foreground(theme.ColorText()).Bold(true)
 	reasoningStyle = lipgloss.NewStyle().Foreground(theme.ColorMute())
 	toolCardStyle  = lipgloss.NewStyle().
 			Background(theme.ColorBg()).
@@ -220,6 +220,8 @@ type Model struct {
 
 	// todos is the session checklist from todowrite (shown under the header).
 	todos []db.Todo
+	// todosExpanded shows the checklist bodies; default is the one-line strip.
+	todosExpanded bool
 
 	// userNavHover is the Medium-style right-rail mark under the pointer (-1 = none).
 	userNavHover int
@@ -322,14 +324,14 @@ type copyNoticeMsg struct{}
 
 var slashCommands = []slashCmd{
 	{name: "/new", description: "start a new session and clear the transcript"},
-	{name: "/resume", description: "resume a previous session", aliases: []string{"sessions"}},
-	{name: "/model", description: "search and switch the chat model"},
-	{name: "/variant", description: "switch the model variant (low, medium, high)"},
-	{name: "/agents", description: "list sub-agents and view their logs", aliases: []string{"subs", "subagents"}},
-	{name: "/refresh", description: "reload the model list from the server"},
-	{name: "/settings", description: "project settings (model, steps)", aliases: []string{"slot"}},
-	{name: "/continue", description: "continue after a step limit or keep going"},
-	{name: "/help", description: "show the keyboard shortcuts"},
+	{name: "/resume", description: "open past sessions (ctrl+s, also /session)", aliases: []string{"sessions", "session"}},
+	{name: "/model", description: "search and switch the live chat model"},
+	{name: "/variant", description: "switch live reasoning effort (low / medium / high / max)"},
+	{name: "/agents", description: "open the sub-agent drawer and logs", aliases: []string{"subs", "subagents"}},
+	{name: "/refresh", description: "reload the model list into models.json"},
+	{name: "/settings", description: "project defaults (model, steps, agents, safety)", aliases: []string{"slot"}},
+	{name: "/continue", description: "resume after a step-limit stop (or send continue)"},
+	{name: "/help", description: "keyboard shortcuts (?, also /keys)", aliases: []string{"keys"}},
 }
 
 type modelsMsg struct {
@@ -1154,11 +1156,22 @@ func (m Model) modelEndpoint() string {
 }
 
 func (m Model) modelDisplayLabel() string {
+	return m.modelChipLabel()
+}
+
+func (m Model) modelChipLabel() string {
 	label := m.modelLabel()
-	if m.variant != "" {
-		return label + "  " + m.variant
+	if label == "" {
+		return ""
 	}
-	return label
+	return label + " ▾"
+}
+
+func (m Model) variantChipLabel() string {
+	if m.variant == "" {
+		return "default ▾"
+	}
+	return m.variant + " ▾"
 }
 
 func (m Model) sessionTitle() string {

@@ -31,8 +31,8 @@ type subagentRow struct {
 }
 
 const (
-	// Log view uses the full terminal: 1 header row + 1 footer row.
-	subagentLogHeaderRows = 1
+	// Log view uses the full terminal: header + blank + footer.
+	subagentLogHeaderRows = 2
 	subagentLogFooterRows = 1
 	maxSubagentActivity   = 48
 	maxSubagentDrawerRows = 8
@@ -104,24 +104,9 @@ func (m Model) syncSubagentDrawer() Model {
 // every task* tool event; task_wait / status updates do not re-open.
 func (m Model) openSubagentDrawerIfNew() Model {
 	m = m.ensureSubagentBuilt()
-	prevIDs := make(map[string]struct{}, len(m.subagentItems))
-	for _, r := range m.subagentItems {
-		prevIDs[r.ID] = struct{}{}
-	}
-	m = m.reloadSubagentRows()
-	if len(m.subagentItems) == 0 {
-		return m
-	}
-	for _, r := range m.subagentItems {
-		if _, known := prevIDs[r.ID]; !known {
-			m.subagentPickerMode = true
-			break
-		}
-	}
-	if m.subagentPickerMode {
-		return m.resizeSubagentDrawer()
-	}
-	return m
+	// Reload only. Opening the drawer mid-turn steals transcript rows;
+	// the footer subs: chip flashes live count instead.
+	return m.reloadSubagentRows()
 }
 
 func (m Model) reloadSubagentRows() Model {
@@ -533,13 +518,17 @@ func (m Model) subagentDrawerRow(row subagentRow, selected bool, width int) stri
 	if name == "" {
 		name = row.ID
 	}
+	st := strings.TrimSpace(row.Status)
+	if st == "" {
+		st = "unknown"
+	}
 	if row.Role != "" {
 		name = name + "  ·  " + row.Role
 	}
-	left := prefix + diamond + "  " + name
+	left := prefix + diamond + "  " + st + "  " + name
 	right := row.Activity
-	if right == "" {
-		right = row.Status
+	if right == st {
+		right = ""
 	}
 	gap := width - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 1 {
@@ -610,7 +599,7 @@ func (m Model) subagentLogScreen() string {
 		"j/k scroll  •  t thinking  •  e tool  •  enter toggle  •  esc back  •  d close",
 		w,
 	))
-	out := lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
+	out := lipgloss.JoinVertical(lipgloss.Left, header, "", body, footer)
 	// Guarantee full-frame paint.
 	return lipgloss.NewStyle().
 		Background(theme.ColorBg()).

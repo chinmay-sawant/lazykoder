@@ -756,13 +756,13 @@ func (m Model) renderTool(ev agent.Event, collapsed bool, when int64) string {
 		}
 	default:
 		if command := toolCommand(ev.Tool); command != "" {
-			body = append(body, hintStyle.Width(bodyWidth).Render("$ "+command))
+			body = append(body, hintStyle.Width(bodyWidth).Render("  $ "+command))
 		}
 		if ev.Tool.Output != nil && *ev.Tool.Output != "" {
 			output := strings.TrimSuffix(*ev.Tool.Output, "\n")
-			outputLabel := hintStyle.Width(bodyWidth).Render("output")
-			outputBox := toolOutputStyle.Width(bodyWidth).Render(output)
-			body = append(body, outputLabel, outputBox)
+			outputLabel := hintStyle.Width(bodyWidth).Render("  output")
+			outputBox := toolOutputStyle.Width(bodyWidth).Render("  " + output)
+			body = append(body, "", outputLabel, outputBox)
 		}
 	}
 	return card.Render(strings.Join(body, "\n"))

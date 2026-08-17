@@ -2,19 +2,25 @@
 
 ## The planning workflow
 
-Plans live under `plans/v0.0.1/` (shipped foundation) and `plans/v0.0.2/`
-(sub-agents). They are live ledgers, not snapshots:
+Plans live under `plans/v0.0.1/` (shipped foundation), `plans/v0.0.2/`
+(sub-agents), and later version folders. They are live ledgers, not
+snapshots:
 
 | File | Role |
 | --- | --- |
 | `v0.0.1/README.md` | architecture, schema, safety contract, closure gates for 0.0.1 |
 | `v0.0.1/phase-*.md` | foundation through go-pattern-db phases |
-| `v0.0.1/findings/` | 2026-08-16 TUI findings |
+| `v0.0.1/findings/` | 2026-08-16 TUI findings (shipped) |
 | `v0.0.2/README.md` | sub-agent harness design + closure gates |
 | `v0.0.2/phase-1-registry-settings.md` | tool registry + agents settings |
 | `v0.0.2/phase-2-manager-tools.md` | Manager, task tools, Host seam |
 | `v0.0.2/phase-3-runner-storage.md` | AgentRunner + child sessions |
 | `v0.0.2/phase-4-tui-parallel.md` | parallel tasks, confirm queue, TUI |
+| `v0.0.4/README.md` | SQLite schema FKs + indexes |
+| `v0.0.5/README.md` | 2026-08-17 TUI layout + settings UX (not started) |
+| `v0.0.5/phase-1-trust-overlays.md` | opaque cards, `@` viewport, settings safety rows, `/help` |
+| `v0.0.5/phase-2-chrome-settings.md` | slash palette, todos, footer chips, settings card |
+| `v0.0.5/phase-3-polish-compact.md` | resume/model polish, overlay recipe, 80x24 |
 
 Each checklist row is marked `[x]` only when the gate actually passed, with
 the command and exit code recorded beside the row. Rows are never checked

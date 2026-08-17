@@ -46,6 +46,9 @@ func (m Model) mousePress(msg tea.MouseClickMsg) (Model, tea.Cmd) {
 		}
 	}
 	if mu.Button == tea.MouseLeft && m.sessionPickerMode {
+		if x0, y, x1, ok := m.sessionCloseRect(); ok && mu.Y == y && mu.X >= x0 && mu.X < x1 {
+			return m.closeSessionPicker(), nil
+		}
 		if idx, ok := m.sessionIndexAtScreenY(mu.Y); ok {
 			sess := m.sessionItems[idx]
 			m = m.closeSessionPicker()
@@ -64,9 +67,22 @@ func (m Model) mousePress(msg tea.MouseClickMsg) (Model, tea.Cmd) {
 			m = m.clearTextSelection()
 			return m.openSubagentPicker(), nil
 		}
-		if _, top, right, bottom, ok := m.modelStatusRect(); ok && mu.X < right && mu.Y >= top && mu.Y < bottom {
+		if left, top, right, bottom, ok := m.variantStatusRect(); ok && mu.X >= left && mu.X < right && mu.Y >= top && mu.Y < bottom {
+			m = m.clearTextSelection()
+			return m.openVariantPicker(), nil
+		}
+		if left, top, right, bottom, ok := m.modelStatusRect(); ok && mu.X >= left && mu.X < right && mu.Y >= top && mu.Y < bottom {
 			m = m.clearTextSelection()
 			return m.openPicker(), nil
+		}
+		if m.helpMode {
+			if x0, y, x1, ok := m.helpCloseRect(); ok && mu.Y == y && mu.X >= x0 && mu.X < x1 {
+				m.helpMode = false
+				return m, nil
+			}
+		}
+		if panel := m.todoPanelView(); panel != "" && mu.Y >= lipgloss.Height(m.headerView()) && mu.Y < m.transcriptTop() {
+			return m.toggleTodos(), nil
 		}
 	}
 	for _, target := range []int{0, 1} {
@@ -311,7 +327,8 @@ func (m Model) sessionIndexAtScreenY(y int) (int, bool) {
 func (m Model) sessionListScreenTop() int {
 	for i, line := range strings.Split(m.sessionPickerScreen(), "\n") {
 		if strings.Contains(ansi.Strip(line), "RUNS") {
-			return i + 1
+			// Header is followed by a blank row, then the list.
+			return i + 2
 		}
 	}
 	vpH := m.sessionVPHeight()

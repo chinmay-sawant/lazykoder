@@ -60,63 +60,132 @@ func (m Model) closeFilePicker() Model {
 func (m Model) filePickerOverlay() string {
 	sel := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText())
 	dim := lipgloss.NewStyle().Foreground(theme.ColorMute())
-	liveSt := lipgloss.NewStyle().Foreground(theme.ColorAccent())
-	goodSt := lipgloss.NewStyle().Foreground(theme.ColorGood())
-	badSt := lipgloss.NewStyle().Foreground(theme.ColorDanger())
-	innerW := min(64, max(minPaneWidth, m.width-8))
+	boxW := min(64, max(minPaneWidth, m.width-8))
+	contentW := max(minPaneWidth, boxW-cardBorder-2*cardPad)
 
-	var body strings.Builder
-	if len(m.filePickerItems) == 0 {
-		body.WriteString(dim.Render("no matches"))
+	cursor := m.filePickerCursor
+	n := len(m.filePickerItems)
+	if cursor < 0 {
+		cursor = 0
 	}
-	for i, it := range m.filePickerItems {
-		if i > 0 {
-			body.WriteString("\n")
-		}
-		if i >= maxAtPickerVisible {
-			body.WriteString(dim.Render(fmt.Sprintf("  … %d more", len(m.filePickerItems)-maxAtPickerVisible)))
-			break
-		}
-		left := it.Label
-		if it.Kind == atKindAgent {
-			left = "agent  " + it.Label
-		}
-		marker := "  "
-		style := dim
-		if i == m.filePickerCursor {
-			marker = "▸ "
-			style = sel
-		}
-		right := ""
-		if it.Kind == atKindAgent && it.Status != "" {
-			st := it.Status
-			diamond := lipgloss.NewStyle().Foreground(theme.StatusColor(statusKey(st))).Render(theme.StatusDiamond)
-			rightRaw := diamond + " " + st
-			rightStyle := dim
-			if it.Live {
-				rightStyle = liveSt
-			} else if isFailedSubStatus(st) {
-				rightStyle = badSt
-			} else if isTerminalSubStatus(st) {
-				rightStyle = goodSt
+	if n > 0 && cursor >= n {
+		cursor = n - 1
+	}
+	start, end := atPickerWindow(n, cursor, maxAtPickerVisible)
+	overflow := n > maxAtPickerVisible
+	listW := contentW
+	if overflow {
+		listW = max(8, contentW-1)
+	}
+
+	var rows []string
+	if n == 0 {
+		rows = append(rows, dim.Render("no matches"))
+	} else {
+		lastKind := ""
+		for i := start; i < end; i++ {
+			it := m.filePickerItems[i]
+			if it.Kind != lastKind {
+				rows = append(rows, dim.Render(atPickerSectionTitle(it.Kind)))
+				lastKind = it.Kind
 			}
-			right = rightStyle.Render(rightRaw)
+			rows = append(rows, atPickerItemRow(it, i == cursor, listW, sel, dim))
 		}
-		leftPart := style.Render(marker + left)
-		body.WriteString(joinAtPickerRow(leftPart, right, innerW))
 	}
-	head := lipgloss.NewStyle().Bold(true).Render("@ " + m.filePickerFilter)
-	if m.filePickerFilter == "" {
-		head = lipgloss.NewStyle().Bold(true).Render("@ files & sub-agents")
+	body := strings.Join(rows, "\n")
+	if overflow {
+		span := n - maxAtPickerVisible
+		percent := 0.0
+		if span > 0 {
+			percent = float64(start) / float64(span)
+		}
+		body = withScrollbar(body, contentW, len(rows), percent, true)
+	}
+
+	head := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).Render("@ files & sub-agents")
+	if m.filePickerFilter != "" {
+		head = lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).Render("@ " + m.filePickerFilter)
 	}
 	foot := hintStyle.Render("↑/↓ select  •  enter insert  •  esc close")
-	content := lipgloss.JoinVertical(lipgloss.Left, head, body.String(), foot)
+	content := lipgloss.JoinVertical(lipgloss.Left, head, body, foot)
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(theme.ColorBorder()).
-		Padding(0, 1).
-		Width(innerW).
+		Background(theme.ColorBg()).
+		Padding(1, 2).
+		Width(boxW).
 		Render(content)
+}
+
+func atPickerSectionTitle(kind string) string {
+	if kind == atKindAgent {
+		return "sub-agents"
+	}
+	return "files"
+}
+
+// atPickerWindow is the inclusive-start / exclusive-end item window that
+// always contains cursor and is at most maxVisible items long.
+func atPickerWindow(n, cursor, maxVisible int) (start, end int) {
+	if n <= 0 {
+		return 0, 0
+	}
+	if maxVisible < 1 {
+		maxVisible = 1
+	}
+	if cursor < 0 {
+		cursor = 0
+	}
+	if cursor >= n {
+		cursor = n - 1
+	}
+	if n <= maxVisible {
+		return 0, n
+	}
+	end = cursor + 1
+	if end < maxVisible {
+		end = maxVisible
+	}
+	if end > n {
+		end = n
+	}
+	start = end - maxVisible
+	if start < 0 {
+		start = 0
+	}
+	return start, end
+}
+
+func atPickerItemRow(it atPickItem, selected bool, width int, sel, dim lipgloss.Style) string {
+	liveSt := lipgloss.NewStyle().Foreground(theme.ColorAccent())
+	goodSt := lipgloss.NewStyle().Foreground(theme.ColorGood())
+	badSt := lipgloss.NewStyle().Foreground(theme.ColorDanger())
+	left := it.Label
+	if it.Kind == atKindAgent {
+		left = "agent  " + it.Label
+	}
+	marker := "  "
+	style := dim
+	if selected {
+		marker = "▸ "
+		style = sel
+	}
+	right := ""
+	if it.Kind == atKindAgent && it.Status != "" {
+		st := it.Status
+		diamond := lipgloss.NewStyle().Foreground(theme.StatusColor(statusKey(st))).Render(theme.StatusDiamond)
+		rightRaw := diamond + " " + st
+		rightStyle := dim
+		if it.Live {
+			rightStyle = liveSt
+		} else if isFailedSubStatus(st) {
+			rightStyle = badSt
+		} else if isTerminalSubStatus(st) {
+			rightStyle = goodSt
+		}
+		right = rightStyle.Render(rightRaw)
+	}
+	return joinAtPickerRow(style.Render(marker+left), right, width)
 }
 
 func joinAtPickerRow(left, right string, width int) string {
@@ -190,10 +259,16 @@ func (m Model) updateFilePickerKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 		if m.filePickerCursor < len(m.filePickerItems)-1 {
 			m.filePickerCursor++
 		}
+		if n := len(m.filePickerItems); n > 0 && m.filePickerCursor >= n {
+			m.filePickerCursor = n - 1
+		}
 		return m, nil
 	case tea.KeyUp:
 		if m.filePickerCursor > 0 {
 			m.filePickerCursor--
+		}
+		if m.filePickerCursor < 0 {
+			m.filePickerCursor = 0
 		}
 		return m, nil
 	case tea.KeyBackspace:

@@ -27,8 +27,11 @@ func TestSlashMenuOpensAndDivides(t *testing.T) {
 	if strings.Contains(v, "/sessions") {
 		t.Errorf("slash menu should list /resume, not /sessions: %q", v)
 	}
-	if !strings.Contains(v, "resume a previous session") {
-		t.Errorf("slash menu missing resume description: %q", v)
+	if !strings.Contains(v, "Session") || !strings.Contains(v, "Model") || !strings.Contains(v, "Project") || !strings.Contains(v, "Help") {
+		t.Errorf("slash menu missing group headings: %q", v)
+	}
+	if !strings.Contains(v, "commands") {
+		t.Errorf("slash menu missing header: %q", v)
 	}
 	if !strings.Contains(v, "start a new session") {
 		t.Errorf("slash menu missing selected description: %q", v)
@@ -119,6 +122,9 @@ func TestSlashMenuFilterAndRunNew(t *testing.T) {
 	if len(m.slashItems) != 1 || m.slashItems[0].name != "/model" {
 		t.Fatalf("filtered items = %+v, want only /model", m.slashItems)
 	}
+	if v := stripANSI(m.slashView()); strings.Contains(v, "Session") || strings.Contains(v, "Project") || strings.Contains(v, "Help") {
+		t.Errorf("filtered slash view still shows empty groups: %q", v)
+	}
 	m = upd(m, tea.KeyPressMsg{Code: tea.KeyEscape})
 	if m.slashMode {
 		t.Fatal("slash mode still open after esc")
@@ -166,17 +172,21 @@ func TestSlashMenuFullWidthLeftAligned(t *testing.T) {
 		t.Fatal("slash mode not opened on /")
 	}
 
-	var modelLine, newLine string
+	var modelLine, newLine, footer string
 	var widest int
-	for _, line := range strings.Split(stripANSI(m.slashView()), "\n") {
+	lines := strings.Split(stripANSI(m.slashView()), "\n")
+	for i, line := range lines {
 		if w := lipgloss.Width(line); w > widest {
 			widest = w
 		}
-		if strings.Contains(line, "/model") && modelLine == "" {
+		if strings.Contains(line, "/model") && !strings.Contains(line, "commands") && modelLine == "" {
 			modelLine = line
 		}
-		if strings.Contains(line, "/new") && newLine == "" {
+		if strings.Contains(line, "/new") && !strings.Contains(line, "commands") && newLine == "" {
 			newLine = line
+		}
+		if i == len(lines)-1 {
+			footer = line
 		}
 	}
 	if widest < m.width-4 {
@@ -185,8 +195,29 @@ func TestSlashMenuFullWidthLeftAligned(t *testing.T) {
 	if modelLine == "" {
 		t.Fatal("/model row missing")
 	}
+	if strings.Contains(modelLine, "search and switch") {
+		t.Fatalf("compact /model row should be name-only: %q", modelLine)
+	}
+	if !strings.Contains(footer, "start a new session") {
+		t.Errorf("compact footer missing selected description: %q", footer)
+	}
+
+	wide, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 36})
+	m = wide.(Model)
+	modelLine, newLine = "", ""
+	for _, line := range strings.Split(stripANSI(m.slashView()), "\n") {
+		if strings.Contains(line, "/model") && !strings.Contains(line, "commands") && modelLine == "" {
+			modelLine = line
+		}
+		if strings.Contains(line, "/new") && !strings.Contains(line, "commands") && newLine == "" {
+			newLine = line
+		}
+	}
+	if modelLine == "" {
+		t.Fatal("wide /model row missing")
+	}
 	nameAt := strings.Index(modelLine, "/model")
-	descAt := strings.Index(modelLine, "search and switch the chat model")
+	descAt := strings.Index(modelLine, "search and switch")
 	if nameAt < 0 || descAt < 0 || nameAt > descAt {
 		t.Fatalf("/model should sit left of its description on the same line: %q", modelLine)
 	}
