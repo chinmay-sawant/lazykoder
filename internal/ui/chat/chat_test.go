@@ -132,7 +132,7 @@ func TestBashCommandAndOutputRendered(t *testing.T) {
 	if strings.Contains(v, "output") {
 		t.Errorf("collapsed tool card showed output: %q", v)
 	}
-	m = m.toggleLastTool()
+	m = m.toggleAllTools()
 	v = stripANSI(viewText(m))
 	for _, want := range []string{"output", "hello"} {
 		if !strings.Contains(v, want) {
@@ -2101,7 +2101,7 @@ func TestReasoningToggle(t *testing.T) {
 	if !strings.Contains(v, thinkingLabel) {
 		t.Fatalf("thinking marker missing: %q", v)
 	}
-	m = m.toggleReasoning()
+	m = m.toggleAllReasoning()
 	v = stripANSI(viewText(m))
 	if !strings.Contains(v, text) {
 		t.Fatalf("expanded reasoning missing: %q", v)
@@ -2361,8 +2361,8 @@ func TestEditOpenByDefaultAndToggle(t *testing.T) {
 	if idx := m.lastTool; idx < 0 || m.items[idx].collapsed {
 		t.Fatal("pending edit should start open")
 	}
-	// User collapses (e / ctrl+e).
-	m = m.toggleLastTool()
+	// User collapses all tools with ctrl+e.
+	m = m.toggleAllTools()
 	if !m.items[m.lastTool].collapsed {
 		t.Fatal("toggle should collapse edit")
 	}
@@ -2376,7 +2376,7 @@ func TestEditOpenByDefaultAndToggle(t *testing.T) {
 		t.Fatal("completed edit must stay collapsed after user closed it")
 	}
 	// Re-open.
-	m = m.toggleLastTool()
+	m = m.toggleAllTools()
 	if m.items[m.lastTool].collapsed {
 		t.Fatal("toggle should re-open edit")
 	}

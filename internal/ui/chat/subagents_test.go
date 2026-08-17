@@ -116,14 +116,14 @@ func TestSubagentPickerListsChildrenAndShowsLog(t *testing.T) {
 	if !strings.Contains(logView, workRail) {
 		t.Fatalf("log missing work rail: %q", logView)
 	}
-	// Collapse thinking with t.
-	m, _ = m.updateSubagentLogKey(tea.KeyPressMsg{Code: 't'})
+	// Collapse all thinking with ctrl+p.
+	m, _ = m.updateSubagentLogKey(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
 	collapsed := stripANSI(viewText(m))
 	if strings.Contains(collapsed, "scanning packages carefully") {
-		t.Fatalf("t should collapse thinking: %q", collapsed)
+		t.Fatalf("ctrl+p should collapse thinking: %q", collapsed)
 	}
 
-	// Click the thinking header to expand again.
+	// Click the thinking header only selects it; keyboard controls expansion.
 	thinkIdx := -1
 	for i, it := range m.subagentLogItems {
 		if it.kind == itemReasoning {
@@ -151,11 +151,11 @@ func TestSubagentPickerListsChildrenAndShowsLog(t *testing.T) {
 		t.Fatal("click on thinking should hit")
 	}
 	m = next
-	if m.subagentLogItems[thinkIdx].collapsed {
-		t.Fatal("click should expand collapsed thinking")
+	if !m.subagentLogItems[thinkIdx].collapsed {
+		t.Fatal("click should not expand collapsed thinking")
 	}
-	if !strings.Contains(stripANSI(viewText(m)), "scanning packages carefully") {
-		t.Fatal("expanded thinking body missing after click")
+	if strings.Contains(stripANSI(viewText(m)), "scanning packages carefully") {
+		t.Fatal("thinking body appeared after click")
 	}
 
 	// Footer chip should list total for the session.

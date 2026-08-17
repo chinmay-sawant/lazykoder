@@ -2,7 +2,7 @@
 
 > **Parent:** chat transcript + tool cards (`internal/ui/chat`), agent tool
 > output caps (`internal/agent`), live DB evidence under `.lazykoder/`
-> **Status:** planned (not implemented)
+> **Status:** complete 2026-08-17
 > **Estimated effort:** 3-5 days across three phases
 > **Priority:** P0 for keybindings (typing `t` / `e` is broken when the prompt
 > is empty); P0 for expanded tool paint caps; P1 for render-path work
@@ -14,6 +14,13 @@
 > `ctrl+p` toggle meta blocks; expanded bash/read/grep bodies stay within a
 > fixed line budget; long sessions do not rebuild the full transcript string
 > on every stream delta without a memo path
+
+Implementation closed all three phases on 2026-08-17. Phase 1 uses composer-safe
+bulk meta keys, Phase 2 bounds main-transcript tool paint while keeping the
+sub-agent audit log full length, and Phase 3 uses cached content digests plus
+per-item render memoization. Targeted and full Go tests pass; benchmark evidence
+is recorded in `phase-3-render-path.md`. The repository lint command was also
+run, but remains red on pre-existing findings outside this plan.
 
 ---
 

@@ -123,7 +123,10 @@ func (m Model) updateKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 		case 'e', 'E':
 			// Toggle last tool card (including edit) even while the prompt has text.
 			m.quitConfirm = false
-			return m.toggleLastTool(), nil
+			return m.toggleAllTools(), nil
+		case 'p', 'P':
+			m.quitConfirm = false
+			return m.toggleAllReasoning(), nil
 		}
 		var cmd tea.Cmd
 		m.prompt, cmd = m.prompt.Update(key)
@@ -176,14 +179,6 @@ func (m Model) updateKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 			m.usageMode = false
 			m.usageLoading = false
 			return m, nil
-		}
-	case 't', 'T':
-		if m.prompt.Value() == "" {
-			return m.toggleReasoning(), nil
-		}
-	case 'e', 'E':
-		if m.prompt.Value() == "" {
-			return m.toggleLastTool(), nil
 		}
 	case tea.KeyBackspace:
 		m.historyCursor = -1

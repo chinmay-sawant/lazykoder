@@ -4,9 +4,9 @@ import (
 	"encoding/binary"
 	"hash"
 	"hash/fnv"
+	"strconv"
 	"strings"
 
-	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -19,6 +19,21 @@ type renderCache struct {
 	rows    []string
 	plain   []string
 	content string
+
+	itemKeys    []uint64
+	itemRows    []string
+	itemRenders int
+
+	textDigests     []contentDigest
+	inputDigests    []contentDigest
+	outputDigests   []contentDigest
+	metadataDigests []contentDigest
+}
+
+type contentDigest struct {
+	present bool
+	value   string
+	hash    uint64
 }
 
 const (
@@ -27,9 +42,8 @@ const (
 )
 
 type fpWriter struct {
-	h    hash.Hash64
-	buf  [8]byte
-	keys []byte
+	h   hash.Hash64
+	buf [8]byte
 }
 
 func newFPWriter() *fpWriter {
@@ -41,9 +55,9 @@ func (w *fpWriter) u64(v uint64) {
 	w.h.Write(w.buf[:])
 }
 
-func (w *fpWriter) i64(v int64) { w.u64(uint64(v)) }
+func (w *fpWriter) i64(v int64) { w.str(strconv.FormatInt(v, 10)) }
 
-func (w *fpWriter) i(v int) { w.u64(uint64(v)) }
+func (w *fpWriter) i(v int) { w.str(strconv.Itoa(v)) }
 
 func (w *fpWriter) b(v bool) {
 	if v {
@@ -85,9 +99,92 @@ func (w *fpWriter) intPtr(p *int) {
 	w.i(*p)
 }
 
+func hashString64(s string) uint64 {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(s))
+	return h.Sum64()
+}
+
+func cachedContentDigest(slots *[]contentDigest, index int, value *string) (bool, uint64, int) {
+	for len(*slots) <= index {
+		*slots = append(*slots, contentDigest{})
+	}
+	slot := &(*slots)[index]
+	if value == nil {
+		slot.present = false
+		slot.value = ""
+		slot.hash = 0
+		return false, 0, 0
+	}
+	if slot.present && slot.value == *value {
+		return true, slot.hash, len(*value)
+	}
+	slot.present = true
+	slot.value = *value
+	slot.hash = hashString64(*value)
+	return true, slot.hash, len(*value)
+}
+
+func (m Model) itemContentFingerprint(index int, it transcriptItem) uint64 {
+	w := newFPWriter()
+	w.i(index)
+	w.i(int(it.kind))
+	w.b(it.collapsed)
+	w.i64(it.when)
+	_, textHash, textLen := cachedContentDigest(&m.renderCache.textDigests, index, &it.text)
+	w.i(textLen)
+	w.u64(textHash)
+	w.str(it.tool.Tool)
+	w.str(it.tool.CallID)
+	w.str(it.tool.Status)
+	w.strPtr(it.tool.Title)
+	w.i64Ptr(it.tool.TimeStart)
+	w.i64Ptr(it.tool.TimeEnd)
+	w.intPtr(it.tool.ExitCode)
+	_, inputHash, inputLen := cachedContentDigest(&m.renderCache.inputDigests, index, stringPtr(it.tool.InputJSON))
+	w.i(inputLen)
+	w.u64(inputHash)
+	_, outputHash, outputLen := cachedContentDigest(&m.renderCache.outputDigests, index, it.tool.Output)
+	w.i(outputLen)
+	w.u64(outputHash)
+	_, metadataHash, metadataLen := cachedContentDigest(&m.renderCache.metadataDigests, index, it.tool.MetadataJSON)
+	w.i(metadataLen)
+	w.u64(metadataHash)
+	w.strPtr(it.part.ToolName)
+	w.strPtr(it.part.ToolStatus)
+	w.str(it.part.ID)
+	w.strPtr(it.part.ToolCallID)
+	w.i(m.turnOwner(index))
+	return w.h.Sum64()
+}
+
+func stringPtr(s string) *string {
+	return &s
+}
+
+func (m Model) itemRenderKey(index int, it transcriptItem) uint64 {
+	w := newFPWriter()
+	w.u64(m.itemContentFingerprint(index, it))
+	w.b(index == m.selectedItem)
+	streaming := m.busy && it.kind == itemReasoning && !it.collapsed && index == m.lastReasoningIndex()
+	w.b(streaming)
+	w.i(m.width)
+	w.i(m.transcript.Width())
+	w.i(m.railInset)
+	usesRail := m.itemUsesWorkRail(index)
+	w.b(usesRail)
+	liveRail := usesRail && m.itemInLiveTurn(index)
+	w.b(liveRail)
+	if liveRail {
+		w.b(m.busy && m.pulseOn)
+		w.i(m.pulse)
+	}
+	return w.h.Sum64()
+}
+
 // renderFingerprint hashes every input that can change how the transcript
-// renders: item contents and collapse state, tool/part fields, the selected
-// item, the work-rail throb, and the layout width.
+// renders. Large text and tool bodies contribute cached content digests and
+// lengths, rather than being written into the hash on every stream delta.
 func (m Model) renderFingerprint() uint64 {
 	w := newFPWriter()
 	w.i(m.selectedItem)
@@ -98,23 +195,8 @@ func (m Model) renderFingerprint() uint64 {
 	w.i(m.railInset)
 	w.i(m.turnItemFrom)
 	w.i(len(m.items))
-	for _, it := range m.items {
-		w.i(int(it.kind))
-		w.b(it.collapsed)
-		w.i64(it.when)
-		w.str(it.text)
-		w.str(it.tool.Tool)
-		w.str(it.tool.CallID)
-		w.str(it.tool.Status)
-		w.strPtr(it.tool.Title)
-		w.i64Ptr(it.tool.TimeStart)
-		w.i64Ptr(it.tool.TimeEnd)
-		w.intPtr(it.tool.ExitCode)
-		w.str(it.tool.InputJSON)
-		w.strPtr(it.tool.Output)
-		w.strPtr(it.tool.MetadataJSON)
-		w.strPtr(it.part.ToolName)
-		w.strPtr(it.part.ToolStatus)
+	for i, it := range m.items {
+		w.u64(m.itemContentFingerprint(i, it))
 	}
 	return w.h.Sum64()
 }
@@ -131,10 +213,6 @@ func (m Model) plainTranscriptRowsMemo() []string {
 		c.plain = strings.Split(ansi.Strip(strings.Join(rows, "\n")), "\n")
 	}
 	return c.plain
-}
-
-func (m Model) plainRowsFrom(rows []string) []string {
-	return strings.Split(ansi.Strip(strings.Join(rows, "\n")), "\n")
 }
 
 // ensureRenderedRows returns the memoized rendered items, rebuilding them
@@ -162,10 +240,4 @@ func (m Model) renderedItemsMemo() []string {
 // plainRowsMemo is the memoized entry point for plainTranscriptRows.
 func (m Model) plainRowsMemo() []string {
 	return m.plainTranscriptRowsMemo()
-}
-
-// lipgloss width helper kept next to the cache so the memo callers do not
-// reach into styling details.
-func rowWidth(s string) int {
-	return lipgloss.Width(s)
 }

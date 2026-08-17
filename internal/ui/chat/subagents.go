@@ -731,7 +731,7 @@ func (m Model) subagentLogScreen() string {
 	body = strings.Join(bodyLines, "\n")
 
 	footer := hintStyle.Width(w).Render(truncateRunes(
-		"j/k scroll  •  t thinking  •  e tool  •  enter toggle  •  esc back  •  d close",
+		"j/k scroll  •  ctrl+p thinking  •  ctrl+e tools  •  enter toggle  •  esc back  •  d close",
 		w,
 	))
 	out := lipgloss.JoinVertical(lipgloss.Left, header, "", body, footer)
@@ -781,11 +781,8 @@ func (m Model) subagentLogHit(x, y int, button tea.MouseButton) (Model, tea.Cmd,
 		if idx, ok := m.subagentLogItemIndexAtScreenY(y); ok {
 			kind := m.subagentLogItems[idx].kind
 			if kind == itemTool || kind == itemReasoning {
-				it := m.subagentLogItems[idx]
-				it.collapsed = !it.collapsed
-				m.subagentLogItems[idx] = it
 				m.subagentLogSelected = idx
-				return m.refreshSubagentLogContent(), nil, true
+				return m, nil, true
 			}
 		}
 	}
@@ -861,7 +858,8 @@ func (m Model) renderedSubagentLogItems() []string {
 		if it.kind != itemUser && it.kind != itemNote {
 			itemM.railInset = workRailCols
 		}
-		body := itemM.renderItem(it, i == m.subagentLogSelected, false)
+		// The sub-agent log is an audit surface: expanded tool bodies stay full.
+		body := itemM.renderItemWithToolMode(it, i == m.subagentLogSelected, false, true)
 		if it.kind != itemUser && it.kind != itemNote {
 			body = itemM.withWorkRail(body, false)
 		}
@@ -969,6 +967,14 @@ func (m Model) updateSubagentPickerKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 }
 
 func (m Model) updateSubagentLogKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
+	if key.Mod.Contains(tea.ModCtrl) {
+		switch key.Code {
+		case 'e', 'E':
+			return m.toggleAllSubagentLogKind(itemTool), nil
+		case 'p', 'P':
+			return m.toggleAllSubagentLogKind(itemReasoning), nil
+		}
+	}
 	switch key.Code {
 	case tea.KeyEscape, 'q', 'Q', 'x', 'X':
 		// Back to the drawer list (full-screen log closes; drawer stays).
@@ -990,10 +996,6 @@ func (m Model) updateSubagentLogKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 	case tea.KeyPgUp:
 		m.subagentLogVp.PageUp()
 		return m, nil
-	case 't', 'T':
-		return m.toggleSubagentLogKind(itemReasoning), nil
-	case 'e', 'E':
-		return m.toggleSubagentLogKind(itemTool), nil
 	case tea.KeyEnter:
 		return m.toggleSubagentLogSelected(), nil
 	case 'd', 'D':
@@ -1136,7 +1138,8 @@ func (m Model) renderSubagentLogContent() string {
 		if it.kind != itemUser && it.kind != itemNote {
 			itemM.railInset = workRailCols
 		}
-		body := itemM.renderItem(it, i == m.subagentLogSelected, false)
+		// The sub-agent log is an audit surface: expanded tool bodies stay full.
+		body := itemM.renderItemWithToolMode(it, i == m.subagentLogSelected, false, true)
 		if it.kind != itemUser && it.kind != itemNote {
 			body = itemM.withWorkRail(body, false)
 		}
@@ -1164,18 +1167,21 @@ func (m Model) lastSubagentLogKindIndex(kind itemKind) int {
 	return -1
 }
 
-func (m Model) toggleSubagentLogKind(kind itemKind) Model {
-	idx := m.subagentLogSelected
-	if idx < 0 || idx >= len(m.subagentLogItems) || m.subagentLogItems[idx].kind != kind {
-		idx = m.lastSubagentLogKindIndex(kind)
+func (m Model) toggleAllSubagentLogKind(kind itemKind) Model {
+	anyOpen := false
+	for _, it := range m.subagentLogItems {
+		if it.kind == kind && !it.collapsed {
+			anyOpen = true
+			break
+		}
 	}
-	if idx < 0 {
-		return m
+	for i, it := range m.subagentLogItems {
+		if it.kind == kind {
+			it.collapsed = anyOpen
+			m.subagentLogItems[i] = it
+		}
 	}
-	it := m.subagentLogItems[idx]
-	it.collapsed = !it.collapsed
-	m.subagentLogItems[idx] = it
-	m.subagentLogSelected = idx
+	m.subagentLogSelected = m.lastSubagentLogKindIndex(kind)
 	return m.refreshSubagentLogContent()
 }
 

@@ -170,7 +170,6 @@ func (m Model) mousePress(msg tea.MouseClickMsg) (Model, tea.Cmd) {
 				if kind == itemTool {
 					m.lastTool = idx
 				}
-				return m.toggleSelectedMeta(), nil
 			}
 		}
 		if pos, ok := m.transcriptPosition(mu); ok {

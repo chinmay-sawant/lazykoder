@@ -13,13 +13,14 @@ pickers are centered cards.
   Reasoning streams live as `▾ thinking` with the growing body under
   the header. It collapses to `▸ thinking` as soon as the assistant
   reply, a tool card, or the end of the turn arrives. The same clock
-  sits on the far right; `t` expands a collapsed block when the prompt
-  is empty. Tool runs are
+  sits on the far right. Tool runs are
   full-width cards that start collapsed (`◆  ▸  bash  title` on the left,
   `15:32:05` on the far right). The diamond is the only status mark: white
-  while pending or running, green on success, red on error or deny. `e`
-  expands the last run. Clicks on a
-  thinking or tool header toggle that item.
+  while pending or running, green on success, red on error or deny. `ctrl+e`
+  expands all tools when they are all closed, or collapses all tools otherwise.
+  `ctrl+p` applies the same rule to all thinking blocks. Plain `t` and `e`
+  always type into the composer. Header clicks select rows but do not toggle
+  them.
 - Composer: a rounded input box on the solid black layer. Long prompts
   grow up to six rows and scroll inside the box. Up/down move the
   cursor through that text first; at the top of a multi-line draft, up
@@ -77,8 +78,8 @@ pickers are centered cards.
   release; a temporary `text copied` notice appears above the prompt. The
   left work rail and user-frame curls stay on screen for layout, but are
   stripped from the clipboard so the paste is plain message text. A
-  click on a tool card or reasoning header expands or collapses that item
-  instead of starting a selection. Clicks on the model status and scrollbar
+  click on a tool card or reasoning header selects that row without changing
+  its collapsed state. Clicks on the model status and scrollbar
   keep their existing navigation behavior. A click on a slash-menu row runs
   that command.
 - Assistant Markdown formats headings, emphasis, lists, inline code, and fenced
@@ -102,8 +103,8 @@ box (**edit**). Actions:
 | type | edit a draft without waiting for the turn to finish |
 | `enter` (with draft) | cancel the current turn and send the draft immediately |
 | `esc` | cancel the current turn only (no new send) |
-| `t` | expand or collapse reasoning (empty prompt) |
-| `e` | expand or collapse the last tool card (empty prompt) |
+| `ctrl+e` | expand or collapse all tool cards |
+| `ctrl+p` | expand or collapse all thinking blocks |
 | `ctrl+s` | open the session picker (idle only) |
 | `/resume` | same as `ctrl+s` |
 | click model | open the model picker |
@@ -134,8 +135,10 @@ for the session stay in the list after they finish.
   for that child, using the same design as the main chat: `you` / `assistant`
   roles, collapsible **thinking** (expanded by default), tool cards with
   status diamonds, and the vertical work rail (`│`).
-- In the log view: `t` toggles thinking, `e` toggles the last tool, `enter`
-  toggles the selected block; `esc` / `[x]` returns to the drawer; `d` closes.
+- In the log view: `ctrl+p` expands or collapses all thinking, `ctrl+e`
+  expands or collapses all tools, and `enter` toggles the selected block;
+  `esc` / `[x]` returns to the drawer; `d` closes. Header clicks only select
+  a row.
 - `d` on a live drawer row cancels it; `esc` closes the drawer.
 
 Child sessions stay in SQLite (`kind=subagent`) so completed agents still

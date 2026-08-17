@@ -2,7 +2,7 @@
 
 > **Parent:** `plans/v0.0.6/README.md` - evidence: single bash up to 2,229
 > lines / 124 KB; sessions with ~7k–10k tool-output lines if fully expanded
-> **Status:** planned
+> **Status:** complete 2026-08-17
 > **Estimated effort:** 1 day
 > **Priority:** P0 (expand paint is unbounded)
 > **Gate:** on the **main** transcript, expanded non-edit tool bodies never
@@ -63,64 +63,66 @@ are also huge.
 
 ## 2.1 Paint-time truncate helper (P0)
 
-- [ ] Add something like `truncateToolOutputForView(s string) (body string, omitted bool)`
+- [x] Add `truncateToolOutputForView(s string) (body string, omitted bool)`
       in `internal/ui/chat/transcript.go` (or a small `tool_view.go` if
       `transcript.go` is near the file-size limit)
-- [ ] Apply line cap first, then rune cap
-- [ ] Head+tail join with a clear middle marker line when omitted
-- [ ] Unit tests on pure helper: short string unchanged; 200 lines → 100 +
+- [x] Apply line cap first, then rune cap
+- [x] Head+tail join with a clear middle marker line when omitted
+- [x] Unit tests on pure helper: short string unchanged; 200 lines → 100 +
       note; rune-only oversize truncated - `TestTruncateToolOutputForView`,
       exit 0
 
 ## 2.2 Wire into main-transcript `renderTool` (P0)
 
-- [ ] Expanded `default` branch (bash and other non-write tools) on the
+- [x] Expanded `default` branch (bash and other non-write tools) on the
       **main** chat model: pass output through the helper before
       `toolOutputStyle.Render`
-- [ ] Write path: either keep 400-rune preview or route through the same
+- [x] Write path keeps the 400-rune main-transcript preview; the explicit
+      full-body mode is used by the audit log
       helper for consistency (pick one; document in test)
-- [ ] When `metadata` / stored JSON already has `"truncated": true`, still
+- [x] When `metadata` / stored JSON already has `"truncated": true`, still
       apply UI cap on the main transcript (double truncation is fine)
-- [ ] Collapsed path unchanged (header only)
-- [ ] Prefer a parameter or field such as `toolBodyFull bool` / paint mode
+- [x] Collapsed path unchanged (header only)
+- [x] `renderItemWithToolMode` and `renderToolMode` provide an explicit
+      full-body paint mode
       so sub-agent log can call the same renderer with full bodies
-- [ ] Test: expanded bash with 500-line output on main transcript; body
+- [x] Test: expanded bash with 500-line output on main transcript; body
       line count under budget and contains omission marker -
       `TestExpandedBashOutputCapped`, exit 0
-- [ ] Extend `TestBashCommandAndOutputRendered` so short outputs still show
+- [x] Extend `TestBashCommandAndOutputRendered` so short outputs still show
       full body and `$ command`
 
 ## 2.3 Sub-agent log: full length (P0)
 
-- [ ] `renderSubagentLogContent` paints expanded tool bodies **without**
+- [x] `renderSubagentLogContent` paints expanded tool bodies **without**
       `maxToolBodyLines` / `maxToolBodyRunes` (full stored `Output`)
-- [ ] Thinking / assistant text in the log stay as stored (no new cap)
-- [ ] Collapse defaults still apply (tools start collapsed) so open cost is
+- [x] Thinking / assistant text in the log stay as stored (no new cap)
+- [x] Collapse defaults still apply (tools start collapsed) so open cost is
       opt-in via `ctrl+e` on that surface
-- [ ] Test: sub-agent log with a 500-line bash tool expanded contains the
+- [x] Test: sub-agent log with a 500-line bash tool expanded contains the
       full body (or far more than the main budget), not the main omission
       marker - `TestSubagentLogToolOutputFull`, exit 0
-- [ ] Document in code comment: log is audit UI; main transcript is the
+- [x] Document in code comment: log is audit UI; main transcript is the
       performance-sensitive surface
 
 ## 2.4 Bulk expand safety with phase 1 (P0)
 
-- [ ] After `ctrl+e` opens all tools on the **main** transcript, total
+- [x] After `ctrl+e` opens all tools on the **main** transcript, total
       content size for a fixture of N tools × large output stays
       O(N × budget), not O(N × full)
-- [ ] Optional lightweight test: 20 tools × 2000-line outputs; after expand
+- [x] Test: 20 tools × 2000-line outputs; after expand
       all on main transcript, joined content length below a fixed ceiling
       derived from constants - `TestBulkExpandRespectsUIBudget`, exit 0
-- [ ] Sub-agent log bulk `ctrl+e` may still open full bodies; acceptable
+- [x] Sub-agent log bulk `ctrl+e` may still open full bodies; acceptable
       for a single focused child. If a child log is extreme, phase 3 memo
       is the mitigation, not silent truncation
 
 ## 2.5 Docs (P1)
 
-- [ ] `docs/tui.md`: note that expanded tool output on the **main** chat is
+- [x] `docs/tui.md`: note that expanded tool output on the **main** chat is
       preview-capped (head/tail); **sub-agent log** shows full stored tool
       output when expanded; `ctrl+e` / `ctrl+p` apply on the focused surface
-- [ ] Do not claim the parent LLM receives the full child log (it does not;
+- [x] Do not claim the parent LLM receives the full child log (it does not;
       see README sub-agent table)
 
 ## Dependencies
@@ -131,6 +133,7 @@ are also huge.
 
 ## Closure
 
-- [ ] `go test ./internal/ui/chat` exit 0
-- [ ] `go test ./...` exit 0
-- [ ] Constants live in one place; no magic numbers scattered in render
+- [x] `go test ./internal/ui/chat -count=1` exit 0 - 2026-08-17
+- [x] `go test ./... -count=1` exit 0 - final gate below
+- [x] Constants live in one place; no magic body limits are scattered in
+      render
