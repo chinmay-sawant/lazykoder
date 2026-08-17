@@ -4,22 +4,40 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 )
 
-// Result holds the fetched body and response metadata.
 type Result struct {
 	Output   string
 	Metadata map[string]any
 }
 
-// requestTimeout bounds the whole fetch, including the response body read.
 const requestTimeout = 30 * time.Second
 
-// Run GETs url (http/https only) and returns the body, capped at 5MB.
+func isPrivateHost(host string) bool {
+	if strings.EqualFold(host, "localhost") || strings.HasSuffix(strings.ToLower(host), ".localhost") || strings.EqualFold(host, "metadata.google.internal") {
+		return true
+	}
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		return false
+	}
+	for _, ip := range ips {
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() {
+			return true
+		}
+	}
+	return false
+}
+
+// Run GETs an HTTP(S) URL, rejects local/private destinations (including every
+// redirect), and caps the response body at 5MB. The client may provide an
+// explicit transport (for example, a test transport); destination validation
+// is always applied and is never disabled for custom clients.
 func Run(ctx context.Context, urlStr, format string, client *http.Client) (Result, error) {
 	u, err := url.Parse(urlStr)
 	if err != nil {
@@ -30,13 +48,26 @@ func Run(ctx context.Context, urlStr, format string, client *http.Client) (Resul
 	default:
 		return Result{}, fmt.Errorf("webfetch: unsupported scheme %q", u.Scheme)
 	}
+	if client == nil {
+		client = &http.Client{}
+	}
+	previousRedirect := client.CheckRedirect
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if isPrivateHost(req.URL.Hostname()) {
+			return fmt.Errorf("webfetch: redirect to local or private host is not allowed")
+		}
+		if previousRedirect != nil {
+			return previousRedirect(req, via)
+		}
+		return nil
+	}
+	if isPrivateHost(u.Hostname()) {
+		return Result{}, fmt.Errorf("webfetch: local or private host is not allowed")
+	}
 	if format == "markdown" {
 		q := u.Query()
 		q.Set("format", format)
 		u.RawQuery = q.Encode()
-	}
-	if client == nil {
-		client = http.DefaultClient
 	}
 	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
@@ -57,12 +88,7 @@ func Run(ctx context.Context, urlStr, format string, client *http.Client) (Resul
 	if err != nil {
 		return Result{}, fmt.Errorf("webfetch: %w", err)
 	}
-	res := Result{
-		Output: string(body),
-		Metadata: map[string]any{
-			"content_type": resp.Header.Get("Content-Type"),
-		},
-	}
+	res := Result{Output: string(body), Metadata: map[string]any{"content_type": resp.Header.Get("Content-Type")}}
 	if len(body) > cap {
 		res.Metadata["truncated"] = true
 		res.Output = string(body[:cap])

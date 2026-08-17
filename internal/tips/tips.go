@@ -21,6 +21,9 @@ const (
 	SessionsPicker      = "/resume or ctrl+s continues a past session"
 	ModelPicker         = "/model switches the chat model"
 	VariantPicker       = "/variant sets the reasoning effort"
+	SlotSettings        = "/settings opens project defaults (model, agents, safety)"
+	AgentsDrawer        = "/agents opens the sub-agent drawer and logs"
+	ContinueSession     = "/continue resumes after a step limit"
 	RefreshModels       = "/refresh reloads the model list"
 	HelpOverlay         = "/help or ? shows every shortcut"
 	MentionFile         = "type @ to mention a project file"
@@ -51,6 +54,9 @@ var All = []string{
 	SessionsPicker,
 	ModelPicker,
 	VariantPicker,
+	SlotSettings,
+	AgentsDrawer,
+	ContinueSession,
 	RefreshModels,
 	HelpOverlay,
 	MentionFile,

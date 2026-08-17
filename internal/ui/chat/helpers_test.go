@@ -292,7 +292,7 @@ func clickModelStatus(t *testing.T, m Model) Model {
 		t.Fatal("model status click target not found")
 	}
 	mm, _ := m.Update(tea.MouseClickMsg(tea.Mouse{
-		X:      right - 1,
+		X:      (left + right) / 2,
 		Y:      top,
 		Button: tea.MouseLeft,
 	}))

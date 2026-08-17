@@ -144,3 +144,30 @@ func TestRunSymlinkInsideAllowed(t *testing.T) {
 		t.Errorf("Output = %q, want \"inside\"", res.Output)
 	}
 }
+
+func TestRunSymlinkEscapeNested(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "target.txt"), []byte("outside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "link")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	_, err := Run("link/target.txt", root)
+	if err == nil || !strings.Contains(err.Error(), "escapes") {
+		t.Fatalf("want symlink escape rejection, got %v", err)
+	}
+}
+
+func TestRunAbsoluteInsideAllowed(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "absolute.txt")
+	if err := os.WriteFile(path, []byte("inside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res, err := Run(path, root)
+	if err != nil || res.Output != "inside" {
+		t.Fatalf("absolute inside should work: output=%q err=%v", res.Output, err)
+	}
+}

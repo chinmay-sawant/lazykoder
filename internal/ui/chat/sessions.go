@@ -67,23 +67,44 @@ func (m Model) sessionPickerScreen() string {
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, m.sessionPickerView())
 }
 
+func (m Model) sessionCloseRect() (x0, y, x1 int, ok bool) {
+	if !m.sessionPickerMode {
+		return 0, 0, 0, false
+	}
+	for i, line := range strings.Split(m.sessionPickerScreen(), "\n") {
+		plain := stripANSIString(line)
+		if !strings.Contains(plain, "RUNS") || !strings.Contains(plain, "[x]") {
+			continue
+		}
+		start, end, found := displaySpan(plain, "[x]")
+		if !found {
+			continue
+		}
+		return max(0, start-1), i, end + 1, true
+	}
+	return 0, 0, 0, false
+}
+
 func (m Model) sessionPickerView() string {
 	cardW := m.overlayWidth()
 	innerW := max(minPaneWidth, cardW-cardBorder-2*cardPad)
-	header := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).Width(innerW).Render("RUNS")
-	body := hintStyle.Width(innerW).Render("no sessions")
+	title := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).Render("RUNS")
+	closeBtn := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).Render("[x]")
+	gap := max(1, innerW-lipgloss.Width(title)-lipgloss.Width(closeBtn))
+	header := title + strings.Repeat(" ", gap) + closeBtn
+	body := hintStyle.Width(innerW).Align(lipgloss.Center).Render("no sessions yet  ·  esc back")
 	if len(m.sessionItems) > 0 {
 		vpH := m.sessionVPHeight()
 		body = withScrollbar(m.sessionVp.View(), m.sessionVp.Width(), vpH,
 			m.sessionVp.ScrollPercent(), m.sessionVp.TotalLineCount() > vpH)
 	}
-	footer := hintStyle.Width(innerW).Render("j/k select  •  enter open  •  esc cancel")
-	content := lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
+	footer := hintStyle.Width(innerW).Render("j/k select  •  enter open  •  esc/[x] cancel")
+	content := lipgloss.JoinVertical(lipgloss.Left, header, "", body, footer)
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(theme.ColorBorder()).
 		Background(theme.ColorBg()).
-		Padding(0, cardPad).
+		Padding(1, cardPad).
 		Width(cardW).
 		Render(content)
 }
@@ -93,7 +114,7 @@ func (m Model) sessionPickerView() string {
 // stays on exactly one line and click targets map 1:1 to rows. The row
 // under the mouse is filled with the hover highlight.
 func (m Model) sessionPickerContent(width int) string {
-	sel := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText())
+	sel := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).Background(theme.ColorBorder())
 	normal := lipgloss.NewStyle().Foreground(theme.ColorMute())
 	group := lipgloss.NewStyle().Foreground(theme.ColorAccent()).Bold(true)
 	hover := lipgloss.NewStyle().Background(theme.ColorBorder()).Foreground(theme.ColorText()).Inline(true)
@@ -120,7 +141,7 @@ func (m Model) sessionPickerContent(width int) string {
 		case i == m.sessionHover && i != m.sessionCursor:
 			b.WriteString(hover.MaxWidth(width).Width(width).Render(prefix + line))
 		case i == m.sessionCursor:
-			b.WriteString(sel.MaxWidth(width).Render(prefix + line))
+			b.WriteString(sel.MaxWidth(width).Width(width).Render(prefix + line))
 		default:
 			b.WriteString(normal.MaxWidth(width).Render(prefix + line))
 		}
@@ -209,8 +230,7 @@ func formatClock(ms int64) string {
 
 func (m Model) sessionVPHeight() int {
 	cardH := max(minPaneHeight+sessionCardChromeRows, m.height*sessionCardHeightPct/percentBase)
-	available := max(minPaneHeight, cardH-sessionCardChromeRows)
-	return min(max(minPaneHeight, m.sessionContentRows()), available)
+	return max(minPaneHeight, cardH-sessionCardChromeRows)
 }
 
 func (m Model) sessionContentRows() int {
@@ -276,7 +296,7 @@ func (m Model) updateSessionPickerKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m.closeDone(), tea.Quit
 	}
 	switch key.Code {
-	case 'q', 'Q', tea.KeyEscape:
+	case 'q', 'Q', 'x', 'X', tea.KeyEscape:
 		return m.closeSessionPicker(), nil
 	case tea.KeyEnter:
 		if m.sessionCursor >= 0 && m.sessionCursor < len(m.sessionItems) {
@@ -337,8 +357,10 @@ func (m Model) loadSession(sess *db.Session) Model {
 		}
 		if m.store != nil {
 			m.replay(sess.ID)
+			m = m.loadTodos()
 		}
 	} else {
+		m.todos = nil
 		m.syncTranscript()
 	}
 	return m

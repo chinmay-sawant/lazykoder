@@ -147,6 +147,69 @@ func TestTranscriptDragSelectsAndCopiesText(t *testing.T) {
 	}
 }
 
+func TestSelectedTextStripsWorkRailAndUserFrame(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	m.width = 80
+	m.height = 40
+	m.items = []transcriptItem{
+		{kind: itemUser, text: "hello prompt", when: 1_700_000_000_000},
+		{kind: itemAssistant, text: "hello reply", when: 1_700_000_001_000},
+	}
+	m.syncTranscript()
+
+	// Full-width selection over every rendered row.
+	rows := m.plainTranscriptRows()
+	if len(rows) == 0 {
+		t.Fatal("no plain transcript rows")
+	}
+	m.selection = textSelection{
+		active: true,
+		anchor: textPosition{row: 0, col: 0},
+		// Wide enough to cover any rendered row (rails + body + stamp).
+		focus: textPosition{row: len(rows) - 1, col: 1 << 20},
+	}
+	got, ok := m.selectedText()
+	if !ok {
+		t.Fatal("expected a selection range")
+	}
+	if strings.Contains(got, workRail) {
+		t.Fatalf("clipboard still contains work rail: %q", got)
+	}
+	if strings.Contains(got, "╭") || strings.Contains(got, "╰") {
+		t.Fatalf("clipboard still contains user frame curls: %q", got)
+	}
+	if !strings.Contains(got, "hello prompt") || !strings.Contains(got, "hello reply") {
+		t.Fatalf("message text missing from clipboard: %q", got)
+	}
+	// Rails must still render on screen.
+	body := stripANSI(strings.Join(m.renderedItems(), "\n"))
+	if !strings.Contains(body, workRail) {
+		t.Fatalf("work rail missing from rendered view: %q", body)
+	}
+	if !strings.Contains(body, "╭") {
+		t.Fatalf("user frame missing from rendered view: %q", body)
+	}
+}
+
+func TestStripTranscriptChrome(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{workRail + " assistant", "assistant"},
+		{workRail + " hello", "hello"},
+		{"╭ hello prompt", "hello prompt"},
+		{"╰ last line", "last line"},
+		{workRail, ""},
+		{"plain text", "plain text"},
+		{"  indented", "  indented"},
+	}
+	for _, tc := range cases {
+		if got := stripTranscriptChrome(tc.in); got != tc.want {
+			t.Errorf("stripTranscriptChrome(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestScrollbarClickJumpAndDrag(t *testing.T) {
 	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
 	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
@@ -262,6 +325,54 @@ func TestClickTogglesThinkingHeader(t *testing.T) {
 	}
 	if !strings.Contains(stripANSI(viewText(m)), "secret thought") {
 		t.Fatal("expanded thinking missing from view")
+	}
+}
+
+func TestClickChevronWithTodosHitsPaintedRow(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 36})
+	m = mm.(Model)
+	m.todos = []db.Todo{
+		{Content: "inspect layout", Status: db.TodoInProgress},
+		{Content: "fix input box", Status: db.TodoPending},
+		{Content: "run checks", Status: db.TodoPending},
+	}
+	out := "pwd output"
+	m.items = []transcriptItem{
+		{kind: itemUser, text: "look at the layout", when: 1},
+		{kind: itemReasoning, text: "planning the click", collapsed: true, when: 1},
+		{kind: itemTool, text: "bash", collapsed: true, when: 1, tool: db.ToolCall{
+			Tool: "bash", Status: "completed", Output: &out,
+		}},
+	}
+	m.syncTranscript()
+
+	yThink := viewLineIndex(m, thinkingLabel)
+	if yThink < 0 {
+		t.Fatal("thinking header missing from painted view")
+	}
+	idx, ok := m.itemIndexAtScreenY(yThink)
+	if !ok || m.items[idx].kind != itemReasoning {
+		t.Fatalf("painted thinking row %d maps to idx=%d ok=%v (top=%d)", yThink, idx, ok, m.transcriptTop())
+	}
+	next, _ := m.Update(tea.MouseClickMsg(tea.Mouse{X: 2, Y: yThink, Button: tea.MouseLeft}))
+	m = next.(Model)
+	if m.items[idx].collapsed {
+		t.Fatalf("click on painted thinking row %d did not expand", yThink)
+	}
+
+	yBash := lastViewLineIndex(m, "bash")
+	if yBash < 0 {
+		t.Fatal("bash header missing from painted view")
+	}
+	idx, ok = m.itemIndexAtScreenY(yBash)
+	if !ok || m.items[idx].kind != itemTool {
+		t.Fatalf("painted bash row %d maps to idx=%d ok=%v", yBash, idx, ok)
+	}
+	next, _ = m.Update(tea.MouseClickMsg(tea.Mouse{X: 2, Y: yBash, Button: tea.MouseLeft}))
+	m = next.(Model)
+	if m.items[idx].collapsed {
+		t.Fatalf("click on painted bash row %d did not expand", yBash)
 	}
 }
 

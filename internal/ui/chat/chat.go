@@ -19,11 +19,16 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
 	"github.com/chinmay-sawant/lazykoder/internal/policy"
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
+	"github.com/chinmay-sawant/lazykoder/internal/settings"
+	"github.com/chinmay-sawant/lazykoder/internal/subagent"
 	"github.com/chinmay-sawant/lazykoder/internal/tips"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/question"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/confirm"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
+
+// confirmQueueSize buffers concurrent child/parent confirm requests.
+const confirmQueueSize = 32
 
 const (
 	idleHint      = "enter to send  •  q to quit"
@@ -97,7 +102,7 @@ var (
 	busyStyle      = lipgloss.NewStyle().Foreground(theme.ColorAccent())
 	hintStyle      = lipgloss.NewStyle().Foreground(theme.ColorMute())
 	userStyle      = lipgloss.NewStyle().Foreground(theme.ColorAccent())
-	roleStyle      = lipgloss.NewStyle().Foreground(theme.ColorMute()).Bold(true)
+	roleStyle      = lipgloss.NewStyle().Foreground(theme.ColorText()).Bold(true)
 	reasoningStyle = lipgloss.NewStyle().Foreground(theme.ColorMute())
 	toolCardStyle  = lipgloss.NewStyle().
 			Background(theme.ColorBg()).
@@ -105,31 +110,51 @@ var (
 	toolOutputStyle = lipgloss.NewStyle().
 			Background(theme.ColorBg()).
 			Foreground(theme.ColorMute())
+	// editCardStyle: soft greenish chrome for the edit card header/body shell.
+	editCardStyle = lipgloss.NewStyle().
+			Background(theme.ColorEditPanel()).
+			Foreground(theme.ColorText())
 	selectionStyle = lipgloss.NewStyle().
 			Background(theme.ColorAccent()).
 			Foreground(theme.ColorBg())
-	diffAddStyle = lipgloss.NewStyle().Foreground(theme.ColorGood())
-	diffDelStyle = lipgloss.NewStyle().Foreground(theme.ColorDanger())
+	// Full-width soft tints: light greenish + rows, light reddish - rows.
+	diffAddStyle = lipgloss.NewStyle().
+			Foreground(theme.ColorGood()).
+			Background(theme.ColorEditAddBg())
+	diffDelStyle = lipgloss.NewStyle().
+			Foreground(theme.ColorDanger()).
+			Background(theme.ColorEditDelBg())
+	diffMetaStyle = lipgloss.NewStyle().
+			Foreground(theme.ColorEditMeta()).
+			Background(theme.ColorEditPanel())
+	diffCtxStyle = lipgloss.NewStyle().
+			Foreground(theme.ColorMute()).
+			Background(theme.ColorEditPanel())
 )
 
 // Options configures the chat model.
 type Options struct {
-	Store      *db.Store
-	Client     *opencode.Client
-	Workdir    string
-	Session    *db.Session
-	MaxSteps   int
-	InitialErr string
-	CachePath  string // optional models cache file; empty disables caching
+	Store        *db.Store
+	Client       *opencode.Client
+	Workdir      string
+	Session      *db.Session
+	MaxSteps     int // ignored when Settings is set; kept for tests
+	InitialErr   string
+	CachePath    string // optional models cache file; empty disables caching
+	SettingsPath string // .lazykoder/settings.json; empty skips persistence
+	Settings     *settings.Settings
 }
 
 // Model is the chat screen: title, transcript, prompt, status and confirm flow.
 type Model struct {
-	store    *db.Store
-	client   *opencode.Client
-	workdir  string
-	session  *db.Session
-	maxSteps int
+	store               *db.Store
+	client              *opencode.Client
+	workdir             string
+	session             *db.Session
+	maxSteps            int
+	settingsPath        string
+	projectSettings     settings.Settings
+	settingsPickDefault bool // model/variant picker is setting the project default
 
 	width  int
 	height int
@@ -181,11 +206,29 @@ type Model struct {
 
 	helpMode bool
 
+	settingsMode      bool
+	settingsCursor    int
+	settingsEdit      bool
+	settingsEditValue string
+	stepLimitHit      bool // last turn stopped on agent step limit
+
 	filePickerMode   bool
-	filePickerItems  []string
+	filePickerItems  []atPickItem
 	filePickerCursor int
 	filePickerFilter string
 	filePickerAt     int
+
+	// todos is the session checklist from todowrite (shown under the header).
+	todos []db.Todo
+	// todosExpanded shows the checklist bodies; default is the one-line strip.
+	todosExpanded bool
+
+	// userNavHover is the Medium-style right-rail mark under the pointer (-1 = none).
+	userNavHover int
+	// userNavTip is the mark whose label bubble is visible (-1 = hidden).
+	userNavTip int
+	// userNavTipGen invalidates stale 10s hide timers when the tip is refreshed.
+	userNavTipGen uint64
 
 	pulse     int
 	pulseOn   bool
@@ -208,11 +251,30 @@ type Model struct {
 	sessionVp         viewport.Model
 	sessionBuilt      bool
 
+	// Sub-agent picker (list) + log viewer for child sessions.
+	subagentPickerMode bool
+	// subagentDrawerCompact shows a one-line summary instead of the full list
+	// (used after todowrite updates so checklist + agents both stay visible).
+	subagentDrawerCompact bool
+	subagentLogMode       bool
+	subagentItems         []subagentRow
+	subagentCursor        int
+	subagentHover         int
+	subagentVp            viewport.Model
+	subagentLogVp         viewport.Model
+	subagentBuilt         bool
+	subagentSelected      subagentRow
+	// subagentLogItems is the child transcript rendered with main chat styles
+	// (thinking, tools, work rails). Reasoning starts expanded.
+	subagentLogItems    []transcriptItem
+	subagentLogSelected int
+
 	slashMode       bool
 	slashCursor     int
 	slashItems      []slashCmd
 	slashFromPaste  bool
 	selection       textSelection
+	promptSel       promptSelection
 	copyNotice      string
 	promptSelectAll bool
 	tipsIndex       int
@@ -227,6 +289,9 @@ type Model struct {
 	turnCtx    context.Context
 	eventCh    chan agent.Event
 	errCh      chan error
+
+	// subMgr owns in-process sub-agent jobs for this chat model.
+	subMgr *subagent.Manager
 }
 
 // slashCmd is one entry of the slash command menu. aliases are extra
@@ -263,11 +328,14 @@ type copyNoticeMsg struct{}
 
 var slashCommands = []slashCmd{
 	{name: "/new", description: "start a new session and clear the transcript"},
-	{name: "/resume", description: "resume a previous session", aliases: []string{"sessions"}},
-	{name: "/model", description: "search and switch the chat model"},
-	{name: "/variant", description: "switch the model variant (low, medium, high)"},
-	{name: "/refresh", description: "reload the model list from the server"},
-	{name: "/help", description: "show the keyboard shortcuts"},
+	{name: "/resume", description: "open past sessions (ctrl+s, also /session)", aliases: []string{"sessions", "session"}},
+	{name: "/model", description: "search and switch the live chat model"},
+	{name: "/variant", description: "switch live reasoning effort (low / medium / high / max)"},
+	{name: "/agents", description: "open the sub-agent drawer and logs", aliases: []string{"subs", "subagents"}},
+	{name: "/refresh", description: "reload the model list into models.json"},
+	{name: "/settings", description: "project defaults (model, steps, agents, safety)", aliases: []string{"slot"}},
+	{name: "/continue", description: "resume after a step-limit stop (or send continue)"},
+	{name: "/help", description: "keyboard shortcuts (?, also /keys)", aliases: []string{"keys"}},
 }
 
 type modelsMsg struct {
@@ -313,26 +381,54 @@ type tipsTickMsg struct{}
 
 // New returns a chat model for the given options.
 func New(opts Options) Model {
+	cfg := settings.Default()
+	if opts.Settings != nil {
+		cfg = *opts.Settings
+	} else if opts.MaxSteps > 0 {
+		cfg.Slot.MaxSteps = opts.MaxSteps
+		cfg.Slot.LimitEnabled = true
+	}
+	// Effective* helpers normalize clamps and empty model ids.
+	eff := cfg.EffectiveMaxSteps()
 	m := Model{
 		store:               opts.Store,
 		client:              opts.Client,
 		workdir:             opts.Workdir,
 		session:             opts.Session,
-		maxSteps:            opts.MaxSteps,
+		maxSteps:            eff,
+		settingsPath:        opts.SettingsPath,
+		projectSettings:     cfg,
 		err:                 opts.InitialErr,
 		width:               defaultWidth,
 		height:              defaultHeight,
-		confirmCh:           make(chan confirmRequest, 1),
-		askCh:               make(chan askRequest, 1),
+		confirmCh:           make(chan confirmRequest, confirmQueueSize),
+		askCh:               make(chan askRequest, confirmQueueSize),
 		doneCh:              make(chan struct{}),
 		lastTool:            -1,
 		selectedItem:        -1,
 		historyCursor:       -1,
 		pendingHistoryIndex: -1,
+		userNavHover:        -1,
+		userNavTip:          -1,
 		cachePath:           opts.CachePath,
 		transcript:          viewport.New(viewport.WithWidth(defaultWidth-1), viewport.WithHeight(defaultHeight-chromeLines)),
 		prompt:              newPromptArea(defaultWidth),
 		renderCache:         &renderCache{},
+	}
+	m.subMgr = subagent.NewManager(subagent.ConfigFromSettings(cfg), subagent.AgentRunner{
+		Store:  opts.Store,
+		Client: opts.Client,
+	})
+	m.subMgr.SetStore(opts.Store)
+	// Workdir is known at construction; model/confirm are refreshed per turn.
+	m.subMgr.SetRuntime(subagent.Runtime{
+		Workdir: opts.Workdir,
+		Model:   cfg.EffectiveModel(),
+		Variant: cfg.EffectiveVariant(),
+	})
+	// Recover open jobs from a previous process crash/exit.
+	if opts.Store != nil {
+		_ = m.subMgr.Recover(context.Background())
 	}
 	if m.cachePath != "" {
 		if infos, _, err := modelscache.Load(m.cachePath, time.Now(), 0); err == nil && len(infos) > 0 {
@@ -346,6 +442,11 @@ func New(opts Options) Model {
 			m.variant = *m.session.Variant
 		}
 		m.replay(m.session.ID)
+		m = m.loadTodos()
+	} else {
+		// New run: seed live model/variant from project defaults.
+		m.model = cfg.EffectiveModel()
+		m.variant = cfg.EffectiveVariant()
 	}
 	return m
 }
@@ -455,13 +556,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.seq != m.turnSeq {
 			return m, nil
 		}
-		return m.finishTurn(msg.err), nil
+		m = m.finishTurn(msg.err)
+		// Continue diamond throb while background sub-agents are still live.
+		if m.hasLiveSubagents() {
+			return m, pulseTick()
+		}
+		return m, nil
 	case pulseMsg:
-		if !m.busy {
+		// Keep throbbing for live sub-agents even after the parent turn ends.
+		if !m.busy && !m.hasLiveSubagents() {
 			m.pulseOn = false
 			return m, nil
 		}
 		m.pulse = (m.pulse + 1) % pulseSteps
+		m.pulseOn = true
+		// Refresh live status for footer chips even when the drawer is closed;
+		// when open, update activity in place without reordering.
+		if !m.subagentLogMode && (m.subagentPickerMode || m.hasLiveSubagents() || len(m.subagentItems) > 0) {
+			m = m.refreshSubagentDrawerLive()
+		}
 		return m, pulseTick()
 	case tipsTickMsg:
 		m.tipsIndex++
@@ -491,11 +604,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case copyNoticeMsg:
 		m.copyNotice = ""
 		return m, nil
+	case userNavTipExpireMsg:
+		if msg.gen != m.userNavTipGen {
+			return m, nil
+		}
+		// Keep the bubble while the pointer is still on a tick.
+		if m.userNavHover < 0 {
+			m.userNavTip = -1
+		}
+		return m, nil
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.transcript.SetWidth(max(minPaneWidth, msg.Width-1))
-		m.prompt.SetWidth(max(minPaneWidth, msg.Width))
+		m.transcript.SetWidth(m.transcriptContentWidth())
+		// Keep textarea width identical to the bordered composer content so
+		// soft-wrap and mouse hit-testing agree with what is painted.
+		m.prompt.SetWidth(m.promptContentWidth())
 		m.prompt.SetHeight(m.promptHeight())
 		m.transcript.SetHeight(max(minPaneHeight, m.transcriptRenderHeight()))
 		m.syncTranscript()
@@ -505,18 +629,36 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.sessionBuilt {
 			m = m.resizeSessionPicker()
 		}
+		if m.subagentBuilt {
+			if m.subagentLogMode {
+				m = m.resizeSubagentLogCard()
+			} else if m.subagentPickerMode {
+				m = m.resizeSubagentDrawer()
+			}
+		}
 		return m, nil
 	case tea.PasteMsg:
-		if m.confirmMode || m.pickerMode {
+		// Full-screen sub-agent log keeps paste blocked; the list drawer does not.
+		if m.confirmMode || m.pickerMode || m.subagentLogMode {
 			return m, nil
 		}
 		m.escapePending = false
 		m.historyCursor = -1
 		m.historyDraft = ""
 		m.copyNotice = ""
-		m.promptSelectAll = false
 		m = m.clearTextSelection()
 		m = m.rememberPrompt()
+		// Ctrl+A then paste should replace the selection, not append.
+		if m.promptSelectAll {
+			m.promptSelectAll = false
+			m.prompt.SetValue(msg.Content)
+			m.prompt.SetHeight(m.promptHeight())
+			m.slashMode = false
+			m.slashCursor = 0
+			m.slashFromPaste = strings.HasPrefix(m.prompt.Value(), "/")
+			return m, nil
+		}
+		m.promptSelectAll = false
 		var cmd tea.Cmd
 		m.prompt, cmd = m.prompt.Update(msg)
 		m.slashMode = false
@@ -540,10 +682,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		if msg.Mod.Contains(tea.ModCtrl) && msg.Code == 'z' && !m.confirmMode && !m.pickerMode && !m.sessionPickerMode {
+		if msg.Mod.Contains(tea.ModCtrl) && msg.Code == 'z' && !m.confirmMode && !m.pickerMode && !m.sessionPickerMode && !m.subagentPickerMode {
 			return m.undoPrompt(), nil
 		}
-		if msg.Mod.Contains(tea.ModCtrl) && msg.Code == 's' && !m.confirmMode && !m.pickerMode && !m.sessionPickerMode && !m.busy {
+		if msg.Mod.Contains(tea.ModCtrl) && msg.Code == 's' && !m.confirmMode && !m.pickerMode && !m.sessionPickerMode && !m.subagentPickerMode && !m.busy {
 			return m.openSessionPicker(), nil
 		}
 		if m.confirmMode {
@@ -555,6 +697,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.helpMode {
 			return m.updateHelpKey(msg)
 		}
+		if m.settingsMode {
+			return m.updateSettingsKey(msg)
+		}
 		if m.filePickerMode {
 			return m.updateFilePickerKey(msg)
 		}
@@ -563,6 +708,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.sessionPickerMode {
 			return m.updateSessionPickerKey(msg)
+		}
+		if m.subagentPickerMode {
+			return m.updateSubagentPickerKey(msg)
 		}
 		if m.slashMode {
 			return m.updateSlashKey(msg)
@@ -574,6 +722,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.sessionVp = vp
 			return m, nil
 		}
+		if m.subagentLogMode {
+			vp, _ := m.subagentLogVp.Update(msg)
+			m.subagentLogVp = vp
+			return m, nil
+		}
+		// Drawer open: wheel over the drawer scrolls the list; wheel over the
+		// transcript (or anywhere else) scrolls the chat behind it.
+		if m.subagentPickerMode && !m.subagentLogMode && m.pointerInSubagentDrawer(msg.Mouse().Y) {
+			vp, _ := m.subagentVp.Update(msg)
+			m.subagentVp = vp
+			return m, nil
+		}
 		if m.pickerMode {
 			vp, _ := m.pickerVp.Update(msg)
 			m.pickerVp = vp
@@ -581,7 +741,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		vp, _ := m.transcript.Update(msg)
 		m.transcript = vp
-		return m, nil
+		// Drop rail hover so the label bubble follows the active section.
+		m.userNavHover = -1
+		return m.showActiveUserNavTip()
 	case tea.MouseClickMsg:
 		return m.mousePress(msg)
 	case tea.MouseMotionMsg:
@@ -592,14 +754,52 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m.refreshSessionHover(), nil
 		}
+		// Composer drag-select takes priority over transcript selection.
+		if m.promptSel.dragging {
+			return m.updatePromptSelection(msg.Mouse()), nil
+		}
+		// Keep transcript selection / scrollbar drag working while the drawer
+		// is open; only update drawer hover when the pointer is on it.
 		if m.selection.dragging {
 			return m.updateTextSelection(msg), nil
 		}
-		if !m.dragOn {
+		if m.dragOn {
+			return m.mouseDrag(msg), nil
+		}
+		if m.subagentPickerMode && !m.subagentLogMode {
+			prev := m.subagentHover
+			m.subagentHover = -1
+			if m.pointerInSubagentDrawer(msg.Mouse().Y) {
+				if idx, ok := m.subagentIndexAtScreenY(msg.Mouse().Y); ok {
+					m.subagentHover = idx
+				}
+			}
+			if m.subagentHover != prev {
+				return m.resizeSubagentDrawer(), nil
+			}
 			return m, nil
 		}
-		return m.mouseDrag(msg), nil
+		// User-turn rail hover (Medium-style preview + tooltip).
+		mu := msg.Mouse()
+		prevNav := m.userNavHover
+		m.userNavHover = -1
+		if idx, ok := m.userNavIndexAtScreen(mu.X, mu.Y); ok {
+			m.userNavHover = idx
+		}
+		if m.userNavHover != prevNav {
+			if m.userNavHover >= 0 {
+				return m.showUserNavTip(m.userNavHover)
+			}
+			return m, nil
+		}
+		if m.userNavHover >= 0 {
+			return m, nil
+		}
+		return m, nil
 	case tea.MouseReleaseMsg:
+		if m.promptSel.dragging {
+			return m.endPromptSelectionDrag()
+		}
 		m.selection.dragging = false
 		m.dragOn = false
 		text, ok := m.selectedText()
@@ -627,9 +827,21 @@ func (m Model) applyEvent(ev agent.Event) Model {
 	case agent.EventTool:
 		m.applyTool(ev)
 		m.activity = toolActivity(ev.Tool)
+		// On task tool events: open drawer only when a new job appears.
+		if ev.Tool.Tool == "task" || strings.HasPrefix(ev.Tool.Tool, "task_") {
+			m = m.openSubagentDrawerIfNew()
+			m.pulseOn = m.busy || m.hasLiveSubagents()
+		}
+		if ev.Tool.Tool == "todowrite" {
+			m = m.applyTodosFromTool(ev.Tool)
+		}
 	case agent.EventError:
 		if ev.Err != nil && !isCancelErr(ev.Err) {
 			m.err = ev.Err.Error()
+			if isStepLimitErr(ev.Err) {
+				m.stepLimitHit = true
+				m.err = fmt.Sprintf("%s  ·  /continue to keep going", ev.Err.Error())
+			}
 		}
 	}
 	return m
@@ -645,12 +857,22 @@ func (m Model) adoptSession(id string) Model {
 		return m
 	}
 	m.session = &sess
-	return m
+	// Load child rows for the footer chip; do not force-open the drawer.
+	m = m.loadTodos()
+	return m.syncSubagentDrawer()
 }
 
 func (m Model) finishTurn(err error) Model {
 	if err != nil && m.err == "" && !isCancelErr(err) {
 		m.err = err.Error()
+	}
+	if isStepLimitErr(err) {
+		m.stepLimitHit = true
+		if !strings.Contains(m.err, "/continue") {
+			m.err = fmt.Sprintf("%s  ·  /continue to keep going", err.Error())
+		}
+	} else if err == nil {
+		m.stepLimitHit = false
 	}
 	if m.turnCancel != nil {
 		m.turnCancel()
@@ -664,15 +886,26 @@ func (m Model) finishTurn(err error) Model {
 	m.askMode = false
 	m.eventCh = nil
 	m.errCh = nil
-	m.pulseOn = false
 	m.activity = ""
 	m.collapseLiveReasoning()
+	// Refresh sub-agent rows after the turn; drawer stays as the user left it
+	// (only a new spawn re-opens it via openSubagentDrawerIfNew).
+	m = m.syncSubagentDrawer()
+	if m.hasLiveSubagents() {
+		m.pulseOn = true
+	} else {
+		m.pulseOn = false
+	}
 	m.syncTranscript()
 	if !m.turnStarted.IsZero() {
 		m.tokensPerSec = tokensPerSec(m.generatedThisTurn(), time.Since(m.turnStarted))
 	}
 	m.bumpTokenFloor()
 	return m
+}
+
+func isStepLimitErr(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "step limit reached")
 }
 
 func tokensPerSec(generated int64, elapsed time.Duration) float64 {
@@ -798,7 +1031,9 @@ func newPromptArea(width int) textarea.Model {
 	ta.DynamicHeight = true
 	ta.MinHeight = promptMinRows
 	ta.MaxHeight = promptMaxRows
-	ta.SetWidth(max(minPaneWidth, width))
+	// Match bordered composer content width (not full terminal width).
+	innerW := max(minPaneWidth, width-2)
+	ta.SetWidth(max(minPaneWidth, innerW-2))
 	ta.SetHeight(promptMinRows)
 	ta.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("shift+enter"))
 	ta.KeyMap.WordBackward = key.NewBinding(key.WithKeys("alt+left", "ctrl+left", "alt+b"))
@@ -842,22 +1077,8 @@ func (m Model) promptHeight() int {
 }
 
 func (m Model) visualPromptLines() int {
-	w := m.prompt.Width()
-	if w < 1 {
-		w = max(minPaneWidth, m.width-4)
-	}
-	if w < 1 {
-		w = 40
-	}
-	n := 0
-	for _, line := range strings.Split(m.prompt.Value(), "\n") {
-		lw := lipgloss.Width(line)
-		if lw == 0 {
-			n++
-			continue
-		}
-		n += (lw + w - 1) / w
-	}
+	// Same hard-wrap as promptBodyPaint / mouse hit-testing.
+	n := len(m.promptVisualLines())
 	if n < 1 {
 		return 1
 	}
@@ -889,11 +1110,17 @@ func (m Model) promptHasMultipleLines() bool {
 
 func (m Model) chromeHeight() int {
 	h := lipgloss.Height(m.headerView()) + 1 + lipgloss.Height(m.composerBlock())
+	if panel := m.todoPanelView(); panel != "" {
+		h += lipgloss.Height(panel)
+	}
 	if m.slashMode {
 		h += 1 + lipgloss.Height(m.slashView())
 	}
 	if m.pickerMode {
 		h += 1 + lipgloss.Height(m.pickerView())
+	}
+	if m.subagentPickerMode && !m.subagentLogMode {
+		h += 1 + lipgloss.Height(m.subagentDrawerView())
 	}
 	if m.err != "" {
 		h += lipgloss.Height(errStyle.Width(max(minPaneWidth, m.width)).Render(m.err))
@@ -930,11 +1157,22 @@ func (m Model) modelEndpoint() string {
 }
 
 func (m Model) modelDisplayLabel() string {
+	return m.modelChipLabel()
+}
+
+func (m Model) modelChipLabel() string {
 	label := m.modelLabel()
-	if m.variant != "" {
-		return label + "  " + m.variant
+	if label == "" {
+		return ""
 	}
-	return label
+	return label + " ▾"
+}
+
+func (m Model) variantChipLabel() string {
+	if m.variant == "" {
+		return "default ▾"
+	}
+	return m.variant + " ▾"
 }
 
 func (m Model) sessionTitle() string {

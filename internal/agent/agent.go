@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/chinmay-sawant/lazykoder/internal/db"
@@ -14,8 +17,10 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/bash"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/edit"
+	"github.com/chinmay-sawant/lazykoder/internal/tools/grep"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/question"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/read"
+	"github.com/chinmay-sawant/lazykoder/internal/tools/todo"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/webfetch"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/write"
 )
@@ -52,6 +57,19 @@ type Options struct {
 	// DisableStreaming forces the non-streaming Chat path. Streaming is
 	// the default so reasoning and text can paint as they arrive.
 	DisableStreaming bool
+	// Host enables task-family tools for parent agents. Nil denies them.
+	Host SubagentHost
+	// ToolNames is the base-tool allowlist (bash/read/...). Empty uses
+	// DefaultParentTools. Task tools are never granted via this list alone.
+	ToolNames []string
+	// AgentName is written to messages.agent (empty = main parent agent).
+	AgentName string
+	// BashAllowlist controls optional strict command allowlisting.
+	BashAllowlist        []string
+	BashAllowlistEnabled bool
+	// WebfetchClient is an explicit egress client, primarily for injected tests.
+	// Production leaves it nil, so webfetch uses its validated default client.
+	WebfetchClient *http.Client
 }
 
 // Agent runs user turns against a store and provider client.
@@ -98,19 +116,6 @@ type Event struct {
 	Err       error
 }
 
-var bashToolSpec = opencode.ToolSpec{
-	Name:        "bash",
-	Description: "Run a shell command. Dangerous commands are gated by a human confirm.",
-	Parameters: map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"command": map[string]any{"type": "string", "description": "shell command to run"},
-			"workdir": map[string]any{"type": "string", "description": "working directory"},
-		},
-		"required": []string{"command"},
-	},
-}
-
 type bashArgs struct {
 	Command string `json:"command"`
 	Workdir string `json:"workdir"`
@@ -132,6 +137,31 @@ func (a *Agent) Send(ctx context.Context, userText string, events chan<- Event) 
 	if err = a.writeUserTurn(ctx, userText, events); err != nil {
 		return err
 	}
+	return a.runSteps(ctx, events)
+}
+
+// Continue resumes the agent loop on the current session history without
+// writing a new user message. Used after a step-limit stop so the model
+// can keep working with another MaxSteps budget.
+func (a *Agent) Continue(ctx context.Context, events chan<- Event) (err error) {
+	if events != nil {
+		defer close(events)
+		defer func() {
+			if err == nil {
+				a.emit(events, Event{Kind: EventDone, SessionID: a.sessionID()})
+			}
+		}()
+	}
+	if a.sess == nil && a.opts.Session != nil {
+		a.sess = a.opts.Session
+	}
+	if a.sessionID() == "" {
+		return a.fail(events, fmt.Errorf("agent: continue requires an existing session"))
+	}
+	return a.runSteps(ctx, events)
+}
+
+func (a *Agent) runSteps(ctx context.Context, events chan<- Event) error {
 	maxSteps := a.opts.MaxSteps
 	if maxSteps <= 0 {
 		maxSteps = defaultMaxSteps
@@ -146,7 +176,7 @@ func (a *Agent) Send(ctx context.Context, userText string, events chan<- Event) 
 			Endpoint:        a.opts.Endpoint,
 			ReasoningEffort: a.opts.Variant,
 			Messages:        history,
-			Tools:           []opencode.ToolSpec{bashToolSpec},
+			Tools:           toolSpecsFor(a.opts.ToolNames, a.opts.Host),
 		}
 		var resp *opencode.ChatResponse
 		if a.opts.DisableStreaming {
@@ -214,7 +244,11 @@ func (a *Agent) ensureSession(ctx context.Context, userText string, events chan<
 }
 
 func (a *Agent) writeUserTurn(ctx context.Context, userText string, events chan<- Event) error {
-	m, err := a.store.InsertMessage(ctx, db.Message{SessionID: a.sessionID(), Role: "user"})
+	m, err := a.store.InsertMessage(ctx, db.Message{
+		SessionID: a.sessionID(),
+		Role:      "user",
+		Agent:     a.opts.AgentName,
+	})
 	if err != nil {
 		return fmt.Errorf("agent: insert user message: %w", err)
 	}
@@ -341,12 +375,52 @@ func (a *Agent) writeResponse(ctx context.Context, events chan<- Event, resp *op
 			return err
 		}
 	}
-	for _, tc := range resp.ToolCalls {
-		if err := a.runTool(ctx, events, m.ID, tc); err != nil {
+	if err := a.runTools(ctx, events, m.ID, resp.ToolCalls); err != nil {
+		return err
+	}
+	return a.writeStepFinish(ctx, events, m.ID, resp)
+}
+
+// runTools executes non-task tools sequentially, then task-family tools in parallel.
+func (a *Agent) runTools(ctx context.Context, events chan<- Event, msgID string, toolCalls []opencode.ToolCall) error {
+	var sequential, parallel []opencode.ToolCall
+	for _, tc := range toolCalls {
+		if isTaskToolName(tc.Name) {
+			parallel = append(parallel, tc)
+		} else {
+			sequential = append(sequential, tc)
+		}
+	}
+	for _, tc := range sequential {
+		if err := a.runTool(ctx, events, msgID, tc); err != nil {
 			return err
 		}
 	}
-	return a.writeStepFinish(ctx, events, m.ID, resp)
+	if len(parallel) == 0 {
+		return nil
+	}
+	if len(parallel) == 1 {
+		return a.runTool(ctx, events, msgID, parallel[0])
+	}
+	errCh := make(chan error, len(parallel))
+	var wg sync.WaitGroup
+	for _, tc := range parallel {
+		wg.Add(1)
+		go func(tc opencode.ToolCall) {
+			defer wg.Done()
+			if err := a.runTool(ctx, events, msgID, tc); err != nil {
+				errCh <- err
+			}
+		}(tc)
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (a *Agent) runTool(ctx context.Context, events chan<- Event, msgID string, tc opencode.ToolCall) error {
@@ -395,9 +469,27 @@ func toolTitle(tc opencode.ToolCall) string {
 		if c := first("command"); c != "" {
 			return truncateRunes(c, maxToolTitle)
 		}
+	case toolTodowrite:
+		var wrap struct {
+			Todos []struct {
+				Content string `json:"content"`
+				Status  string `json:"status"`
+			} `json:"todos"`
+		}
+		if json.Unmarshal([]byte(tc.Arguments), &wrap) == nil {
+			return fmt.Sprintf("todos (%d)", len(wrap.Todos))
+		}
+		return "todos"
 	case "read", "write", "edit":
 		if p := first("filePath"); p != "" {
 			return p
+		}
+	case "grep":
+		if p := first("pattern"); p != "" {
+			if path := first("path"); path != "" {
+				return truncateRunes(p+"  "+path, maxToolTitle)
+			}
+			return truncateRunes(p, maxToolTitle)
 		}
 	case "webfetch":
 		if u := first("url"); u != "" {
@@ -408,28 +500,70 @@ func toolTitle(tc opencode.ToolCall) string {
 		if raw, ok := args["questions"]; ok && json.Unmarshal(raw, &qs) == nil && len(qs) > 0 && qs[0].Question != "" {
 			return truncateRunes(qs[0].Question, maxToolTitle)
 		}
+	case toolTask, toolTaskList, toolTaskStatus, toolTaskWait, toolTaskCancel:
+		if n := first("name"); n != "" {
+			return n
+		}
+		if p := first("prompt"); p != "" {
+			return truncateRunes(p, maxToolTitle)
+		}
+		if id := first("id"); id != "" {
+			return id
+		}
 	}
 	return tc.Name
 }
 
 func (a *Agent) executeTool(ctx context.Context, events chan<- Event, partID, title string, tc opencode.ToolCall) (string, error) {
+	if isTaskToolName(tc.Name) {
+		return a.execTaskTool(ctx, events, partID, title, tc)
+	}
+	if _, known := allBaseToolSpecs[tc.Name]; known && !toolAllowed(a.opts.ToolNames, tc.Name) {
+		out := "tool not allowed: " + tc.Name
+		return a.updateTool(ctx, events, partID, title, tc, "denied", &out, deniedJSON(), nil, nil)
+	}
 	switch tc.Name {
-	case "bash":
+	case toolBash:
 		return a.execBash(ctx, events, partID, title, tc)
-	case "read":
+	case toolRead:
 		return a.execRead(ctx, events, partID, title, tc)
-	case "write":
+	case toolGrep:
+		return a.execGrep(ctx, events, partID, title, tc)
+	case toolWrite:
 		return a.execWrite(ctx, events, partID, title, tc)
-	case "edit":
+	case toolEdit:
 		return a.execEdit(ctx, events, partID, title, tc)
-	case "webfetch":
+	case toolWebfetch:
 		return a.execWebfetch(ctx, events, partID, title, tc)
-	case "question":
+	case toolQuestion:
 		return a.execQuestion(ctx, events, partID, title, tc)
+	case toolTodowrite:
+		return a.execTodowrite(ctx, events, partID, title, tc)
 	default:
 		out := "unknown tool: " + tc.Name
 		return a.updateTool(ctx, events, partID, title, tc, "denied", &out, deniedJSON(), nil, nil)
 	}
+}
+
+func (a *Agent) execTaskTool(ctx context.Context, events chan<- Event, partID, title string, tc opencode.ToolCall) (string, error) {
+	if a.opts.Host == nil {
+		out := "task tools require a subagent host"
+		return a.updateTool(ctx, events, partID, title, tc, "denied", &out, deniedJSON(), nil, nil)
+	}
+	result, meta, status, err := a.opts.Host.Execute(ctx, a.sessionID(), tc.Name, tc.Arguments, partID)
+	if err != nil {
+		msg := err.Error()
+		return a.updateTool(ctx, events, partID, title, tc, "error", &msg, errorJSON(msg), nil, nil)
+	}
+	if status == "" {
+		status = "completed"
+	}
+	out := result
+	var metaPtr *string
+	if meta != "" {
+		metaPtr = &meta
+	}
+	return a.updateTool(ctx, events, partID, title, tc, status, &out, result, nil, metaPtr)
 }
 
 func (a *Agent) execBash(ctx context.Context, events chan<- Event, partID, title string, tc opencode.ToolCall) (string, error) {
@@ -438,10 +572,14 @@ func (a *Agent) execBash(ctx context.Context, events chan<- Event, partID, title
 		msg := "invalid bash arguments: " + err.Error()
 		return a.updateTool(ctx, events, partID, title, tc, "error", &msg, errorJSON(msg), nil, nil)
 	}
-	dec := policy.Classify(args.Command)
+	dec := policy.ClassifyWithAllowlist(args.Command, a.opts.BashAllowlist, a.opts.BashAllowlistEnabled)
 	workdir := args.Workdir
 	if workdir == "" {
 		workdir = a.workdir
+	}
+	if !withinWorkspace(a.workdir, workdir) {
+		msg := "bash: workdir must remain inside the approved workspace"
+		return a.updateTool(ctx, events, partID, title, tc, "denied", &msg, errorJSON(msg), nil, nil)
 	}
 	deny := func() (string, error) {
 		out := deniedJSON()
@@ -487,6 +625,38 @@ func (a *Agent) execRead(ctx context.Context, events chan<- Event, partID, title
 		return a.updateTool(ctx, events, partID, title, tc, "error", &msg, errorJSON(msg), nil, nil)
 	}
 	res, err := read.Run(args.FilePath, a.workdir)
+	if err != nil {
+		return a.updateTool(ctx, events, partID, title, tc, "error", errOut(err), errorJSON(err.Error()), nil, nil)
+	}
+	out := res.Output
+	if len([]rune(out)) > maxToolOutput {
+		out = truncateRunes(out, maxToolOutput)
+		res.Metadata["truncated"] = true
+	}
+	meta, _ := json.Marshal(res.Metadata)
+	metaJSON := string(meta)
+	return a.updateTool(ctx, events, partID, title, tc, "completed", &out, toolOutputJSON(out), nil, &metaJSON)
+}
+
+func (a *Agent) execGrep(ctx context.Context, events chan<- Event, partID, title string, tc opencode.ToolCall) (string, error) {
+	var args struct {
+		Pattern         string `json:"pattern"`
+		Path            string `json:"path"`
+		Glob            string `json:"glob"`
+		CaseInsensitive bool   `json:"caseInsensitive"`
+		MaxMatches      int    `json:"maxMatches"`
+	}
+	if err := json.Unmarshal([]byte(tc.Arguments), &args); err != nil {
+		msg := "invalid grep arguments: " + err.Error()
+		return a.updateTool(ctx, events, partID, title, tc, "error", &msg, errorJSON(msg), nil, nil)
+	}
+	res, err := grep.Run(ctx, a.workdir, grep.Options{
+		Pattern:         args.Pattern,
+		Path:            args.Path,
+		Glob:            args.Glob,
+		CaseInsensitive: args.CaseInsensitive,
+		MaxMatches:      args.MaxMatches,
+	}, nil)
 	if err != nil {
 		return a.updateTool(ctx, events, partID, title, tc, "error", errOut(err), errorJSON(err.Error()), nil, nil)
 	}
@@ -546,7 +716,8 @@ func (a *Agent) execWebfetch(ctx context.Context, events chan<- Event, partID, t
 		msg := "invalid webfetch arguments: " + err.Error()
 		return a.updateTool(ctx, events, partID, title, tc, "error", &msg, errorJSON(msg), nil, nil)
 	}
-	res, err := webfetch.Run(ctx, args.URL, args.Format, nil)
+	client := a.opts.WebfetchClient
+	res, err := webfetch.Run(ctx, args.URL, args.Format, client)
 	if err != nil {
 		return a.updateTool(ctx, events, partID, title, tc, "error", errOut(err), errorJSON(err.Error()), nil, nil)
 	}
@@ -582,6 +753,34 @@ func (a *Agent) execQuestion(ctx context.Context, events chan<- Event, partID, t
 	meta, _ := json.Marshal(res.Metadata)
 	metaJSON := string(meta)
 	return a.updateTool(ctx, events, partID, title, tc, "completed", &res.Output, toolOutputJSON(res.Output), nil, &metaJSON)
+}
+
+func (a *Agent) execTodowrite(ctx context.Context, events chan<- Event, partID, title string, tc opencode.ToolCall) (string, error) {
+	res, err := todo.Run(tc.Arguments)
+	if err != nil {
+		msg := err.Error()
+		return a.updateTool(ctx, events, partID, title, tc, "error", &msg, errorJSON(msg), nil, nil)
+	}
+	sid := a.sessionID()
+	if sid == "" {
+		msg := "todowrite requires an active session"
+		return a.updateTool(ctx, events, partID, title, tc, "error", &msg, errorJSON(msg), nil, nil)
+	}
+	items := make([]db.Todo, 0, len(res.Items))
+	for i, it := range res.Items {
+		items = append(items, db.Todo{
+			SessionID: sid,
+			Seq:       i,
+			Content:   it.Content,
+			Status:    it.Status,
+		})
+	}
+	if err := a.store.ReplaceTodos(ctx, sid, items); err != nil {
+		msg := err.Error()
+		return a.updateTool(ctx, events, partID, title, tc, "error", &msg, errorJSON(msg), nil, nil)
+	}
+	out := res.Output
+	return a.updateTool(ctx, events, partID, title, tc, "completed", &out, toolOutputJSON(out), nil, nil)
 }
 
 func (a *Agent) updateTool(ctx context.Context, events chan<- Event, partID, title string, tc opencode.ToolCall,
@@ -680,4 +879,25 @@ func strPtr(s string) *string {
 		return nil
 	}
 	return &s
+}
+
+func withinWorkspace(root, candidate string) bool {
+	r, err := filepath.Abs(root)
+	if err != nil {
+		return false
+	}
+	c, err := filepath.Abs(candidate)
+	if err != nil {
+		return false
+	}
+	r, err = filepath.EvalSymlinks(r)
+	if err != nil {
+		return false
+	}
+	c, err = filepath.EvalSymlinks(c)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(r, c)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }

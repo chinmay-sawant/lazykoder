@@ -22,12 +22,90 @@ func (m Model) jumpBarRow() int {
 func (m Model) mousePress(msg tea.MouseClickMsg) (Model, tea.Cmd) {
 	mu := msg.Mouse()
 	m.copyNotice = ""
+	// Model / variant chips live on the composer footer. Handle them before
+	// the prompt and sub-agent drawer so those never swallow chip clicks
+	// (including while the sub-agent strip is open).
+	if mu.Button == tea.MouseLeft && !m.pickerMode && !m.settingsMode && !m.sessionPickerMode && !m.subagentLogMode && !m.busy {
+		if hit, which := m.footerChipHit(mu.X, mu.Y); hit {
+			m = m.clearTextSelection()
+			m = m.clearPromptSelection()
+			// Free vertical space for the model list when the agents strip is open.
+			if m.subagentPickerMode {
+				m = m.closeSubagentPicker()
+			}
+			if m.slashMode {
+				m.slashMode = false
+				m.slashCursor = 0
+			}
+			if which == "variant" {
+				return m.openVariantPicker(), nil
+			}
+			return m.openPicker(), nil
+		}
+	}
+	// Sub-agent drawer sits above the composer: handle it before prompt hits
+	// so the compact strip is not stolen by the input box geometry.
+	if mu.Button == tea.MouseLeft && m.subagentPickerMode && !m.subagentLogMode {
+		if m.subagentDrawerCompact {
+			// Compact strip: any click expands (same as enter).
+			if m.pointerInSubagentDrawer(mu.Y) || m.subagentHeaderAt(mu.Y) {
+				m = m.clearTextSelection()
+				m = m.clearPromptSelection()
+				return m.expandSubagentDrawer(), nil
+			}
+		} else {
+			// Full list: title collapses to summary; rows open logs.
+			if m.subagentHeaderAt(mu.Y) {
+				m = m.clearTextSelection()
+				m = m.clearPromptSelection()
+				return m.collapseSubagentDrawerToSummary(), nil
+			}
+			if idx, ok := m.subagentIndexAtScreenY(mu.Y); ok {
+				m = m.clearTextSelection()
+				m = m.clearPromptSelection()
+				m.subagentCursor = idx
+				return m.openSelectedSubagentLog()
+			}
+			if m.pointerInSubagentDrawer(mu.Y) {
+				return m, nil
+			}
+		}
+	}
+	// Composer click-to-caret / drag-select (before transcript hits).
+	if next, cmd, hit := m.mousePressPrompt(mu); hit {
+		return next, cmd
+	}
+	// Click outside the prompt clears an active composer selection.
+	if m.promptSel.active || m.promptSel.dragging {
+		m = m.clearPromptSelection()
+	}
+	if m.settingsMode {
+		if next, cmd, hit := m.settingsHit(mu.X, mu.Y, mu.Button); hit {
+			return next, cmd
+		}
+	}
+	// Full-screen sub-agent log card: [x] closes back to the drawer list.
+	if m.subagentLogMode {
+		if next, cmd, hit := m.subagentLogHit(mu.X, mu.Y, mu.Button); hit {
+			return next, cmd
+		}
+	}
 	if mu.Button == tea.MouseLeft && m.jumpBarVisible() && mu.Y == m.jumpBarRow() {
 		m = m.clearTextSelection()
 		m.transcript.GotoBottom()
 		return m, nil
 	}
+	// Medium-style user-turn rail: jump to that "you" message.
+	if mu.Button == tea.MouseLeft {
+		if idx, ok := m.userNavIndexAtScreen(mu.X, mu.Y); ok {
+			m = m.clearTextSelection()
+			return m.jumpToUserTurn(idx)
+		}
+	}
 	if mu.Button == tea.MouseLeft && m.sessionPickerMode {
+		if x0, y, x1, ok := m.sessionCloseRect(); ok && mu.Y == y && mu.X >= x0 && mu.X < x1 {
+			return m.closeSessionPicker(), nil
+		}
 		if idx, ok := m.sessionIndexAtScreenY(mu.Y); ok {
 			sess := m.sessionItems[idx]
 			m = m.closeSessionPicker()
@@ -35,10 +113,20 @@ func (m Model) mousePress(msg tea.MouseClickMsg) (Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	if !m.pickerMode && !m.slashMode {
-		if _, top, right, bottom, ok := m.modelStatusRect(); ok && mu.X < right && mu.Y >= top && mu.Y < bottom {
+	if !m.pickerMode && !m.slashMode && !m.subagentPickerMode {
+		if left, top, right, bottom, ok := m.subsStatusRect(); ok && mu.X >= left && mu.X < right && mu.Y >= top && mu.Y < bottom {
 			m = m.clearTextSelection()
-			return m.openPicker(), nil
+			return m.openSubagentPicker(), nil
+		}
+		// model/variant chips are handled earlier so they work with drawer open
+		if m.helpMode {
+			if x0, y, x1, ok := m.helpCloseRect(); ok && mu.Y == y && mu.X >= x0 && mu.X < x1 {
+				m.helpMode = false
+				return m, nil
+			}
+		}
+		if panel := m.todoPanelView(); panel != "" && mu.Y >= lipgloss.Height(m.headerView()) && mu.Y < m.transcriptTop() {
+			return m.toggleTodos(), nil
 		}
 	}
 	for _, target := range []int{0, 1} {
@@ -152,12 +240,22 @@ func (m Model) applyJump(target, y int) Model {
 
 func (m Model) transcriptTop() int {
 	// headerView has no trailing newline; the \n after it in chatScreen
-	// only ends that row, it does not insert a blank line.
-	return lipgloss.Height(m.headerView())
+	// only ends that row, it does not insert a blank line. Same for the
+	// todo strip. Adding 1 here pushed every click target one row below
+	// the painted ▸ / ◆ headers (web terminals made that obvious).
+	top := lipgloss.Height(m.headerView())
+	if panel := m.todoPanelView(); panel != "" {
+		top += lipgloss.Height(panel)
+	}
+	return top
 }
 
 func (m Model) transcriptPosition(mu tea.Mouse) (textPosition, bool) {
 	if m.pickerMode || m.slashMode {
+		return textPosition{}, false
+	}
+	// Drawer is a strip above the prompt; transcript above it stays interactive.
+	if m.subagentPickerMode && !m.subagentLogMode && m.pointerInSubagentDrawer(mu.Y) {
 		return textPosition{}, false
 	}
 	top := m.transcriptTop()
@@ -275,7 +373,8 @@ func (m Model) sessionIndexAtScreenY(y int) (int, bool) {
 func (m Model) sessionListScreenTop() int {
 	for i, line := range strings.Split(m.sessionPickerScreen(), "\n") {
 		if strings.Contains(ansi.Strip(line), "RUNS") {
-			return i + 1
+			// Header is followed by a blank row, then the list.
+			return i + 2
 		}
 	}
 	vpH := m.sessionVPHeight()
@@ -361,7 +460,23 @@ func (m Model) selectedText() (string, bool) {
 		if row == end.row {
 			to = end.col
 		}
-		selected = append(selected, ansi.Cut(rows[row], from, to))
+		// Keep on-screen rails/brackets for layout; strip them from the
+		// clipboard so drag-copy yields plain message text.
+		selected = append(selected, stripTranscriptChrome(ansi.Cut(rows[row], from, to)))
 	}
 	return strings.Join(selected, "\n"), true
+}
+
+// stripTranscriptChrome removes left layout markers (work rail, user frame
+// curls) from a copied transcript slice. The markers stay visible in the TUI.
+func stripTranscriptChrome(line string) string {
+	for _, p := range []string{workRail + " ", "╭ ", "╰ "} {
+		if strings.HasPrefix(line, p) {
+			return strings.TrimPrefix(line, p)
+		}
+	}
+	if line == workRail {
+		return ""
+	}
+	return line
 }

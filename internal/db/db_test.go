@@ -3,9 +3,12 @@ package db
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func openTestStore(t *testing.T) *Store {
@@ -28,11 +31,11 @@ func TestMigrateIdempotent(t *testing.T) {
 
 	var n int
 	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master
-WHERE type = 'table' AND name IN ('sessions', 'messages', 'parts', 'tool_calls', 'schema_migrations')`).Scan(&n); err != nil {
+WHERE type = 'table' AND name IN ('sessions', 'messages', 'parts', 'tool_calls', 'subagent_jobs', 'todos', 'schema_migrations')`).Scan(&n); err != nil {
 		t.Fatalf("count tables: %v", err)
 	}
-	if n != 5 {
-		t.Fatalf("got %d tables, want 5", n)
+	if n != 7 {
+		t.Fatalf("got %d tables, want 7", n)
 	}
 
 	if err := s.Migrate(ctx); err != nil {
@@ -41,8 +44,8 @@ WHERE type = 'table' AND name IN ('sessions', 'messages', 'parts', 'tool_calls',
 	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&n); err != nil {
 		t.Fatalf("count migrations: %v", err)
 	}
-	if n != 3 {
-		t.Fatalf("got %d schema_migrations rows, want 3", n)
+	if n != schemaVersion {
+		t.Fatalf("got %d schema_migrations rows, want %d", n, schemaVersion)
 	}
 }
 
@@ -470,6 +473,8 @@ func TestUpdateSessionModel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
+	// time_updated is Unix ms; sleep so the bump is strictly greater.
+	time.Sleep(2 * time.Millisecond)
 	if err := s.UpdateSessionModel(ctx, sess.ID, "gpt-9"); err != nil {
 		t.Fatalf("UpdateSessionModel: %v", err)
 	}
@@ -482,6 +487,67 @@ func TestUpdateSessionModel(t *testing.T) {
 	}
 	if sessions[0].TimeUpdated <= sess.TimeUpdated {
 		t.Errorf("time_updated not bumped: %d <= %d", sessions[0].TimeUpdated, sess.TimeUpdated)
+	}
+}
+
+func TestInsertMessageBumpsSessionTimeUpdated(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	// Fixed created/updated so a later message cannot match by chance.
+	sess, err := s.CreateSession(ctx, Session{
+		Directory:   "/a",
+		TimeCreated: 1_000,
+		TimeUpdated: 1_000,
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if sess.TimeCreated != 1_000 || sess.TimeUpdated != 1_000 {
+		t.Fatalf("session timestamps not preserved: %+v", sess)
+	}
+	time.Sleep(2 * time.Millisecond)
+	msg, err := s.InsertMessage(ctx, Message{SessionID: sess.ID, Role: "user"})
+	if err != nil {
+		t.Fatalf("InsertMessage: %v", err)
+	}
+	if msg.TimeCreated == 0 {
+		t.Fatal("message time_created not filled")
+	}
+	got, err := s.GetSession(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if got.TimeCreated != 1_000 {
+		t.Errorf("time_created changed: %d", got.TimeCreated)
+	}
+	if got.TimeUpdated < msg.TimeCreated {
+		t.Errorf("time_updated = %d, want >= message time %d", got.TimeUpdated, msg.TimeCreated)
+	}
+	if got.TimeUpdated <= sess.TimeUpdated {
+		t.Errorf("time_updated not bumped: %d <= %d", got.TimeUpdated, sess.TimeUpdated)
+	}
+}
+
+func TestTouchSessionBumpsTimeUpdated(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	sess, err := s.CreateSession(ctx, Session{Directory: "/a", TimeCreated: 50, TimeUpdated: 50})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	time.Sleep(2 * time.Millisecond)
+	if err := s.TouchSession(ctx, sess.ID); err != nil {
+		t.Fatalf("TouchSession: %v", err)
+	}
+	got, err := s.GetSession(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if got.TimeCreated != 50 {
+		t.Errorf("time_created changed: %d", got.TimeCreated)
+	}
+	if got.TimeUpdated <= 50 {
+		t.Errorf("time_updated not bumped: %d", got.TimeUpdated)
 	}
 }
 
@@ -579,5 +645,382 @@ func TestRepairSessionDirectories(t *testing.T) {
 	}
 	if len(again) != 1 || again[0].Directory != project {
 		t.Fatalf("second repair changed rows: %+v", again)
+	}
+}
+
+func TestConcurrentWritersNoBusy(t *testing.T) {
+	// Simulates parent + several sub-agent sessions writing parts at once.
+	// Pre-fix this failed with SQLITE_BUSY under a multi-conn pool.
+	ctx := context.Background()
+	s := openTestStore(t)
+
+	const agents = 12
+	const partsPer = 20
+	type pair struct {
+		sess Session
+		msg  Message
+	}
+	pairs := make([]pair, agents)
+	for i := 0; i < agents; i++ {
+		sess, err := s.CreateSession(ctx, Session{Directory: "/work", Title: "child"})
+		if err != nil {
+			t.Fatalf("CreateSession %d: %v", i, err)
+		}
+		msg, err := s.InsertMessage(ctx, Message{SessionID: sess.ID, Role: "assistant", Agent: "sub"})
+		if err != nil {
+			t.Fatalf("InsertMessage %d: %v", i, err)
+		}
+		pairs[i] = pair{sess: sess, msg: msg}
+	}
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, agents*partsPer)
+	for i := 0; i < agents; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			msgID := pairs[idx].msg.ID
+			for j := 0; j < partsPer; j++ {
+				text := fmt.Sprintf("agent-%d-part-%d", idx, j)
+				if _, err := s.InsertPart(ctx, Part{MessageID: msgID, Type: "text", Text: &text}); err != nil {
+					errCh <- err
+					return
+				}
+				if j%3 == 0 {
+					if _, err := s.InsertMessage(ctx, Message{SessionID: pairs[idx].sess.ID, Role: "user"}); err != nil {
+						errCh <- err
+						return
+					}
+				}
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatalf("concurrent write: %v", err)
+		}
+	}
+}
+
+func TestListChildSessionsHiddenFromMain(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	parent, err := s.CreateSession(ctx, Session{Directory: "/work", Title: "parent"})
+	if err != nil {
+		t.Fatalf("parent: %v", err)
+	}
+	pid := parent.ID
+	child, err := s.CreateSession(ctx, Session{
+		Directory:       "/work",
+		Title:           "agent_alpha",
+		ParentSessionID: &pid,
+		Kind:            SessionKindSubagent,
+	})
+	if err != nil {
+		t.Fatalf("child: %v", err)
+	}
+	main, err := s.ListSessionsByDir(ctx, "/work")
+	if err != nil {
+		t.Fatalf("ListSessionsByDir: %v", err)
+	}
+	if len(main) != 1 || main[0].ID != parent.ID {
+		t.Fatalf("main list = %+v", main)
+	}
+	kids, err := s.ListChildSessions(ctx, parent.ID)
+	if err != nil {
+		t.Fatalf("ListChildSessions: %v", err)
+	}
+	if len(kids) != 1 || kids[0].ID != child.ID {
+		t.Fatalf("kids = %+v", kids)
+	}
+}
+
+func TestSubagentJobRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	parent, err := s.CreateSession(ctx, Session{Directory: "/work", Title: "parent"})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	// Optional FKs require real parent part / child session when set.
+	am, err := s.InsertMessage(ctx, Message{SessionID: parent.ID, Role: "assistant"})
+	if err != nil {
+		t.Fatalf("InsertMessage: %v", err)
+	}
+	part, err := s.InsertPart(ctx, Part{MessageID: am.ID, Type: "tool", ToolName: strPtr("task"), ToolStatus: strPtr("completed")})
+	if err != nil {
+		t.Fatalf("InsertPart: %v", err)
+	}
+	pid := parent.ID
+	child, err := s.CreateSession(ctx, Session{
+		Directory: "/work", Title: "child", ParentSessionID: &pid, Kind: SessionKindSubagent,
+	})
+	if err != nil {
+		t.Fatalf("child session: %v", err)
+	}
+	job := SubagentJob{
+		ID:              "sub_testjob01aabbcc",
+		ParentSessionID: parent.ID,
+		ParentPartID:    part.ID,
+		Name:            "layout-audit",
+		Role:            "explore",
+		Status:          "queued",
+		Prompt:          "audit layout",
+		Description:     "layout",
+		MaxSteps:        32,
+		TimeoutMS:       60000,
+	}
+	if err := s.UpsertSubagentJob(ctx, job); err != nil {
+		t.Fatalf("UpsertSubagentJob: %v", err)
+	}
+	got, err := s.GetSubagentJob(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("GetSubagentJob: %v", err)
+	}
+	if got.Name != "layout-audit" || got.Status != "queued" || got.Prompt != "audit layout" {
+		t.Fatalf("got %+v", got)
+	}
+	got.Status = "completed"
+	got.Summary = "all good"
+	got.ChildSessionID = child.ID
+	if err := s.UpsertSubagentJob(ctx, got); err != nil {
+		t.Fatalf("Upsert completed: %v", err)
+	}
+	list, err := s.ListSubagentJobs(ctx, parent.ID)
+	if err != nil || len(list) != 1 {
+		t.Fatalf("ListSubagentJobs: %v %#v", err, list)
+	}
+	if list[0].Summary != "all good" || list[0].Status != "completed" {
+		t.Fatalf("list row: %+v", list[0])
+	}
+	open, err := s.ListOpenSubagentJobs(ctx)
+	if err != nil {
+		t.Fatalf("ListOpen: %v", err)
+	}
+	if len(open) != 0 {
+		t.Fatalf("open should be empty after completed, got %#v", open)
+	}
+}
+
+func TestForeignKeysEnabled(t *testing.T) {
+	s := openTestStore(t)
+	var on int
+	if err := s.db.QueryRow(`PRAGMA foreign_keys`).Scan(&on); err != nil {
+		t.Fatalf("PRAGMA foreign_keys: %v", err)
+	}
+	if on != 1 {
+		t.Fatalf("foreign_keys = %d, want 1", on)
+	}
+	if err := s.foreignKeyCheck(context.Background()); err != nil {
+		t.Fatalf("foreign_key_check: %v", err)
+	}
+}
+
+func TestParentSessionFKRejectsOrphan(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	missing := "ses_does_not_exist"
+	_, err := s.CreateSession(ctx, Session{
+		Directory:       "/work",
+		ParentSessionID: &missing,
+		Kind:            SessionKindSubagent,
+	})
+	if err == nil {
+		t.Fatal("expected FK failure for missing parent_session_id")
+	}
+}
+
+func TestChildSessionsCascadeOnParentDelete(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	parent, err := s.CreateSession(ctx, Session{Directory: "/work", Title: "main"})
+	if err != nil {
+		t.Fatalf("parent: %v", err)
+	}
+	pid := parent.ID
+	child, err := s.CreateSession(ctx, Session{
+		Directory:       "/work",
+		Title:           "child",
+		ParentSessionID: &pid,
+		Kind:            SessionKindSubagent,
+	})
+	if err != nil {
+		t.Fatalf("child: %v", err)
+	}
+	text := "hi"
+	um, err := s.InsertMessage(ctx, Message{SessionID: child.ID, Role: "user"})
+	if err != nil {
+		t.Fatalf("msg: %v", err)
+	}
+	if _, err := s.InsertPart(ctx, Part{MessageID: um.ID, Type: "text", Text: &text}); err != nil {
+		t.Fatalf("part: %v", err)
+	}
+	if err := s.DeleteSession(ctx, parent.ID); err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	if _, err := s.GetSession(ctx, child.ID); err == nil {
+		t.Fatal("child session should be cascade-deleted")
+	}
+	msgs, err := s.ListMessages(ctx, child.ID)
+	if err != nil {
+		t.Fatalf("ListMessages: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("child messages should cascade, got %d", len(msgs))
+	}
+}
+
+func TestSubagentJobChildFKSetNull(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	parent, err := s.CreateSession(ctx, Session{Directory: "/work", Title: "main"})
+	if err != nil {
+		t.Fatalf("parent: %v", err)
+	}
+	pid := parent.ID
+	child, err := s.CreateSession(ctx, Session{
+		Directory:       "/work",
+		Title:           "agent",
+		ParentSessionID: &pid,
+		Kind:            SessionKindSubagent,
+	})
+	if err != nil {
+		t.Fatalf("child: %v", err)
+	}
+	job := SubagentJob{
+		ID:              "sub_fksetnull01aabb",
+		ParentSessionID: parent.ID,
+		ChildSessionID:  child.ID,
+		Name:            "job",
+		Role:            "explore",
+		Status:          "completed",
+		Prompt:          "p",
+		Summary:         "report body",
+	}
+	if err := s.UpsertSubagentJob(ctx, job); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	// Delete only the child session row (not the parent).
+	if err := s.DeleteSession(ctx, child.ID); err != nil {
+		t.Fatalf("delete child: %v", err)
+	}
+	got, err := s.GetSubagentJob(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("GetSubagentJob: %v", err)
+	}
+	if got.ChildSessionID != "" {
+		t.Fatalf("child_session_id = %q, want empty after SET NULL", got.ChildSessionID)
+	}
+	if got.Summary != "report body" {
+		t.Fatalf("summary lost: %q", got.Summary)
+	}
+}
+
+func TestUniqueMessageSeq(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	sess, err := s.CreateSession(ctx, Session{Directory: "/work"})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	m1, err := s.InsertMessage(ctx, Message{SessionID: sess.ID, Role: "user"})
+	if err != nil {
+		t.Fatalf("InsertMessage: %v", err)
+	}
+	// Force a duplicate seq via raw insert.
+	_, err = s.db.ExecContext(ctx, `INSERT INTO messages (id, session_id, role, time_created, seq, visible)
+VALUES ('msg_dupseq00000001', ?, 'user', 1, ?, 1)`, sess.ID, m1.Seq)
+	if err == nil {
+		t.Fatal("expected unique seq violation")
+	}
+}
+
+func TestSchemaHasIntegrityIndexes(t *testing.T) {
+	s := openTestStore(t)
+	want := []string{
+		"idx_messages_session_seq",
+		"idx_parts_message_seq",
+		"idx_sessions_dir_kind_updated",
+		"idx_sessions_parent_kind_updated",
+		"idx_subagent_jobs_parent_started",
+		"idx_subagent_jobs_open",
+	}
+	for _, name := range want {
+		var n int
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?`, name).Scan(&n); err != nil {
+			t.Fatalf("lookup %s: %v", name, err)
+		}
+		if n != 1 {
+			t.Errorf("index %s missing", name)
+		}
+	}
+	// Unique seq indexes.
+	var sql string
+	if err := s.db.QueryRow(`SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_messages_session_seq'`).Scan(&sql); err != nil {
+		t.Fatalf("index sql: %v", err)
+	}
+	if !strings.Contains(strings.ToUpper(sql), "UNIQUE") {
+		t.Fatalf("idx_messages_session_seq not UNIQUE: %s", sql)
+	}
+}
+
+func TestParentDeleteRemovesSubagentJobs(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	parent, err := s.CreateSession(ctx, Session{Directory: "/work"})
+	if err != nil {
+		t.Fatalf("parent: %v", err)
+	}
+	job := SubagentJob{
+		ID: "sub_parentdel01aabb", ParentSessionID: parent.ID,
+		Name: "j", Role: "explore", Status: "completed", Prompt: "p",
+	}
+	if err := s.UpsertSubagentJob(ctx, job); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	if err := s.DeleteSession(ctx, parent.ID); err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	if _, err := s.GetSubagentJob(ctx, job.ID); err == nil {
+		t.Fatal("job should cascade-delete with parent")
+	}
+}
+
+func TestReplaceAndListTodos(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	sess, err := s.CreateSession(ctx, Session{Directory: t.TempDir(), Title: "t"})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if err := s.ReplaceTodos(ctx, sess.ID, []Todo{
+		{Content: "a", Status: TodoPending},
+		{Content: "b", Status: TodoInProgress},
+		{Content: "c", Status: TodoCompleted},
+	}); err != nil {
+		t.Fatalf("ReplaceTodos: %v", err)
+	}
+	got, err := s.ListTodos(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("ListTodos: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("len = %d, want 3", len(got))
+	}
+	if got[0].Content != "a" || got[0].Seq != 0 || got[1].Status != TodoInProgress {
+		t.Fatalf("got = %+v", got)
+	}
+	// Replace-all shrinks the list.
+	if err := s.ReplaceTodos(ctx, sess.ID, []Todo{{Content: "only", Status: TodoCompleted}}); err != nil {
+		t.Fatal(err)
+	}
+	got, err = s.ListTodos(ctx, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Content != "only" || got[0].Status != TodoCompleted {
+		t.Fatalf("after replace = %+v", got)
 	}
 }

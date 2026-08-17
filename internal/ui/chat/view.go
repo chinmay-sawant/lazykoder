@@ -17,8 +17,23 @@ import (
 
 // View renders the picker card, slash menu, confirm overlay, or the chat layout.
 func (m Model) View() tea.View {
+	return m.newView(m.frame())
+}
+
+// frame is the unpainted screen string. Mouse hit-testing scans this after
+// the same Width/Height paint as newView so click rows match the terminal.
+func (m Model) frame() string {
 	if m.sessionPickerMode {
-		return m.newView(m.sessionPickerScreen())
+		return m.sessionPickerScreen()
+	}
+	if m.subagentLogMode {
+		return m.subagentLogScreen()
+	}
+	if m.settingsMode {
+		return m.settingsScreen()
+	}
+	if m.helpMode {
+		return m.helpScreen()
 	}
 	screen := m.chatScreen()
 	overlayH := m.composerTop()
@@ -28,13 +43,20 @@ func (m Model) View() tea.View {
 	if m.askMode {
 		screen = overlayOn(screen, m.width, overlayH, m.askOverlay())
 	}
-	if m.helpMode {
-		screen = overlayOn(screen, m.width, overlayH, m.helpOverlay())
-	}
 	if m.filePickerMode {
 		screen = overlayOn(screen, m.width, overlayH, m.filePickerOverlay())
 	}
-	return m.newView(screen)
+	return screen
+}
+
+// paintedLines is the alt-screen cell grid (ANSI stripped per line).
+func (m Model) paintedLines() []string {
+	painted := lipgloss.NewStyle().
+		Background(theme.ColorBg()).
+		Width(max(1, m.width)).
+		Height(max(1, m.height)).
+		Render(m.frame())
+	return strings.Split(painted, "\n")
 }
 
 // newView paints a full-size solid black layer so the host terminal
@@ -49,31 +71,60 @@ func (m Model) newView(content string) tea.View {
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
 	v.BackgroundColor = theme.ColorBg()
+	// Request key disambiguation so shift+enter is distinct from enter
+	// (Kitty keyboard protocol / Windows console). Harmless when unsupported.
+	v.KeyboardEnhancements.ReportAlternateKeys = true
 	return v
 }
 
 func (m Model) chatScreen() string {
-	var b strings.Builder
-	b.WriteString(m.headerView())
-	b.WriteString("\n")
-	b.WriteString(m.transcriptView())
-	b.WriteString("\n")
-	b.WriteString(m.alertRow())
-	b.WriteString("\n")
+	var top strings.Builder
+	top.WriteString(m.headerView())
+	top.WriteString("\n")
+	// Tracker strip: checklist under brand/title, above the transcript.
+	if panel := m.todoPanelView(); panel != "" {
+		top.WriteString(panel)
+		top.WriteString("\n")
+	}
+	top.WriteString(m.transcriptView())
+	top.WriteString("\n")
+	top.WriteString(m.alertRow())
+
+	var bottom strings.Builder
 	if m.slashMode {
-		b.WriteString(m.slashView())
-		b.WriteString("\n")
+		bottom.WriteString("\n")
+		bottom.WriteString(m.slashView())
 	}
 	if m.pickerMode {
-		b.WriteString(m.pickerView())
-		b.WriteString("\n")
+		bottom.WriteString("\n")
+		bottom.WriteString(m.pickerView())
+	}
+	// Sub-agent drawer sits above the prompt like the /model list.
+	if m.subagentPickerMode && !m.subagentLogMode {
+		bottom.WriteString("\n")
+		bottom.WriteString(m.subagentDrawerView())
 	}
 	if m.err != "" {
-		b.WriteString(errStyle.Width(max(minPaneWidth, m.width)).Render(m.err))
-		b.WriteString("\n")
+		bottom.WriteString("\n")
+		bottom.WriteString(errStyle.Width(max(minPaneWidth, m.width)).Render(m.err))
 	}
-	b.WriteString(m.composerBlock())
-	return b.String()
+	bottom.WriteString("\n")
+	bottom.WriteString(m.composerBlock())
+
+	// Pin the composer to the bottom of the terminal: pad between alert row
+	// and the lower chrome (drawers / prompt) when content is short.
+	topS := top.String()
+	if m.hasUserNav() && len(m.items) > 0 {
+		topS = m.applyUserNavRail(topS)
+	}
+	botS := bottom.String()
+	topH := lipgloss.Height(topS)
+	botH := lipgloss.Height(botS)
+	pad := max(0, m.height-topH-botH)
+	if pad == 0 {
+		return topS + botS
+	}
+	return topS + strings.Repeat("\n", pad) + botS
 }
 
 func overlayOn(base string, width, height int, card string) string {
@@ -144,12 +195,25 @@ func (m Model) showLiveStatus() bool {
 }
 
 func (m Model) liveStatusView() string {
+	w := max(minPaneWidth, m.width)
 	label := strings.TrimSpace(m.activity)
 	if label == "" {
 		label = thinkingLabel
 	}
-	line := m.workRailMark() + " " + hintStyle.Render(label)
-	return lipgloss.NewStyle().Width(max(minPaneWidth, m.width)).Render(line)
+	// Primary line: work rail + live activity so the user can see progress.
+	status := m.workRailMark() + " " + busyStyle.Render("working") + "  " + hintStyle.Render(label)
+	status = lipgloss.NewStyle().Width(w).MaxWidth(w).Render(truncateRunes(status, w))
+	if !m.busy {
+		return "\n" + status
+	}
+	// Busy action strip (Grok Build-style): cancel / send now / edit draft.
+	draft := strings.TrimSpace(m.prompt.Value())
+	actions := "esc cancel  •  type to edit draft"
+	if draft != "" {
+		actions = "enter send now  •  esc cancel  •  type to edit draft"
+	}
+	actionLine := hintStyle.Width(w).Render(truncateRunes(actions, w))
+	return "\n" + status + "\n" + actionLine
 }
 
 // jumpBarVisible reports whether the transcript is scrolled up so the
@@ -157,7 +221,10 @@ func (m Model) liveStatusView() string {
 // Scrolling up keeps the view pinned until the user clicks the icon, so new
 // output never yanks the view to the bottom.
 func (m Model) jumpBarVisible() bool {
-	if m.pickerMode || m.slashMode || m.confirmMode || m.askMode || m.helpMode || m.filePickerMode || m.sessionPickerMode {
+	// Keep the jump-to-latest affordance available while the sub-agent drawer
+	// is open so a stuck mid-scroll background can still be recovered. Full-
+	// screen overlays still hide it.
+	if m.pickerMode || m.slashMode || m.confirmMode || m.askMode || m.helpMode || m.settingsMode || m.filePickerMode || m.sessionPickerMode {
 		return false
 	}
 	return !m.transcript.AtBottom()
@@ -193,10 +260,13 @@ func (m Model) alertText() string {
 	return ""
 }
 
-// tipsVisible reports whether the rotating usage tip should show on the
-// alert row: only while the user is doing nothing (idle, no overlay).
+// tipsVisible reports whether the rotating usage tip should show.
+// Compact terminals keep tips out of the transcript gutter (they collide).
 func (m Model) tipsVisible() bool {
 	if m.busy || m.quitConfirm || m.copyNotice != "" {
+		return false
+	}
+	if m.width < 100 {
 		return false
 	}
 	return m.promptEditing()
@@ -212,6 +282,9 @@ func (m Model) composerTop() int {
 	if m.pickerMode {
 		top += 1 + lipgloss.Height(m.pickerView())
 	}
+	if m.subagentPickerMode && !m.subagentLogMode {
+		top += 1 + lipgloss.Height(m.subagentDrawerView())
+	}
 	if m.err != "" {
 		top += 1 + lipgloss.Height(errStyle.Width(max(minPaneWidth, m.width)).Render(m.err))
 	}
@@ -220,28 +293,32 @@ func (m Model) composerTop() int {
 
 func (m Model) composerBlock() string {
 	if m.showLiveStatus() {
-		return m.liveStatusView() + "\n\n" + m.promptLine()
+		// Status + action strip sit directly above the input box.
+		return m.liveStatusView() + "\n" + m.promptLine()
 	}
 	return m.promptLine()
 }
 
 func (m Model) promptLine() string {
-	innerW := max(minPaneWidth, m.width-2)
-	p := m.prompt
+	contentW := m.promptContentWidth()
+	// Keep live prompt width identical to paint/hit-test wrap width.
+	m.prompt.SetWidth(contentW)
 	h := m.promptHeight()
-	p.SetHeight(h)
-	p.SetWidth(max(minPaneWidth, innerW-2))
-	if m.promptSelectAll {
-		st := p.Styles()
-		st.Focused.Text = selectionStyle
-		st.Focused.CursorLine = selectionStyle
-		p.SetStyles(st)
+	m.prompt.SetHeight(h)
+	// Always paint with hard-wrap body so mouse columns match the pixels
+	// (bubbles soft-wrap View was skewing clicks to the right on lower rows).
+	text := m.promptBodyPaint(contentW, h)
+	if len(m.promptVisualLines()) > h {
+		// Scrollbar uses the same scroll offset as promptBodyPaint.
+		visN := len(m.promptVisualLines())
+		yOff := m.promptScrollOffset(visN, h)
+		percent := 0.0
+		if visN > h {
+			percent = float64(yOff) / float64(visN-h)
+		}
+		text = withScrollbar(text, contentW, h, percent, true)
 	}
-	text := p.View()
-	if m.visualPromptLines() > h {
-		text = withScrollbar(text, p.Width(), h, p.ScrollPercent(), true)
-	}
-	body := lipgloss.JoinVertical(lipgloss.Left, text, m.composerFooter(innerW-2))
+	body := lipgloss.JoinVertical(lipgloss.Left, text, m.composerFooter(contentW))
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(theme.ColorBorder()).
@@ -292,19 +369,41 @@ func (m Model) footerPieces() (tokens, cache, cost, tps string) {
 
 func (m Model) footerStatParts() []string {
 	tokens, cache, cost, tps := m.footerPieces()
-	parts := make([]string, 0, 4)
+	parts := make([]string, 0, 5)
 	for _, p := range []string{tokens, cache, cost, tps} {
 		if p != "" {
 			parts = append(parts, p)
 		}
 	}
+	if s := m.subsStatusLabel(); s != "" {
+		parts = append(parts, s)
+	}
 	return parts
 }
 
+// subsStatusLabel is a persistent footer chip for this session's sub-agents.
+// Shows live/total when any exist (including completed children from the store).
+func (m Model) subsStatusLabel() string {
+	if m.session == nil {
+		return ""
+	}
+	live, total := m.subagentCounts()
+	if total <= 0 {
+		return ""
+	}
+	if live > 0 {
+		return fmt.Sprintf("subs:%d/%d", live, total)
+	}
+	return fmt.Sprintf("subs:%d", total)
+}
+
 func (m Model) fitFooterRight(budget int) string {
-	model := m.modelDisplayLabel()
+	model := m.modelChipLabel()
+	variant := m.variantChipLabel()
 	tokens, cache, cost, tps := m.footerPieces()
-	try := func(includeModel bool, bits ...string) string {
+	subs := m.subsStatusLabel()
+	chips := strings.TrimSpace(model + "  " + variant)
+	try := func(lead string, bits ...string) string {
 		parts := make([]string, 0, len(bits))
 		for _, b := range bits {
 			if b != "" {
@@ -312,15 +411,15 @@ func (m Model) fitFooterRight(budget int) string {
 			}
 		}
 		stats := strings.Join(parts, "  ")
-		if includeModel {
-			right := joinFooter(model, stats)
+		if lead != "" {
+			right := joinFooter(lead, stats)
 			if lipgloss.Width(right) <= budget {
 				return right
 			}
 			if stats != "" {
-				modelBudget := budget - lipgloss.Width(stats) - 2
-				if modelBudget >= 4 {
-					return truncateRunes(model, modelBudget) + "  " + stats
+				chipBudget := budget - lipgloss.Width(stats) - 2
+				if chipBudget >= 4 {
+					return truncateRunes(lead, chipBudget) + "  " + stats
 				}
 			}
 			return ""
@@ -330,28 +429,37 @@ func (m Model) fitFooterRight(budget int) string {
 		}
 		return ""
 	}
-	if s := try(true, tokens, cache, cost, tps); s != "" {
+	if s := try(chips, tokens, cache, cost, tps, subs); s != "" {
 		return s
 	}
-	if s := try(true, tokens, cache, cost); s != "" {
+	if s := try(model, tokens, cache, cost, tps, subs); s != "" {
 		return s
 	}
-	if s := try(true, tokens, cache); s != "" {
+	if s := try(chips, tokens, cache, cost, subs); s != "" {
 		return s
 	}
-	if s := try(true, cache); s != "" {
+	if s := try(model, tokens, cache, cost, subs); s != "" {
 		return s
 	}
-	if s := try(false, tokens, cache, cost, tps); s != "" {
+	if s := try(model, tokens, cache, subs); s != "" {
 		return s
 	}
-	if s := try(false, cache); s != "" {
+	if s := try(model, cache, subs); s != "" {
+		return s
+	}
+	if s := try(model, subs); s != "" {
+		return s
+	}
+	if s := try("", tokens, cache, cost, tps); s != "" {
+		return s
+	}
+	if s := try("", cache); s != "" {
 		return s
 	}
 	if cache != "" {
 		return truncateRunes(cache, budget)
 	}
-	return truncateRunes(model, budget)
+	return truncateRunes(chips, budget)
 }
 
 func joinFooter(model, stats string) string {
@@ -425,6 +533,11 @@ func (m Model) composerLeft() string {
 	switch {
 	case m.err != "":
 		return errStyle.Render("error")
+	case m.busy:
+		if strings.TrimSpace(m.prompt.Value()) != "" {
+			return busyStyle.Render("enter send now")
+		}
+		return hintStyle.Render("edit")
 	default:
 		if _, ok := m.selectedHistoryItem(); ok {
 			return hintStyle.Render("history: ↑/↓ previous/next")
@@ -434,12 +547,20 @@ func (m Model) composerLeft() string {
 }
 
 func (m Model) transcriptRenderHeight() int {
+	// Reserve every row that sits outside the transcript so the composer
+	// never gets pushed off-screen by drawers (model, sub-agents, slash).
 	fixedRows := lipgloss.Height(m.headerView()) + 1 + 1 + 1 + lipgloss.Height(m.composerBlock())
+	if panel := m.todoPanelView(); panel != "" {
+		fixedRows += lipgloss.Height(panel)
+	}
 	if m.slashMode {
 		fixedRows += 1 + lipgloss.Height(m.slashView())
 	}
 	if m.pickerMode {
 		fixedRows += 1 + lipgloss.Height(m.pickerView())
+	}
+	if m.subagentPickerMode && !m.subagentLogMode {
+		fixedRows += 1 + lipgloss.Height(m.subagentDrawerView())
 	}
 	if m.err != "" {
 		fixedRows += lipgloss.Height(errStyle.Width(max(minPaneWidth, m.width)).Render(m.err))
@@ -455,7 +576,7 @@ func (m Model) paintedTranscript() viewport.Model {
 	h := m.transcriptRenderHeight()
 	atBottom := m.transcript.AtBottom()
 	vp := m.transcript
-	vp.SetWidth(max(minPaneWidth, m.width-1))
+	vp.SetWidth(m.transcriptContentWidth())
 	vp.SetHeight(h)
 	if atBottom {
 		vp.GotoBottom()
@@ -463,70 +584,137 @@ func (m Model) paintedTranscript() viewport.Model {
 	return vp
 }
 
-// transcriptView renders the transcript viewport with a right-edge scrollbar.
+// transcriptView renders the transcript viewport. When user-turn ticks exist
+// they occupy the far-right column; otherwise a scrollbar is used on overflow.
 func (m Model) transcriptView() string {
 	h := m.transcriptRenderHeight()
+	w := max(minPaneWidth, m.width)
 	if len(m.items) == 0 {
 		empty := strings.Join([]string{
-			lipgloss.NewStyle().Foreground(theme.ColorText()).Bold(true).Render("new run"),
+			lipgloss.NewStyle().Foreground(theme.ColorText()).Bold(true).Render("new session"),
 			hintStyle.Render("ask anything about this project"),
-			hintStyle.Render("/ commands   @ files   ctrl+s history"),
+			hintStyle.Render("/ commands   @ files   ? help   /settings"),
 		}, "\n")
-		return lipgloss.NewStyle().Width(max(minPaneWidth, m.width)).Height(h).Render(empty)
+		return lipgloss.NewStyle().Width(w).Height(h).Align(lipgloss.Center, lipgloss.Center).Render(empty)
 	}
 	vp := m.paintedTranscript()
 	view := vp.View()
 	if m.selection.active && m.selection.hasRange() {
 		view = m.highlightTranscriptSelection(view, vp.YOffset())
 	}
-	return withScrollbar(view, vp.Width(), h, vp.ScrollPercent(), vp.TotalLineCount() > h)
+	contentW := vp.Width()
+	// User-nav rail is painted in chatScreen over a stable span so an
+	// open todo list does not move the ticks. Still skip the scrollbar.
+	if m.hasUserNav() {
+		return view
+	}
+	overflow := vp.TotalLineCount() > h
+	return withScrollbar(view, contentW, h, vp.ScrollPercent(), overflow)
+}
+
+func (m Model) helpScreen() string {
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, m.helpOverlay())
 }
 
 func (m Model) helpOverlay() string {
 	rows := [][2]string{
-		{"enter", "send"},
+		{"enter", "send / send now if busy"},
 		{"shift+enter", "newline"},
 		{"/", "commands"},
-		{"ctrl+s", "resume"},
-		{"/model", "switch model"},
+		{"/new", "new session"},
+		{"/resume", "past sessions (ctrl+s)"},
+		{"/continue", "after a step-limit stop"},
+		{"/settings", "project defaults"},
+		{"/agents", "sub-agents + logs"},
+		{"/model", "switch live model"},
 		{"/variant", "reasoning effort"},
+		{"/refresh", "reload models.json"},
 		{"@", "mention a file"},
-		{"click model", "switch"},
-		{"t / e", "thinking / expand tool"},
-		{"esc", "cancel turn"},
+		{"click model", "switch model"},
+		{"t / e", "thinking / last tool"},
+		{"ctrl+e", "expand last tool (any prompt)"},
+		{"esc", "cancel turn; twice clears"},
 		{"ctrl+a", "select all"},
-		{"ctrl+←/→", "jump words"},
-		{"ctrl+home/end", "input start/end"},
-		{"ctrl+c", "copy / quit"},
+		{"ctrl+z", "undo prompt"},
+		{"c", "copy selection"},
+		{"ctrl+c", "copy; empty: quit twice"},
 	}
+	keyStyle := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText())
+	actStyle := hintStyle
 	keyW := 0
 	for _, row := range rows {
 		if w := lipgloss.Width(row[0]); w > keyW {
 			keyW = w
 		}
 	}
-	innerW := min(56, max(minPaneWidth, m.width-12))
-	title := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).Width(innerW).Render("keys")
-	var body strings.Builder
-	body.WriteString(title)
-	for _, row := range rows {
-		gap := max(2, keyW-lipgloss.Width(row[0])+2)
-		line := row[0] + strings.Repeat(" ", gap) + row[1]
-		if lipgloss.Width(line) > innerW {
-			line = truncateRunes(line, innerW)
+	innerW := min(64, max(minPaneWidth, m.overlayWidth()-cardBorder-4))
+	twoCol := m.width >= 100
+	colW := innerW
+	if twoCol {
+		colW = max(28, (innerW-2)/2)
+	}
+	title := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).Render("keys")
+	closeBtn := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).Render("[x]")
+	gap := max(1, innerW-lipgloss.Width(title)-lipgloss.Width(closeBtn))
+	header := title + strings.Repeat(" ", gap) + closeBtn
+
+	format := func(row [2]string, width int) string {
+		line := keyStyle.Render(row[0]) + strings.Repeat(" ", max(2, keyW-lipgloss.Width(row[0])+2)) + actStyle.Render(row[1])
+		if lipgloss.Width(line) > width {
+			return truncateRunes(row[0]+"  "+row[1], width)
 		}
-		body.WriteString("\n")
-		body.WriteString(hintStyle.Width(innerW).Render(line))
+		return line
+	}
+	var body strings.Builder
+	if twoCol {
+		mid := (len(rows) + 1) / 2
+		for i := 0; i < mid; i++ {
+			if i > 0 {
+				body.WriteString("\n")
+			}
+			left := format(rows[i], colW)
+			right := ""
+			if i+mid < len(rows) {
+				right = format(rows[i+mid], colW)
+			}
+			pad := max(1, innerW-lipgloss.Width(left)-lipgloss.Width(right))
+			body.WriteString(left + strings.Repeat(" ", pad) + right)
+		}
+	} else {
+		for i, row := range rows {
+			if i > 0 {
+				body.WriteString("\n")
+			}
+			body.WriteString(format(row, innerW))
+		}
 	}
 	body.WriteString("\n")
-	closeGap := max(2, keyW-lipgloss.Width("esc or ?")+2)
-	body.WriteString(hintStyle.Width(innerW).Render("esc or ?" + strings.Repeat(" ", closeGap) + "close"))
+	body.WriteString(hintStyle.Width(innerW).Render("esc or ?  close"))
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(theme.ColorBorder()).
 		Background(theme.ColorBg()).
-		Padding(0, 2).
-		Render(body.String())
+		Padding(1, 2).
+		Width(min(m.overlayWidth(), innerW+cardBorder+4)).
+		Render(lipgloss.JoinVertical(lipgloss.Left, header, body.String()))
+}
+
+func (m Model) helpCloseRect() (x0, y, x1 int, ok bool) {
+	if !m.helpMode {
+		return 0, 0, 0, false
+	}
+	for i, line := range strings.Split(m.helpScreen(), "\n") {
+		plain := ansi.Strip(line)
+		if !strings.Contains(plain, "keys") || !strings.Contains(plain, "[x]") {
+			continue
+		}
+		start, end, found := displaySpan(plain, "[x]")
+		if !found {
+			continue
+		}
+		return max(0, start-1), i, end + 1, true
+	}
+	return 0, 0, 0, false
 }
 
 func (m Model) headerView() string {
@@ -538,52 +726,70 @@ func (m Model) headerView() string {
 	}
 	sep := hintStyle.Render("  ·  ")
 	w := max(minPaneWidth, m.width)
-	right := hintStyle.Render(cwd)
-	avail := w - lipgloss.Width(brand) - lipgloss.Width(sep) - lipgloss.Width(right) - lipgloss.Width(sep)
+	showCwd := cwd != "" && cwd != "lazykoder" && cwd != "."
+	right := ""
+	if showCwd {
+		right = hintStyle.Render(cwd)
+	}
+	rightW := 0
+	if right != "" {
+		rightW = lipgloss.Width(sep) + lipgloss.Width(right)
+	}
+	avail := w - lipgloss.Width(brand) - lipgloss.Width(sep) - rightW
 	if avail < 8 {
 		row1 := truncateRunes(brand+"  "+title, w)
-		row2 := truncateRunes(cwd, w)
-		return row1 + "\n" + hintStyle.Render(row2)
+		if showCwd {
+			return row1 + "\n" + hintStyle.Render(truncateRunes(cwd, w))
+		}
+		return row1
 	}
 	title = truncateRunes(title, avail)
-	return brand + sep + lipgloss.NewStyle().Foreground(theme.ColorText()).Render(title) + sep + right
+	line := brand + sep + lipgloss.NewStyle().Foreground(theme.ColorText()).Render(title)
+	if right != "" {
+		line += sep + right
+	}
+	return line
 }
 
 func (m Model) confirmOverlay() string {
-	inner := m.confirm.View()
+	innerW := max(minPaneWidth, m.overlayWidth()-cardBorder-4)
+	inner := lipgloss.NewStyle().Width(innerW).Render(m.confirm.View())
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("1")).
+		BorderForeground(theme.ColorDanger()).
+		Background(theme.ColorBg()).
 		Padding(1, 2).
+		Width(min(m.overlayWidth(), innerW+cardBorder+4)).
 		Render(inner)
 }
 
 func (m Model) askOverlay() string {
 	q := m.askQuestion
-	header := q.Header
-	if header == "" {
-		header = "question"
-	}
+	innerW := max(minPaneWidth, m.overlayWidth()-cardBorder-4)
 	var b strings.Builder
-	b.WriteString(lipgloss.NewStyle().Bold(true).Render(q.Question))
-	b.WriteString("\n")
-	b.WriteString(hintStyle.Render(header))
+	b.WriteString(lipgloss.NewStyle().Bold(true).Width(innerW).Render(q.Question))
+	if strings.TrimSpace(q.Header) != "" {
+		b.WriteString("\n")
+		b.WriteString(hintStyle.Width(innerW).Render(q.Header))
+	}
 	b.WriteString("\n")
 	for i, opt := range q.Options {
 		prefix := "  "
 		style := hintStyle
 		if i == m.askCursor {
 			prefix = "▸ "
-			style = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15"))
+			style = lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText())
 		}
-		b.WriteString(style.Render(fmt.Sprintf("%s%d. %s", prefix, i+1, opt)))
+		b.WriteString(style.MaxWidth(innerW).Render(fmt.Sprintf("%s%d. %s", prefix, i+1, opt)))
 		b.WriteString("\n")
 	}
 	b.WriteString(hintStyle.Render("j/k select  •  enter confirm  •  esc cancel"))
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("8")).
+		BorderForeground(theme.ColorBorder()).
+		Background(theme.ColorBg()).
 		Padding(1, 2).
+		Width(min(m.overlayWidth(), innerW+cardBorder+4)).
 		Render(strings.TrimRight(b.String(), "\n"))
 }
 
@@ -592,7 +798,7 @@ func (m Model) askOverlay() string {
 // 1 = picker). ok is false when no scrollbar is shown.
 func (m Model) scrollbarRect(target int) (top, bottom, col int, ok bool) {
 	if target == 0 {
-		if m.pickerMode {
+		if m.pickerMode || m.hasUserNav() {
 			return 0, 0, 0, false
 		}
 		h := m.transcriptRenderHeight()
@@ -612,11 +818,29 @@ func (m Model) scrollbarRect(target int) (top, bottom, col int, ok bool) {
 }
 
 func (m Model) pickerDrawerTop() int {
+	if y, ok := m.pickerHeaderScreenY(); ok {
+		return y
+	}
 	top := m.transcriptTop() + m.transcriptRenderHeight() + 1
 	if m.slashMode {
 		top += 1 + lipgloss.Height(m.slashView())
 	}
 	return top
+}
+
+func (m Model) pickerHeaderScreenY() (int, bool) {
+	if !m.pickerMode {
+		return 0, false
+	}
+	for i, line := range m.paintedLines() {
+		plain := ansi.Strip(line)
+		if strings.Contains(plain, "models  ·") ||
+			strings.Contains(plain, "reasoning  ·") ||
+			strings.Contains(plain, "variants  ·") {
+			return i, true
+		}
+	}
+	return 0, false
 }
 
 // withScrollbar appends a scrollbar column at the right edge of a rendered
@@ -634,7 +858,7 @@ func withScrollbar(v string, width, height int, percent float64, overflow bool) 
 	}
 	thumb := int(percent * float64(height-1))
 	track := lipgloss.NewStyle().Faint(true).Render("░")
-	thumbCell := lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Render("█")
+	thumbCell := lipgloss.NewStyle().Foreground(theme.ColorText()).Render("█")
 	var b strings.Builder
 	for i, line := range lines {
 		if i > 0 {
@@ -670,25 +894,202 @@ func splitPaneWidths(total int) (left, right int) {
 	return left, right
 }
 
+// footerChipHit reports which footer chip contains (x,y). If both model
+// and variant boxes overlap, the closer center wins.
+func (m Model) footerChipHit(x, y int) (hit bool, which string) {
+	ml, mt, mr, mb, mok := m.modelStatusRect()
+	vl, vt, vr, vb, vok := m.variantStatusRect()
+	in := func(l, t, r, b int) bool {
+		return x >= l && x < r && y >= t && y < b
+	}
+	inM := mok && in(ml, mt, mr, mb)
+	inV := vok && in(vl, vt, vr, vb)
+	switch {
+	case inM && inV:
+		mc := (ml + mr) / 2
+		vc := (vl + vr) / 2
+		if absInt(x-vc) < absInt(x-mc) {
+			return true, "variant"
+		}
+		return true, "model"
+	case inV:
+		return true, "variant"
+	case inM:
+		return true, "model"
+	default:
+		return false, ""
+	}
+}
+
+func absInt(n int) int {
+	if n < 0 {
+		return -n
+	}
+	return n
+}
+
 func (m Model) modelStatusRect() (left, top, right, bottom int, ok bool) {
-	if m.busy || m.pickerMode || m.sessionPickerMode {
+	return m.footerChipRect(m.modelChipLabel())
+}
+
+func (m Model) variantStatusRect() (left, top, right, bottom int, ok bool) {
+	return m.footerChipRect(m.variantChipLabel())
+}
+
+func (m Model) footerChipRect(chip string) (left, top, right, bottom int, ok bool) {
+	// Allow hits while the sub-agent drawer or slash menu is open; only
+	// suppress when another full-screen/modal chrome owns the mouse.
+	if chip == "" || m.busy || m.pickerMode || m.sessionPickerMode || m.settingsMode || m.subagentLogMode {
 		return 0, 0, 0, 0, false
 	}
-	leftW := lipgloss.Width(m.composerLeft())
-	label := m.fitFooterRight(max(4, max(minPaneWidth, m.width)-2-leftW-1))
-	top = lipgloss.Height(m.headerView()) + 1 + m.transcriptRenderHeight() + 1 + 1
+	plain, y, found := m.composerFooterPlainLine()
+	if !found {
+		return 0, 0, 0, 0, false
+	}
+	needles := []string{chip}
+	base := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(chip), "▾"))
+	if base != "" && base != chip {
+		needles = append(needles, base+" ▾", base+"▾", base)
+	}
+	for _, n := range needles {
+		if n == "" {
+			continue
+		}
+		if start, end, hit := displaySpan(plain, n); hit {
+			// One column of slack on the left. Do not pad right into
+			// the next chip (model ▾ sits beside variant ▾).
+			return max(0, start-1), y, end, y + 1, true
+		}
+	}
+	// Footer may truncate long model ids; use chevron order on the row.
+	// modelStatusRect / variantStatusRect pass labels that identify the slot.
+	idx := 0
+	if footerChipIsVariantLabel(chip) {
+		idx = 1
+	}
+	if start, end, hit := footerChevronChipSpan(plain, idx); hit {
+		return max(0, start-1), y, end, y + 1, true
+	}
+	return 0, 0, 0, 0, false
+}
+
+func footerChipIsVariantLabel(chip string) bool {
+	base := strings.ToLower(strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(chip), "▾")))
+	switch base {
+	case "default", "none", "low", "medium", "high", "xhigh", "max", "minimal":
+		return true
+	default:
+		return false
+	}
+}
+
+// footerChevronChipSpan finds the idx-th "token ▾" chip on the footer row
+// (0 = model, 1 = variant) by scanning painted chevrons right-to-left tokens.
+func footerChevronChipSpan(plain string, idx int) (start, end int, ok bool) {
+	plain = ansi.Strip(plain)
+	runes := []rune(plain)
+	cols := make([]int, len(runes)+1)
+	for i, r := range runes {
+		cols[i+1] = cols[i] + max(1, lipgloss.Width(string(r)))
+	}
+	var chips [][2]int
+	for i, r := range runes {
+		if r != '▾' && r != '▼' {
+			continue
+		}
+		endCol := cols[i+1]
+		j := i - 1
+		if j >= 0 && runes[j] == ' ' {
+			j--
+		}
+		for j >= 0 && runes[j] != ' ' && runes[j] != '│' && runes[j] != '|' {
+			j--
+		}
+		startCol := cols[j+1]
+		chips = append(chips, [2]int{startCol, endCol})
+	}
+	if idx < 0 || idx >= len(chips) {
+		return 0, 0, false
+	}
+	return chips[idx][0], chips[idx][1], true
+}
+
+// composerFooterPlainLine is the painted composer footer row (enter send + chips).
+func (m Model) composerFooterPlainLine() (plain string, y int, ok bool) {
+	for i, line := range m.paintedLines() {
+		plain = ansi.Strip(line)
+		if !composerFooterLine(plain) {
+			continue
+		}
+		return plain, i, true
+	}
+	return "", 0, false
+}
+
+func composerFooterLine(plain string) bool {
+	// The rotating tip "enter sends the prompt" must not match "enter send".
+	if strings.Contains(plain, "enter send now") {
+		return true
+	}
+	if strings.Contains(plain, "enter send") && !strings.Contains(plain, "enter sends") {
+		return true
+	}
+	if strings.Contains(plain, "history:") {
+		return true
+	}
+	return strings.Contains(plain, "working") && strings.Contains(plain, "esc cancel")
+}
+
+// composerFooterTop is the screen Y of the composer footer row (model/subs chips).
+func (m Model) composerFooterTop() int {
+	if _, y, ok := m.composerFooterPlainLine(); ok {
+		return y
+	}
+	top := m.transcriptTop() + m.transcriptRenderHeight() + 1 + 1
 	if m.slashMode {
 		top += 1 + lipgloss.Height(m.slashView())
+	}
+	if m.pickerMode {
+		top += 1 + lipgloss.Height(m.pickerView())
+	}
+	if m.subagentPickerMode && !m.subagentLogMode {
+		top += 1 + lipgloss.Height(m.subagentDrawerView())
 	}
 	if m.err != "" {
 		top += lipgloss.Height(errStyle.Width(max(minPaneWidth, m.width)).Render(m.err)) + 1
 	}
 	if m.showLiveStatus() {
-		top += 2
+		top += lipgloss.Height(m.liveStatusView())
 	}
-	// Footer sits inside the composer: top border + prompt rows.
 	top += 1 + m.promptHeight()
-	right = m.width - 1
-	left = max(0, right-lipgloss.Width(label))
-	return left, top, right, top + 1, true
+	return top
+}
+
+// subsStatusRect is the click target for the persistent "subs:N" footer chip.
+func (m Model) subsStatusRect() (left, top, right, bottom int, ok bool) {
+	if m.busy || m.pickerMode || m.sessionPickerMode || m.subagentPickerMode || m.settingsMode {
+		return 0, 0, 0, 0, false
+	}
+	subs := m.subsStatusLabel()
+	if subs == "" {
+		return 0, 0, 0, 0, false
+	}
+	leftW := lipgloss.Width(m.composerLeft())
+	budget := max(4, max(minPaneWidth, m.width)-2-leftW-1)
+	footer := m.fitFooterRight(budget)
+	if !strings.Contains(footer, "subs:") {
+		return 0, 0, 0, 0, false
+	}
+	plain, y, found := m.composerFooterPlainLine()
+	if !found {
+		return 0, 0, 0, 0, false
+	}
+	start, end, hit := displaySpan(plain, subs)
+	if !hit {
+		start, end, hit = displaySpan(plain, "subs:")
+	}
+	if !hit {
+		return 0, 0, 0, 0, false
+	}
+	return start, y, end, y + 1, true
 }

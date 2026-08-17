@@ -37,13 +37,16 @@ internal/
   envfile/                    .env loader
   provider/opencode/          OpenCode Go HTTP client
   agent/                      turn loop, part mapping, tool dispatch
+  subagent/                   Manager, Host, AgentRunner (concurrency)
+  settings/                   project settings including agents caps
   policy/                     bash classifier
-  tools/{bash,read,write,
+  tools/{bash,read,grep,write,
          edit,question,
-         webfetch}/           tool implementations
+         webfetch,task}/      tool implementations / schemas
   ui/chat/                    chat TUI (transcript, prompt, picker)
   ui/confirm/                 y/n confirm view
-plans/v0.0.1/                plan ledgers (status + closure gates)
+plans/v0.0.1/                0.0.1 plan ledgers
+plans/v0.0.2/                sub-agent plan ledgers
 docs/                         this documentation set
 skills/                       agent-harness conventions (AGENTS.md)
 ```

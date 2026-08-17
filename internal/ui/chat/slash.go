@@ -5,47 +5,132 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+
+	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
 
-// slashView renders a full-width command list above the prompt. Each row
-// is the command name on the left and its description after it.
+const slashCompactMaxWidth = 100
+
+type slashPaletteGroup struct {
+	title string
+	names []string
+}
+
+// slashPaletteGroups is the painted order. Headings are not selectable.
+var slashPaletteGroups = []slashPaletteGroup{
+	{title: "Session", names: []string{"/new", "/resume", "/continue"}},
+	{title: "Model", names: []string{"/model", "/variant", "/refresh"}},
+	{title: "Project", names: []string{"/agents", "/settings"}},
+	{title: "Help", names: []string{"/help"}},
+}
+
+// slashView renders a grouped command palette above the prompt.
 func (m Model) slashView() string {
 	cardW := max(minPaneWidth, m.width-cardBorder)
-	sel := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15"))
-	dim := lipgloss.NewStyle().Faint(true)
+	compact := m.width < slashCompactMaxWidth
+	selName := ""
+	selDesc := ""
+	if m.slashCursor >= 0 && m.slashCursor < len(m.slashItems) {
+		selName = m.slashItems[m.slashCursor].name
+		selDesc = m.slashItems[m.slashCursor].description
+	}
+
+	head := hintStyle.Render("commands  ·  ")
+	if selName != "" {
+		head += lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).Render(selName)
+	}
+	if lipgloss.Width(head) > cardW {
+		head = truncateRunes(head, cardW)
+	}
+
+	groupSt := lipgloss.NewStyle().Foreground(theme.ColorMute())
+	sel := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).Background(theme.ColorBorder())
+	nameSt := lipgloss.NewStyle().Foreground(theme.ColorText())
+	descSt := lipgloss.NewStyle().Foreground(theme.ColorMute())
+
 	nameW := 0
 	for _, cmd := range m.slashItems {
 		if w := lipgloss.Width(cmd.name); w > nameW {
 			nameW = w
 		}
 	}
+
 	var body strings.Builder
+	body.WriteString(head)
 	if len(m.slashItems) == 0 {
-		body.WriteString(dim.Render("no matching command"))
+		body.WriteString("\n")
+		body.WriteString(descSt.Render("no matching command"))
 	} else {
-		for i, cmd := range m.slashItems {
-			if i > 0 {
+		byName := make(map[string]slashCmd, len(m.slashItems))
+		for _, cmd := range m.slashItems {
+			byName[cmd.name] = cmd
+		}
+		seen := make(map[string]bool, len(m.slashItems))
+		for _, g := range slashPaletteGroups {
+			var groupItems []slashCmd
+			for _, name := range g.names {
+				cmd, ok := byName[name]
+				if !ok {
+					continue
+				}
+				groupItems = append(groupItems, cmd)
+				seen[name] = true
+			}
+			if len(groupItems) == 0 {
+				continue
+			}
+			body.WriteString("\n")
+			body.WriteString(groupSt.Render(g.title))
+			for _, cmd := range groupItems {
 				body.WriteString("\n")
-			}
-			prefix := "  "
-			if i == m.slashCursor {
-				prefix = "▸ "
-			}
-			gap := max(2, nameW-lipgloss.Width(cmd.name)+2)
-			line := prefix + cmd.name + strings.Repeat(" ", gap) + cmd.description
-			if lipgloss.Width(line) > cardW {
-				line = truncateRunes(line, cardW)
-			}
-			if i == m.slashCursor {
-				body.WriteString(sel.Render(line))
-			} else {
-				body.WriteString(dim.Render(line))
+				body.WriteString(slashCommandRow(cmd, cmd.name == selName, compact, cardW, nameW, sel, nameSt, descSt))
 			}
 		}
+		for _, cmd := range m.slashItems {
+			if seen[cmd.name] {
+				continue
+			}
+			body.WriteString("\n")
+			body.WriteString(slashCommandRow(cmd, cmd.name == selName, compact, cardW, nameW, sel, nameSt, descSt))
+		}
 	}
-	return lipgloss.NewStyle().
-		Width(cardW).
-		Render(body.String())
+	if compact && selDesc != "" {
+		body.WriteString("\n")
+		foot := selDesc
+		if lipgloss.Width(foot) > cardW {
+			foot = truncateRunes(foot, cardW)
+		}
+		body.WriteString(descSt.Render(foot))
+	}
+	return lipgloss.NewStyle().Width(cardW).Render(body.String())
+}
+
+func slashCommandRow(cmd slashCmd, selected, compact bool, cardW, nameW int, sel, nameSt, descSt lipgloss.Style) string {
+	prefix := "  "
+	if selected {
+		prefix = "▸ "
+	}
+	if compact {
+		line := prefix + cmd.name
+		if lipgloss.Width(line) > cardW {
+			line = truncateRunes(line, cardW)
+		}
+		if selected {
+			return sel.Width(cardW).MaxWidth(cardW).Render(line)
+		}
+		return nameSt.Render(line)
+	}
+	gap := max(2, nameW-lipgloss.Width(cmd.name)+2)
+	plain := prefix + cmd.name + strings.Repeat(" ", gap) + cmd.description
+	if lipgloss.Width(plain) > cardW {
+		plain = truncateRunes(plain, cardW)
+	}
+	if selected {
+		return sel.Width(cardW).MaxWidth(cardW).Render(plain)
+	}
+	namePart := prefix + cmd.name
+	rest := strings.TrimPrefix(plain, namePart)
+	return nameSt.Render(namePart) + descSt.Render(rest)
 }
 
 // updateSlash handles keys while the slash menu is open.
@@ -101,7 +186,7 @@ func (m Model) runSlash(name string) (Model, tea.Cmd) {
 	switch name {
 	case "/new":
 		return m.loadSession(nil), nil
-	case "/resume", "/sessions":
+	case "/resume", "/sessions", "/session":
 		return m.openSessionPicker(), nil
 	case "/model":
 		return m.openModelSearch(), nil
@@ -109,7 +194,13 @@ func (m Model) runSlash(name string) (Model, tea.Cmd) {
 		return m.openVariantPicker(), nil
 	case "/refresh":
 		return m, m.refreshModels
-	case "/help":
+	case "/settings", "/slot":
+		return m.openSettings(), nil
+	case "/agents", "/subs", "/subagents":
+		return m.openSubagentPicker(), nil
+	case "/continue":
+		return m.runContinue()
+	case "/help", "/keys":
 		m.helpMode = true
 	}
 	return m, nil
@@ -151,18 +242,39 @@ func (m Model) syncSlash(value string) Model {
 		m = m.closePicker()
 	}
 	partial := strings.ToLower(strings.TrimPrefix(value, "/"))
-	m.slashItems = nil
-	for _, cmd := range slashCommands {
-		if !matchesSlashPartial(cmd, partial) {
-			continue
-		}
-		m.slashItems = append(m.slashItems, cmd)
-	}
+	m.slashItems = filterSlashItems(partial)
 	if m.slashCursor >= len(m.slashItems) {
 		m.slashCursor = max(0, len(m.slashItems)-1)
 	}
 	m.slashMode = true
 	return m
+}
+
+// filterSlashItems returns matching commands in palette-group order.
+func filterSlashItems(partial string) []slashCmd {
+	byName := make(map[string]slashCmd, len(slashCommands))
+	for _, cmd := range slashCommands {
+		byName[cmd.name] = cmd
+	}
+	var out []slashCmd
+	seen := make(map[string]bool, len(slashCommands))
+	for _, g := range slashPaletteGroups {
+		for _, name := range g.names {
+			cmd, ok := byName[name]
+			if !ok || !matchesSlashPartial(cmd, partial) {
+				continue
+			}
+			out = append(out, cmd)
+			seen[name] = true
+		}
+	}
+	for _, cmd := range slashCommands {
+		if seen[cmd.name] || !matchesSlashPartial(cmd, partial) {
+			continue
+		}
+		out = append(out, cmd)
+	}
+	return out
 }
 
 // matchesSlashPartial reports whether a command matches a typed partial

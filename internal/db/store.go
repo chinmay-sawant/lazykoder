@@ -14,18 +14,44 @@ type Store struct {
 	db *sql.DB
 }
 
-// Open opens (creating if missing) the sqlite file and sets per-connection
-// pragmas: journal_mode=WAL, foreign_keys=ON, busy_timeout=5000. Returned
-// Store is safe for concurrent use.
+// busyTimeoutMS is how long a connection waits for a write lock before
+// returning SQLITE_BUSY. Sub-agents share one Store and need headroom.
+const busyTimeoutMS = 30_000
+
+// Open opens (creating if missing) the sqlite file and configures it for
+// concurrent agent/sub-agent use. SQLite allows only one writer: MaxOpenConns(1)
+// serializes all access through a single connection so parent + child agents
+// never hit "database is locked" under parallel task tools. WAL + busy_timeout
+// remain for robustness if the pool setting is ever relaxed.
 func Open(path string) (*Store, error) {
-	dsn := "file:" + path + "?_pragma=foreign_keys=on&_pragma=busy_timeout=5000"
+	// _pragma values apply to each new connection from the pool.
+	dsn := fmt.Sprintf(
+		"file:%s?_pragma=foreign_keys(1)&_pragma=busy_timeout(%d)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)",
+		path, busyTimeoutMS,
+	)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("db: open %s: %w", path, err)
 	}
+	// Most important for concurrent sub-agents: one connection, no multi-conn lock fights.
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	// Re-assert pragmas on the live connection (covers DSN variants).
+	if _, err := db.Exec(fmt.Sprintf("PRAGMA busy_timeout = %d", busyTimeoutMS)); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("db: busy_timeout: %w", err)
+	}
+	if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("db: foreign_keys: %w", err)
+	}
 	if _, err := db.Exec("PRAGMA journal_mode = WAL"); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("db: enable WAL: %w", err)
+	}
+	if _, err := db.Exec("PRAGMA synchronous = NORMAL"); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("db: synchronous: %w", err)
 	}
 	return &Store{db: db}, nil
 }
@@ -109,7 +135,59 @@ var schemaMigrations = [][]string{
 		// as directory. Strip that suffix so ListSessionsByDir(project) finds them.
 		`UPDATE sessions SET directory = substr(directory, 1, length(directory) - 11) WHERE directory LIKE '%/.lazykoder'`,
 	},
+	{
+		// Sub-agent child sessions: parent link + kind (main|subagent).
+		`ALTER TABLE sessions ADD COLUMN parent_session_id TEXT`,
+		`ALTER TABLE sessions ADD COLUMN kind TEXT NOT NULL DEFAULT 'main'`,
+		`CREATE INDEX idx_sessions_parent ON sessions(parent_session_id) WHERE parent_session_id IS NOT NULL`,
+		`CREATE INDEX idx_sessions_kind ON sessions(kind)`,
+	},
+	{
+		// Durable sub-agent job registry for task_list/wait after restart.
+		`CREATE TABLE subagent_jobs (
+  id                TEXT PRIMARY KEY,
+  parent_session_id TEXT    NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  parent_part_id    TEXT,
+  child_session_id  TEXT,
+  name              TEXT    NOT NULL DEFAULT '',
+  role              TEXT    NOT NULL DEFAULT 'explore',
+  status            TEXT    NOT NULL,
+  prompt            TEXT    NOT NULL DEFAULT '',
+  description       TEXT    NOT NULL DEFAULT '',
+  model             TEXT,
+  variant           TEXT,
+  max_steps         INTEGER NOT NULL DEFAULT 0,
+  timeout_ms        INTEGER NOT NULL DEFAULT 0,
+  summary           TEXT,
+  error             TEXT,
+  time_created      INTEGER NOT NULL,
+  time_updated      INTEGER NOT NULL,
+  time_started      INTEGER,
+  time_finished     INTEGER
+)`,
+		`CREATE INDEX idx_subagent_jobs_parent ON subagent_jobs(parent_session_id)`,
+		`CREATE INDEX idx_subagent_jobs_status ON subagent_jobs(status)`,
+	},
+	{
+		// v0.0.4: unique seq + query-shaped indexes (no table rebuild).
+		// Replace non-unique seq indexes with UNIQUE covering the same paths.
+		`DROP INDEX IF EXISTS idx_messages_session_seq`,
+		`CREATE UNIQUE INDEX idx_messages_session_seq ON messages(session_id, seq)`,
+		`DROP INDEX IF EXISTS idx_parts_message_seq`,
+		`CREATE UNIQUE INDEX idx_parts_message_seq ON parts(message_id, seq)`,
+		// Resume list: filter by project directory first.
+		`CREATE INDEX IF NOT EXISTS idx_sessions_dir_kind_updated ON sessions(directory, kind, time_updated DESC, time_created DESC, id)`,
+		// Child drawer: parent + kind + recency.
+		`CREATE INDEX IF NOT EXISTS idx_sessions_parent_kind_updated ON sessions(parent_session_id, kind, time_updated DESC, time_created DESC)`,
+		// Durable jobs: list by parent and open-job recover.
+		`CREATE INDEX IF NOT EXISTS idx_subagent_jobs_parent_started ON subagent_jobs(parent_session_id, time_started, time_created, id)`,
+		`CREATE INDEX IF NOT EXISTS idx_subagent_jobs_open ON subagent_jobs(status, time_created, id) WHERE status IN ('queued', 'running')`,
+	},
 }
+
+// schemaVersion is the highest applied migration number (includes rebuilds
+// implemented as Go steps rather than pure SQL slices).
+const schemaVersion = 9
 
 // Migrate runs numbered migrations. schema_migrations records the applied
 // versions after first open. Idempotent: a second call is a no-op.
@@ -124,8 +202,33 @@ func (s *Store) Migrate(ctx context.Context) error {
 	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&current); err != nil {
 		return fmt.Errorf("db: read schema version: %w", err)
 	}
-	for i := current + 1; i <= len(schemaMigrations); i++ {
-		if err := s.applyMigration(ctx, i, schemaMigrations[i-1]); err != nil {
+	for i := current + 1; i <= schemaVersion; i++ {
+		var err error
+		switch i {
+		case 7:
+			err = s.migrateV7SessionsParentFK(ctx)
+		case 8:
+			err = s.migrateV8SubagentJobsFK(ctx)
+		case 9:
+			// Model-driven todos (phase 4.5): full-list replace per session.
+			err = s.applyMigration(ctx, 9, []string{
+				`CREATE TABLE todos (
+  session_id   TEXT    NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  seq          INTEGER NOT NULL,
+  content      TEXT    NOT NULL DEFAULT '',
+  status       TEXT    NOT NULL DEFAULT 'pending',
+  time_updated INTEGER NOT NULL,
+  PRIMARY KEY (session_id, seq)
+)`,
+				`CREATE INDEX idx_todos_session ON todos(session_id, seq)`,
+			})
+		default:
+			if i < 1 || i > len(schemaMigrations) {
+				return fmt.Errorf("db: missing migration statements for version %d", i)
+			}
+			err = s.applyMigration(ctx, i, schemaMigrations[i-1])
+		}
+		if err != nil {
 			return err
 		}
 	}

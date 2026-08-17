@@ -51,6 +51,10 @@ Confirmed against the running binary and `.lazykoder/lazykoder.db`:
 | [phase-2-chat-chrome.md](phase-2-chat-chrome.md) | P1 | Header, compact status, turn layout, collapsible tools, multiline prompt, slash, confirm overlay |
 | [phase-3-polish.md](phase-3-polish.md) | P1 | Empty state, help overlay, one palette, edit/write diffs, `@` file picker |
 
+Later TUI layout work from the 2026-08-17 fullscreen walk lives in
+[`plans/v0.0.5/`](../../v0.0.5/README.md). Do not reopen the `[x]` rows
+in this folder for that review.
+
 ## Out of scope (already ledgers elsewhere)
 
 - Provider SSE, live tokens/sec, status-segment config, `todowrite`: [../phase-4-tokens-status-todos.md](../phase-4-tokens-status-todos.md). Phase 2 of this folder compacting the status line must not invent a second tps design. Leave a hook for phase 4.

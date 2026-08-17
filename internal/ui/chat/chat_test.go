@@ -14,6 +14,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/chinmay-sawant/lazykoder/internal/agent"
 	"github.com/chinmay-sawant/lazykoder/internal/db"
 	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
@@ -427,11 +428,27 @@ func TestPromptCtrlCAndCtrlA(t *testing.T) {
 		t.Fatal("ctrl+c after ctrl+a did not copy the prompt")
 	}
 
+	// Select-all then type replaces the whole draft.
+	m, _ = updCmd(m, tea.KeyPressMsg{Code: 'a', Mod: tea.ModCtrl})
 	m = upd(m, tea.KeyPressMsg{Code: 'x', Text: "x"})
 	if m.promptSelectAll {
 		t.Fatal("typing did not clear the select-all state")
 	}
+	if got := m.prompt.Value(); got != "x" {
+		t.Fatalf("select-all + type = %q, want %q", got, "x")
+	}
 
+	m.prompt.SetValue("hello world")
+	m, _ = updCmd(m, tea.KeyPressMsg{Code: 'a', Mod: tea.ModCtrl})
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyBackspace})
+	if got := m.prompt.Value(); got != "" {
+		t.Fatalf("select-all + backspace = %q, want empty", got)
+	}
+	if m.promptSelectAll {
+		t.Fatal("select-all should clear after backspace")
+	}
+
+	m.prompt.SetValue("again")
 	m = upd(m, tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl})
 	if got := m.prompt.Value(); got != "" {
 		t.Fatalf("prompt after ctrl+u = %q, want empty", got)
@@ -546,6 +563,8 @@ func TestAlertRowCopyNotice(t *testing.T) {
 
 func TestTipsShowWhenIdle(t *testing.T) {
 	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 36})
+	m = mm.(Model)
 	v := stripANSI(viewText(m))
 	if !strings.Contains(v, tips.At(0)) {
 		t.Fatalf("idle tip missing from view: %q", v)
@@ -580,6 +599,8 @@ func TestTipsShowWhenIdle(t *testing.T) {
 
 func TestTipsRotateOnTick(t *testing.T) {
 	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	mm0, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 36})
+	m = mm0.(Model)
 	if got := m.tipsIndex; got != 0 {
 		t.Fatalf("tipsIndex = %d, want 0", got)
 	}
@@ -753,8 +774,12 @@ func TestAlertRowHoldsJumpBarAndAlert(t *testing.T) {
 	}
 }
 
-func TestBusyIgnoresEnter(t *testing.T) {
-	fake := newFakeProvider(t, 0, respBody("ok", "stop", nil))
+func TestBusyEnterForceSends(t *testing.T) {
+	// While a turn is in flight, enter with a draft interrupts and sends.
+	fake := newFakeProvider(t, 0,
+		respBody("ok", "stop", nil),
+		respBody("ok2", "stop", nil),
+	)
 	st := newTestStore(t)
 	m := New(Options{Store: st, Client: newClient(fake.srv), Workdir: t.TempDir()})
 	p := newPump(t)
@@ -765,17 +790,26 @@ func TestBusyIgnoresEnter(t *testing.T) {
 		t.Fatal("Enter returned nil cmd")
 	}
 	p.run(cmd)
+	// Still busy (or drain until busy): type a second message and force-send.
+	if !m.busy {
+		// First turn may have finished already; re-busy for the force-send path.
+		m.busy = true
+		m.turnCancel = func() {}
+		m.activity = "thinking"
+	}
 	m = typeText(m, "second")
 	m, cmd2 := updCmd(m, enter())
-	if cmd2 != nil {
-		t.Fatal("Enter while busy returned a cmd")
+	if cmd2 == nil {
+		t.Fatal("Enter while busy with draft should force send")
 	}
+	p.run(cmd2)
 	m = p.drainIdle(m)
-	if n := fake.requestCount(); n != 1 {
-		t.Errorf("provider calls = %d, want 1", n)
+	v := stripANSI(viewText(m))
+	if !strings.Contains(v, "second") {
+		t.Errorf("force-sent message missing from view: %q", v)
 	}
-	if !strings.Contains(stripANSI(viewText(m)), "first") || !strings.Contains(stripANSI(viewText(m)), roleYou) {
-		t.Errorf("first turn missing from view: %q", viewText(m))
+	if !strings.Contains(v, "interrupted") && !strings.Contains(v, "second") {
+		t.Errorf("view after force send: %q", v)
 	}
 }
 
@@ -995,6 +1029,8 @@ func TestConfirmEscDoesNotCancelTurn(t *testing.T) {
 func TestSessionPickerSelectsOlderSession(t *testing.T) {
 	dir := t.TempDir()
 	st := newTestStore(t)
+	// InsertMessage bumps sessions.time_updated; build older first, then
+	// newer, so the resume list (time_updated DESC) keeps newer on top.
 	older, err := st.CreateSession(context.Background(), db.Session{
 		Title: "older-session", Directory: dir, TimeCreated: 1000, TimeUpdated: 1000,
 	})
@@ -1009,6 +1045,7 @@ func TestSessionPickerSelectsOlderSession(t *testing.T) {
 	if _, err := st.InsertPart(context.Background(), db.Part{MessageID: um.ID, Type: "text", Text: &oldText}); err != nil {
 		t.Fatalf("insert older part: %v", err)
 	}
+	time.Sleep(2 * time.Millisecond)
 	newer, err := st.CreateSession(context.Background(), db.Session{
 		Title: "newer-session", Directory: dir, TimeCreated: 2000, TimeUpdated: 2000,
 	})
@@ -1580,15 +1617,18 @@ func TestLiveActivitySitsAbovePrompt(t *testing.T) {
 	mm, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = mm.(Model)
 	v := stripANSI(viewText(m))
-	if !strings.Contains(v, "thinking") {
-		t.Fatalf("live thinking missing above the prompt: %q", v)
+	if !strings.Contains(v, "working") {
+		t.Fatalf("live working status missing above the prompt: %q", v)
 	}
-	if !strings.Contains(v, "enter send") {
-		t.Fatalf("idle hint missing while busy: %q", v)
+	if !strings.Contains(v, "esc cancel") {
+		t.Fatalf("busy cancel hint missing: %q", v)
+	}
+	if !strings.Contains(v, "think") {
+		t.Fatalf("live thinking activity missing: %q", v)
 	}
 	thinkAt, promptAt := -1, -1
 	for i, line := range strings.Split(v, "\n") {
-		if thinkAt < 0 && strings.Contains(line, "thinking") && !strings.Contains(line, "enter") {
+		if thinkAt < 0 && strings.Contains(line, "working") {
 			thinkAt = i
 		}
 		if strings.Contains(line, "ask lazykoder") || strings.Contains(line, "╭") && promptAt < 0 && i > 2 {
@@ -2069,6 +2109,25 @@ func TestShiftEnterDoesNotSubmit(t *testing.T) {
 	}
 }
 
+func TestAltEnterAndCtrlJInsertNewline(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	m = typeText(m, "a")
+	m, cmd := updCmd(m, tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModAlt})
+	if cmd != nil {
+		t.Fatalf("alt+enter submitted: %v", cmd)
+	}
+	if got := m.prompt.Value(); got != "a\n" {
+		t.Fatalf("alt+enter = %q, want %q", got, "a\n")
+	}
+	m, cmd = updCmd(m, tea.KeyPressMsg{Code: 'j', Mod: tea.ModCtrl})
+	if cmd != nil {
+		t.Fatalf("ctrl+j submitted: %v", cmd)
+	}
+	if got := m.prompt.Value(); got != "a\n\n" {
+		t.Fatalf("ctrl+j = %q, want %q", got, "a\n\n")
+	}
+}
+
 func TestSlashDescriptionNotOnNextCommand(t *testing.T) {
 	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
 	mm, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
@@ -2108,12 +2167,12 @@ func TestPickerHasNoOrphanFor(t *testing.T) {
 func TestEmptyStateShown(t *testing.T) {
 	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
 	v := stripANSI(viewText(m))
-	if !strings.Contains(v, "new run") || !strings.Contains(v, "/ commands") {
+	if !strings.Contains(v, "new session") || !strings.Contains(v, "/ commands") || !strings.Contains(v, "/settings") {
 		t.Fatalf("empty state missing: %q", v)
 	}
 	m.items = append(m.items, transcriptItem{kind: itemUser, text: "hi"})
 	m.syncTranscript()
-	if strings.Contains(stripANSI(viewText(m)), "new run") {
+	if strings.Contains(stripANSI(viewText(m)), "ask anything about this project") {
 		t.Fatal("empty state still shown after a line")
 	}
 }
@@ -2126,7 +2185,7 @@ func TestHelpOverlayDoesNotGrowTranscript(t *testing.T) {
 		t.Fatal("? did not open help")
 	}
 	v := stripANSI(viewText(m))
-	if !strings.Contains(v, "enter") || !strings.Contains(v, "send") {
+	if !strings.Contains(v, "enter") || !strings.Contains(v, "send") || !strings.Contains(v, "/settings") || !strings.Contains(v, "/continue") {
 		t.Fatalf("help overlay missing: %q", v)
 	}
 	if len(m.items) != before {
@@ -2226,29 +2285,202 @@ func TestSpliceDisplayUsesCellsNotRunes(t *testing.T) {
 
 func TestEditDiffCard(t *testing.T) {
 	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
-	diff := "@@ -1,1 +1,1 @@\n-old\n+new line"
-	meta := `{"diff":` + "`" + diff + "`" + `}`
-	// valid JSON
-	meta = `{"diff":"@@ -1,1 +1,1 @@\n-old\n+new line"}`
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 36})
+	m = mm.(Model)
+	meta := `{"diff":"@@ -1,1 +1,1 @@\n-old\n+new line"}`
 	path := "main.go"
 	tc := db.ToolCall{
 		Tool: "edit", Status: "completed", Title: &path,
 		InputJSON:    `{"filePath":"main.go","oldString":"old","newString":"new line"}`,
 		MetadataJSON: &meta,
 	}
-	m.items = append(m.items, transcriptItem{kind: itemTool, collapsed: true, tool: tc})
+	// Open by default: full soft-tinted diff panel.
+	m.items = append(m.items, transcriptItem{kind: itemTool, collapsed: false, tool: tc})
 	m.syncTranscript()
 	v := stripANSI(viewText(m))
 	if !strings.Contains(v, "main.go") {
-		t.Fatalf("collapsed edit missing path: %q", v)
+		t.Fatalf("edit missing path: %q", v)
 	}
-	if strings.Contains(v, "@@") {
-		t.Fatalf("collapsed edit showed diff: %q", v)
+	if !strings.Contains(v, "+1") || !strings.Contains(v, "-1") {
+		t.Fatalf("edit missing diff stats: %q", v)
 	}
-	m = m.toggleLastTool()
-	v = stripANSI(viewText(m))
 	if !strings.Contains(v, "@@") || !strings.Contains(v, "new line") {
-		t.Fatalf("expanded edit missing diff: %q", v)
+		t.Fatalf("open edit missing full diff: %q", v)
+	}
+	// Diff lines paint full card width.
+	var diffLine string
+	for _, line := range strings.Split(viewText(m), "\n") {
+		if strings.Contains(stripANSI(line), "+new line") {
+			diffLine = line
+			break
+		}
+	}
+	if diffLine == "" {
+		t.Fatal("missing +new line row")
+	}
+	wantW := m.toolCardWidth()
+	if got := lipgloss.Width(diffLine); got < wantW {
+		t.Fatalf("diff line width %d < tool card width %d", got, wantW)
+	}
+	// Collapsed: header + stats only, no body.
+	m.items[0].collapsed = true
+	m.syncTranscript()
+	v = stripANSI(viewText(m))
+	if strings.Contains(v, "@@") || strings.Contains(v, "new line") {
+		t.Fatalf("collapsed edit still shows body: %q", v)
+	}
+	if !strings.Contains(v, "+1") || !strings.Contains(v, "-1") {
+		t.Fatalf("collapsed edit should keep stats: %q", v)
+	}
+}
+
+func TestEditOpenByDefaultAndToggle(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 36})
+	m = mm.(Model)
+	path := "main.go"
+	meta := `{"diff":"@@ -1,1 +1,1 @@\n-old\n+new"}`
+	m.applyTool(agent.Event{Tool: db.ToolCall{
+		Tool: "edit", Status: "pending", Title: &path, PartID: "p1", CallID: "c1",
+		InputJSON: `{"filePath":"main.go","oldString":"old","newString":"new"}`,
+	}})
+	if idx := m.lastTool; idx < 0 || m.items[idx].collapsed {
+		t.Fatal("pending edit should start open")
+	}
+	// User collapses (e / ctrl+e).
+	m = m.toggleLastTool()
+	if !m.items[m.lastTool].collapsed {
+		t.Fatal("toggle should collapse edit")
+	}
+	// Status update must keep the user's collapsed choice.
+	m.applyTool(agent.Event{Tool: db.ToolCall{
+		Tool: "edit", Status: "completed", Title: &path, PartID: "p1", CallID: "c1",
+		InputJSON:    `{"filePath":"main.go","oldString":"old","newString":"new"}`,
+		MetadataJSON: &meta,
+	}})
+	if !m.items[m.lastTool].collapsed {
+		t.Fatal("completed edit must stay collapsed after user closed it")
+	}
+	// Re-open.
+	m = m.toggleLastTool()
+	if m.items[m.lastTool].collapsed {
+		t.Fatal("toggle should re-open edit")
+	}
+	v := stripANSI(viewText(m))
+	if !strings.Contains(v, "+new") || !strings.Contains(v, "-old") {
+		t.Fatalf("re-opened edit missing changes: %q", v)
+	}
+}
+
+func TestEditCtrlEToggles(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = mm.(Model)
+	path := "main.go"
+	meta := `{"diff":"@@ -1,1 +1,1 @@\n-a\n+b"}`
+	m.applyTool(agent.Event{Tool: db.ToolCall{
+		Tool: "edit", Status: "completed", Title: &path, PartID: "p1",
+		InputJSON: `{"filePath":"main.go","oldString":"a","newString":"b"}`, MetadataJSON: &meta,
+	}})
+	if m.items[m.lastTool].collapsed {
+		t.Fatal("edit should start open")
+	}
+	// ctrl+e works even when the prompt has text.
+	m.prompt.SetValue("draft")
+	mm, _ = m.Update(tea.KeyPressMsg{Code: 'e', Mod: tea.ModCtrl})
+	m = mm.(Model)
+	if !m.items[m.lastTool].collapsed {
+		t.Fatal("ctrl+e should collapse the edit card")
+	}
+	mm, _ = m.Update(tea.KeyPressMsg{Code: 'e', Mod: tea.ModCtrl})
+	m = mm.(Model)
+	if m.items[m.lastTool].collapsed {
+		t.Fatal("ctrl+e should re-open the edit card")
+	}
+}
+
+func TestEditFallbackDiffFromArgs(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = mm.(Model)
+	path := "x.go"
+	tc := db.ToolCall{
+		Tool: "edit", Status: "completed", Title: &path,
+		InputJSON: `{"filePath":"x.go","oldString":"aaa","newString":"bbb"}`,
+		// No MetadataJSON: UI should still paint a synthetic diff.
+	}
+	m.items = append(m.items, transcriptItem{kind: itemTool, collapsed: false, tool: tc})
+	m.syncTranscript()
+	v := stripANSI(viewText(m))
+	// Body marker is after the line-number gutter: "… │ -aaa"
+	if !strings.Contains(v, "-aaa") || !strings.Contains(v, "+bbb") {
+		t.Fatalf("synthetic edit diff missing: %q", v)
+	}
+}
+
+func TestEditDiffShowsLineNumbersAndRelPath(t *testing.T) {
+	dir := t.TempDir()
+	// Build a deep file so recompute can prove real line numbers (not 1..n).
+	var body strings.Builder
+	for i := 1; i <= 80; i++ {
+		fmt.Fprintf(&body, "pad-%d\n", i)
+	}
+	body.WriteString("## Project Snapshot\n\n")
+	body.WriteString("- Example workspace size: 128\n")
+	body.WriteString("- Review sample: 731\n\n")
+	body.WriteString("## License\n\n")
+	body.WriteString("MIT, see [LICENSE](LICENSE).\n")
+	rel := "README.md"
+	abs := filepath.Join(dir, rel)
+	if err := os.WriteFile(abs, []byte(body.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: dir})
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 36})
+	m = mm.(Model)
+
+	// Historical row with the OLD bug: stored @@ -1 even though edit is deep.
+	oldS := "- Example workspace size: 128\n- Review sample: 731\n\n"
+	newS := "- Example workspace size: 128\n- Review sample: 731\n\n## License\n\nMIT, see [LICENSE](LICENSE).\n"
+	badMeta := `{"diff":"@@ -1,4 +1,8 @@\n - Example workspace size: 128\n - Review sample: 731\n \n+## License\n \n+MIT, see [LICENSE](LICENSE).\n+\n"}`
+	title := abs
+	tc := db.ToolCall{
+		Tool: "edit", Status: "completed", Title: &title,
+		InputJSON: fmt.Sprintf(
+			`{"filePath":%q,"oldString":%q,"newString":%q}`, abs, oldS, newS,
+		),
+		MetadataJSON: &badMeta,
+	}
+	m.items = append(m.items, transcriptItem{kind: itemTool, collapsed: false, tool: tc})
+	m.syncTranscript()
+	v := stripANSI(viewText(m))
+	if !strings.Contains(v, rel) {
+		t.Fatalf("header missing relative path %q in: %q", rel, v)
+	}
+	if strings.Contains(v, abs) {
+		t.Fatalf("header still shows absolute path: %q", v)
+	}
+	// Must NOT show a deep edit as lines 1-4 only; recompute from disk.
+	if strings.Contains(v, "@@ -1,") {
+		t.Fatalf("still showing bogus @@ -1 hunk after recompute: %q", v)
+	}
+	// Line numbers should be in the 80s.
+	foundDeep := false
+	for _, n := range []string{"80", "81", "82", "83", "84", "85"} {
+		if strings.Contains(v, n+" ") || strings.Contains(v, " "+n) {
+			foundDeep = true
+			break
+		}
+	}
+	if !foundDeep {
+		t.Fatalf("expected deep line numbers (~80+), got: %q", v)
+	}
+	if !strings.Contains(v, "│") {
+		t.Fatalf("diff missing line-number gutter: %q", v)
+	}
+	if !strings.Contains(v, "License") {
+		t.Fatalf("diff body missing: %q", v)
 	}
 }
 
@@ -2292,6 +2524,73 @@ func TestFilePickerInsertsPath(t *testing.T) {
 	}
 	if !strings.Contains(m.prompt.Value(), "hello.go") {
 		t.Fatalf("prompt missing path: %q", m.prompt.Value())
+	}
+}
+
+func TestAtPickerListsSubagentsWithStatus(t *testing.T) {
+	st := newTestStore(t)
+	dir := t.TempDir()
+	parent, err := st.CreateSession(context.Background(), db.Session{Directory: dir, Title: "main"})
+	if err != nil {
+		t.Fatalf("parent: %v", err)
+	}
+	pid := parent.ID
+	child, err := st.CreateSession(context.Background(), db.Session{
+		Directory: dir, Title: "lint-fix", ParentSessionID: &pid, Kind: db.SessionKindSubagent,
+	})
+	if err != nil {
+		t.Fatalf("child: %v", err)
+	}
+	um, err := st.InsertMessage(context.Background(), db.Message{SessionID: child.ID, Role: "user"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	task := "fix the linter"
+	if _, err := st.InsertPart(context.Background(), db.Part{MessageID: um.ID, Type: "text", Text: &task}); err != nil {
+		t.Fatal(err)
+	}
+	am, err := st.InsertMessage(context.Background(), db.Message{SessionID: child.ID, Role: "assistant"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply := "all clean"
+	if _, err := st.InsertPart(context.Background(), db.Part{MessageID: am.ID, Type: "text", Text: &reply}); err != nil {
+		t.Fatal(err)
+	}
+
+	m := New(Options{Store: st, Client: deadClient(), Workdir: dir, Session: &parent})
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 36})
+	m = mm.(Model)
+	m = typeText(m, "@lint")
+	if !m.filePickerMode {
+		t.Fatal("@ should open picker")
+	}
+	v := stripANSI(viewText(m))
+	if !strings.Contains(v, "lint-fix") {
+		t.Fatalf("picker missing sub-agent name: %q", v)
+	}
+	if !strings.Contains(v, "agent") {
+		t.Fatalf("picker missing agent label: %q", v)
+	}
+	if !strings.Contains(v, "completed") && !strings.Contains(v, theme.StatusDiamond) {
+		t.Fatalf("picker missing status: %q", v)
+	}
+	m = upd(m, enter())
+	if m.filePickerMode {
+		t.Fatal("picker should close")
+	}
+	if !strings.Contains(m.prompt.Value(), "@agent:lint-fix") {
+		t.Fatalf("prompt missing agent mention: %q", m.prompt.Value())
+	}
+	expanded := m.withMentionContext(m.prompt.Value() + " please continue")
+	if !strings.Contains(expanded, "Sub-agent context: lint-fix") {
+		t.Fatalf("expanded missing context header: %q", expanded)
+	}
+	if !strings.Contains(expanded, "fix the linter") {
+		t.Fatalf("expanded missing child task: %q", expanded)
+	}
+	if !strings.Contains(expanded, "all clean") {
+		t.Fatalf("expanded missing child reply: %q", expanded)
 	}
 }
 

@@ -65,11 +65,14 @@ pickers are centered cards.
   session. Rows stay on one line (newlines in a title collapse to spaces);
   long titles truncate with an ellipsis, and the list scrolls with the wheel.
 - Empty session: a short hint in the transcript, not a blank pane.
-- `/help` or `?` (empty prompt) opens a centered key card with
-  shortcuts in two columns. `esc` or `?` closes it.
+- `/help` or `?` (empty prompt) opens a centered key card (two columns
+  at 100+ width) listing send, slash commands including `/settings` and
+  `/continue`, copy/quit, and undo. `esc`, `?`, or `[x]` closes it.
 - `@` in the prompt opens a project file picker. Enter inserts `@path`.
 - Dragging across transcript rows selects and copies the range on mouse
-  release; a temporary `text copied` notice appears above the prompt. A
+  release; a temporary `text copied` notice appears above the prompt. The
+  left work rail and user-frame curls stay on screen for layout, but are
+  stripped from the clipboard so the paste is plain message text. A
   click on a tool card or reasoning header expands or collapses that item
   instead of starting a selection. Clicks on the model status and scrollbar
   keep their existing navigation behavior. A click on a slash-menu row runs
@@ -81,16 +84,58 @@ pickers are centered cards.
 
 | Key | Action |
 | --- | --- |
-| `enter` | send the prompt |
+| `enter` | send the prompt; while busy with a draft, **send now** (interrupts) |
 | `shift+enter` | insert a newline |
 | `q` | type the letter `q` (the prompt is focused) |
-| `esc` | cancel an in-flight turn; when idle, twice clears the prompt |
+| `esc` | cancel an in-flight turn (and live sub-agents); when idle, twice clears the prompt |
+
+While a turn is running, the status strip above the input shows **working** plus
+the live activity (thinking / tool). You can still type a draft in the input
+box (**edit**). Actions:
+
+| While busy | Action |
+| --- | --- |
+| type | edit a draft without waiting for the turn to finish |
+| `enter` (with draft) | cancel the current turn and send the draft immediately |
+| `esc` | cancel the current turn only (no new send) |
 | `t` | expand or collapse reasoning (empty prompt) |
 | `e` | expand or collapse the last tool card (empty prompt) |
 | `ctrl+s` | open the session picker (idle only) |
 | `/resume` | same as `ctrl+s` |
 | click model | open the model picker |
+| `/agents` | open the sub-agent list and logs (aliases `/subs`) |
+| click `subs:N` | same as `/agents` when sub-agents exist for this session |
 | `ctrl+c` | two-step quit (press twice) |
+
+## Sub-agent drawer and logs
+
+After the parent spawns sub-agents (`task` tools), a **drawer above the
+prompt** opens (same layout family as `/model`): one row per sub-agent.
+
+| Diamond | Meaning |
+| --- | --- |
+| Throbbing `◆` | running / queued (pulses with the work rail) |
+| Green `◆` | completed |
+| Red `◆` | failed, cancelled, or timed out |
+
+The right side of each row is a one-liner for the latest tool activity
+(for example `bash  go test ./...` or `read  path.go`). Past sub-agents
+for the session stay in the list after they finish.
+
+- `/agents` (aliases `/subs`) focuses the drawer; it also opens when a
+  `task` tool runs.
+- Footer chip `subs:live/total` (or `subs:total`) stays next to the model
+  stats; click it to open the drawer.
+- `j`/`k` or click a row, then **enter**: full-screen (100% terminal) log
+  for that child, using the same design as the main chat: `you` / `assistant`
+  roles, collapsible **thinking** (expanded by default), tool cards with
+  status diamonds, and the vertical work rail (`│`).
+- In the log view: `t` toggles thinking, `e` toggles the last tool, `enter`
+  toggles the selected block; `esc` / `[x]` returns to the drawer; `d` closes.
+- `d` on a live drawer row cancels it; `esc` closes the drawer.
+
+Child sessions stay in SQLite (`kind=subagent`) so completed agents still
+appear after the turn ends.
 
 Busy turns, provider errors and the missing-key message render as red status
 text; the user text stays in the transcript.
@@ -141,10 +186,63 @@ model box.
 from `models.json`. The choice is stored in `sessions.variant` and sent
 as `reasoning_effort` on later turns.
 
+## Project settings
+
+`/settings` (alias `/slot`) opens a **centered full-screen card** in the
+same family as `/resume` and `/help`: a bordered panel over the chat with
+a `SETTINGS` header and a clickable `[x]` on the top right. Changes
+persist in `<cwd>/.lazykoder/settings.json`.
+
+| Row | What it controls |
+| --- | --- |
+| new-session model | model for new sessions (default `deepseek-v4-flash`) |
+| new-session variant | default reasoning effort (`default` / low / medium / high / max) |
+| child model override | model every child inherits (empty = inherit parent) |
+| explore model | model for explore-role children (empty = inherit) |
+| step limit | on/off for the per-turn tool-step budget |
+| parent max steps | tool-calling rounds per user turn when the limit is on (1-1000, default 16) |
+| sub-agents | on/off for parent `task` tools |
+| default role | `explore` / `plan` / `general` when `task` omits role |
+| max concurrent | concurrent child agents (1-20, default 4) |
+| max queued | spawn queue size (default 40, cap 100) |
+| child max steps | step budget for each child agent (default 1000) |
+| child timeout | wall-clock timeout (`10m` at 600s; 0 = off) |
+| parallel writers | allow more than one general-role writer |
+| child bash confirms | `ask parent` or `deny` |
+| parent bash allowlist | on/off; parent-only, children are not filtered |
+| allowed executables | chip/count editor for the parent allowlist |
+
+When sub-agents are running, the footer may show `subs:N/M` (active / max
+concurrent). Cancelling the parent turn also cancels child jobs.
+
+| Control | Action |
+| --- | --- |
+| `j`/`k` or arrows | move between rows |
+| `←`/`→` or `h`/`l` | adjust the focused control (cycle model/variant, toggle limit, nudge steps) |
+| enter | open the model or variant picker for that row; toggle/bump for slot rows |
+| space | toggle limit or cycle model/variant |
+| click `[x]` | close |
+| click a row / `◂` / `▸` | adjust that control |
+| `esc` / `x` / `q` | close |
+
+When the step limit is off the agent still has a large safety bound so a
+runaway loop cannot run forever. `/model` and `/variant` still change only
+the **current session**; the settings card is the project default.
+
+## Continue
+
+`/continue` keeps the session going after a step-limit stop: it resumes
+the agent loop on the existing history for another MaxSteps budget and
+does not write a new user message. When the last turn did not hit the
+limit, `/continue` sends a normal user message of `continue` instead.
+After a step-limit error the status line also hints `/continue to keep
+going`.
+
 Typing `/` in the chat prompt opens a full-width command popover above the
-prompt. Each row shows the command name on the left and its description after
-it. `↑`/`↓` select, `enter` or a click runs the command, `esc` closes and
-leaves `/` in the prompt.
+prompt, grouped as Session / Model / Project / Help. Each row shows the
+command name on the left and its description after it (on narrow terminals
+the description sits on the footer). `↑`/`↓` select, `enter` or a click
+runs the command, `esc` closes and leaves `/` in the prompt.
 
 Selecting a model:
 

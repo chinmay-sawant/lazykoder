@@ -3,6 +3,10 @@ package chat
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -12,6 +16,7 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/agent"
 	"github.com/chinmay-sawant/lazykoder/internal/db"
 	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
+	"github.com/chinmay-sawant/lazykoder/internal/tools/edit"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/markdown"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
@@ -104,7 +109,9 @@ func (m *Model) replay(sessionID string) {
 				if tool.TimeStart != nil {
 					when = *tool.TimeStart
 				}
-				m.items = append(m.items, transcriptItem{kind: itemTool, collapsed: true, when: when, tool: tool, part: p})
+				// Edit cards stay open so the diff is always visible.
+				collapsed := tool.Tool != "edit"
+				m.items = append(m.items, transcriptItem{kind: itemTool, collapsed: collapsed, when: when, tool: tool, part: p})
 			case "step-finish":
 				m.applyUsage(p)
 			}
@@ -253,7 +260,8 @@ func estimateTokens(items []transcriptItem) int64 {
 }
 
 func (m *Model) syncTranscript() {
-	m.transcript.SetWidth(max(minPaneWidth, m.width-1))
+	// Leave columns for scrollbar (+ user-nav rail when present).
+	m.transcript.SetWidth(m.transcriptContentWidth())
 	m.transcript.SetHeight(max(minPaneHeight, m.transcriptRenderHeight()))
 	atBottom := m.transcript.AtBottom()
 	yOffset := m.transcript.YOffset()
@@ -600,7 +608,9 @@ func (m *Model) applyTool(ev agent.Event) {
 	if ev.Tool.TimeStart != nil {
 		when = *ev.Tool.TimeStart
 	}
-	item := transcriptItem{kind: itemTool, collapsed: true, when: when, tool: ev.Tool, part: ev.Part}
+	// Edit opens by default so the diff is visible; user can collapse with e.
+	collapsed := ev.Tool.Tool != "edit"
+	item := transcriptItem{kind: itemTool, collapsed: collapsed, when: when, tool: ev.Tool, part: ev.Part}
 	if status == "" || status == "pending" {
 		m.items = append(m.items, item)
 		m.lastTool = len(m.items) - 1
@@ -608,14 +618,46 @@ func (m *Model) applyTool(ev agent.Event) {
 		m.syncTranscript()
 		return
 	}
-	if m.lastTool >= 0 && m.lastTool < len(m.items) && m.items[m.lastTool].kind == itemTool {
-		item.collapsed = m.items[m.lastTool].collapsed
-		m.items[m.lastTool] = item
+	if idx := m.findToolItemIndex(ev.Tool, ev.Part); idx >= 0 {
+		// Keep the user's open/closed choice across status updates.
+		item.collapsed = m.items[idx].collapsed
+		m.items[idx] = item
+		m.lastTool = idx
 	} else {
 		m.items = append(m.items, item)
 		m.lastTool = len(m.items) - 1
 	}
 	m.syncTranscript()
+}
+
+// findToolItemIndex locates an in-flight tool row by part/call id so completed
+// updates do not attach to the wrong card when several tools run in one turn.
+func (m Model) findToolItemIndex(tc db.ToolCall, part db.Part) int {
+	partID := tc.PartID
+	if partID == "" {
+		partID = part.ID
+	}
+	if partID != "" {
+		for i := range m.items {
+			if m.items[i].kind != itemTool {
+				continue
+			}
+			if m.items[i].tool.PartID == partID || m.items[i].part.ID == partID {
+				return i
+			}
+		}
+	}
+	if tc.CallID != "" {
+		for i := range m.items {
+			if m.items[i].kind == itemTool && m.items[i].tool.CallID == tc.CallID {
+				return i
+			}
+		}
+	}
+	if m.lastTool >= 0 && m.lastTool < len(m.items) && m.items[m.lastTool].kind == itemTool {
+		return m.lastTool
+	}
+	return -1
 }
 
 func (m Model) renderItem(it transcriptItem, selected bool, streaming bool) string {
@@ -666,7 +708,13 @@ func (m Model) renderTool(ev agent.Event, collapsed bool, when int64) string {
 	if title == "" {
 		title = name
 	}
-	title = truncateRunes(title, maxToolTitle)
+	// File tools: full path relative to the project folder (never truncated
+	// here; alignMeta still trims only if the clock would collide).
+	if name == "edit" || name == "write" || name == "read" {
+		title = m.relWorkPath(title)
+	} else {
+		title = truncateRunes(title, maxToolTitle)
+	}
 	chevron := "▸"
 	if !collapsed {
 		chevron = "▾"
@@ -675,43 +723,70 @@ func (m Model) renderTool(ev agent.Event, collapsed bool, when int64) string {
 	if title != name {
 		label = name + "  " + title
 	}
+	// Collapsed or open: still show +/− counts on the edit header.
+	if name == "edit" {
+		if add, del := diffStat(m.toolEditDiff(ev.Tool)); add+del > 0 {
+			label += "  " + formatDiffStat(add, del)
+		}
+	}
 	diamondColor := theme.StatusColor(status)
 	diamond := lipgloss.NewStyle().Foreground(diamondColor).Render(theme.StatusDiamond)
 	left := diamond + "  " + lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).Render(chevron+"  "+label)
 	header := m.alignMeta(left, formatClock(when))
-	card := toolCardStyle.Width(m.toolCardWidth()).Background(theme.ColorBg())
+	bodyWidth := max(minPaneWidth, m.toolCardWidth())
+
+	// Edit tools: full-width soft green/red panel when expanded.
+	if name == "edit" {
+		return m.renderEditTool(header, ev, collapsed, bodyWidth)
+	}
+
+	card := toolCardStyle.Width(bodyWidth).Background(theme.ColorBg())
 	if collapsed {
 		return card.Render(header)
 	}
-	bodyWidth := max(minPaneWidth, m.toolCardWidth())
 	body := []string{header}
 	switch ev.Tool.Tool {
-	case "edit":
-		if diff := toolMetadataDiff(ev.Tool); diff != "" {
-			body = append(body, renderDiff(diff, bodyWidth))
-			break
-		}
-		fallthrough
 	case "write":
 		if ev.Tool.Output != nil && *ev.Tool.Output != "" {
 			preview := *ev.Tool.Output
-			if ev.Tool.Tool == "write" && len([]rune(preview)) > 400 {
+			if len([]rune(preview)) > 400 {
 				preview = string([]rune(preview)[:400]) + "…"
 			}
 			body = append(body, toolOutputStyle.Width(bodyWidth).Render(strings.TrimSuffix(preview, "\n")))
 		}
 	default:
 		if command := toolCommand(ev.Tool); command != "" {
-			body = append(body, hintStyle.Width(bodyWidth).Render("$ "+command))
+			body = append(body, hintStyle.Width(bodyWidth).Render("  $ "+command))
 		}
 		if ev.Tool.Output != nil && *ev.Tool.Output != "" {
 			output := strings.TrimSuffix(*ev.Tool.Output, "\n")
-			outputLabel := hintStyle.Width(bodyWidth).Render("output")
-			outputBox := toolOutputStyle.Width(bodyWidth).Render(output)
-			body = append(body, outputLabel, outputBox)
+			outputLabel := hintStyle.Width(bodyWidth).Render("  output")
+			outputBox := toolOutputStyle.Width(bodyWidth).Render("  " + output)
+			body = append(body, "", outputLabel, outputBox)
 		}
 	}
 	return card.Render(strings.Join(body, "\n"))
+}
+
+// renderEditTool draws the edit tool as a full-width card with soft green/red
+// row washes. Open by default; collapsed shows only the header (+/− stats).
+func (m Model) renderEditTool(header string, ev agent.Event, collapsed bool, width int) string {
+	width = max(minPaneWidth, width)
+	panel := editCardStyle.Width(width)
+	head := panel.Render(header)
+	if collapsed {
+		return head
+	}
+	diff := m.toolEditDiff(ev.Tool)
+	if diff == "" {
+		if ev.Tool.Output != nil && *ev.Tool.Output != "" {
+			out := panel.Foreground(theme.ColorMute()).Render(strings.TrimSuffix(*ev.Tool.Output, "\n"))
+			return head + "\n" + out
+		}
+		pending := panel.Foreground(theme.ColorMute()).Render("applying edit…")
+		return head + "\n" + pending
+	}
+	return head + "\n" + renderDiff(diff, width)
 }
 
 func toolMetadataDiff(tc db.ToolCall) string {
@@ -731,25 +806,382 @@ func toolMetadataDiff(tc db.ToolCall) string {
 	return meta.FileDiff
 }
 
-func renderDiff(diff string, width int) string {
-	var b strings.Builder
-	for i, line := range strings.Split(diff, "\n") {
-		if i > 0 {
-			b.WriteString("\n")
+// toolEditDiff returns a unified diff for the edit card. Prefers a live
+// recompute from the file + old/new args (correct line numbers even for
+// historical tool rows that stored bad @@ -1 headers). Falls back to stored
+// metadata, then a synthetic snippet-only diff.
+func (m Model) toolEditDiff(tc db.ToolCall) string {
+	args := parseEditArgs(tc)
+	if d := m.recomputeEditDiff(args); d != "" {
+		return d
+	}
+	if d := toolMetadataDiff(tc); d != "" {
+		// Last resort for rows with no recoverable file state: relocate the
+		// stored hunk headers by searching the file for the first anchor line.
+		if fixed := m.relocateStoredDiff(d, args.FilePath); fixed != "" {
+			return fixed
 		}
-		switch {
-		case strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++"):
-			b.WriteString(diffAddStyle.Render(line))
-		case strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---"):
-			b.WriteString(diffDelStyle.Render(line))
-		default:
-			b.WriteString(hintStyle.Render(line))
+		return d
+	}
+	if args.OldString == "" && args.NewString == "" {
+		return ""
+	}
+	return syntheticEditDiff(args.OldString, args.NewString)
+}
+
+type editArgs struct {
+	FilePath  string `json:"filePath"`
+	OldString string `json:"oldString"`
+	NewString string `json:"newString"`
+}
+
+func parseEditArgs(tc db.ToolCall) editArgs {
+	var args editArgs
+	if tc.InputJSON != "" {
+		_ = json.Unmarshal([]byte(tc.InputJSON), &args)
+	}
+	if args.FilePath == "" && tc.Title != nil {
+		args.FilePath = *tc.Title
+	}
+	return args
+}
+
+// recomputeEditDiff rebuilds a full-file unified diff with correct line
+// numbers using the tool args and the current file on disk.
+func (m Model) recomputeEditDiff(args editArgs) string {
+	if m.workdir == "" || args.FilePath == "" || args.OldString == "" {
+		return ""
+	}
+	abs := args.FilePath
+	if !filepath.IsAbs(abs) {
+		abs = filepath.Join(m.workdir, abs)
+	}
+	data, err := os.ReadFile(abs)
+	if err != nil {
+		return ""
+	}
+	cur := string(data)
+	// Edit applied and still present: reconstruct pre-edit content.
+	if args.NewString != "" && strings.Count(cur, args.NewString) == 1 {
+		idx := strings.Index(cur, args.NewString)
+		before := cur[:idx] + args.OldString + cur[idx+len(args.NewString):]
+		return edit.UnifiedDiff(before, cur)
+	}
+	// File still has oldString (reverted or not yet applied): show prospective.
+	if strings.Count(cur, args.OldString) == 1 {
+		idx := strings.Index(cur, args.OldString)
+		after := cur[:idx] + args.NewString + cur[idx+len(args.OldString):]
+		return edit.UnifiedDiff(cur, after)
+	}
+	return ""
+}
+
+// relocateStoredDiff rewrites @@ hunk starts by finding the first content
+// anchor of each hunk in the on-disk file. Used when recomputeEditDiff cannot
+// reverse the edit (file changed further) but the stored body is still useful.
+func (m Model) relocateStoredDiff(diff, filePath string) string {
+	if m.workdir == "" || filePath == "" || diff == "" {
+		return ""
+	}
+	abs := filePath
+	if !filepath.IsAbs(abs) {
+		abs = filepath.Join(m.workdir, abs)
+	}
+	data, err := os.ReadFile(abs)
+	if err != nil {
+		return ""
+	}
+	fileLines := strings.Split(string(data), "\n")
+	// Map first 80 runes of each non-empty file line -> 1-based line number
+	// (first occurrence). Enough to anchor typical hunk context.
+	index := map[string]int{}
+	for i, ln := range fileLines {
+		key := strings.TrimRight(ln, "\r")
+		if key == "" {
+			continue
+		}
+		if _, ok := index[key]; !ok {
+			index[key] = i + 1
 		}
 	}
-	return toolOutputStyle.Width(width).Render(b.String())
+
+	lines := strings.Split(strings.TrimRight(diff, "\n"), "\n")
+	var out strings.Builder
+	var hunkBody []string
+	flush := func() {
+		if len(hunkBody) == 0 {
+			return
+		}
+		oldStart, newStart := 1, 1
+		for _, hl := range hunkBody {
+			var body string
+			switch {
+			case strings.HasPrefix(hl, "+++") || strings.HasPrefix(hl, "---"):
+				continue
+			case strings.HasPrefix(hl, "+"):
+				body = hl[1:]
+			case strings.HasPrefix(hl, "-"):
+				body = hl[1:]
+			case strings.HasPrefix(hl, " "):
+				body = hl[1:]
+			default:
+				body = hl
+			}
+			body = strings.TrimRight(body, "\r")
+			if body == "" {
+				continue
+			}
+			if n, ok := index[body]; ok {
+				oldStart, newStart = n, n
+				break
+			}
+		}
+		// Count sides for the header.
+		aCount, bCount := 0, 0
+		for _, hl := range hunkBody {
+			switch {
+			case strings.HasPrefix(hl, "+++") || strings.HasPrefix(hl, "---") || strings.HasPrefix(hl, "@@"):
+				continue
+			case strings.HasPrefix(hl, "+"):
+				bCount++
+			case strings.HasPrefix(hl, "-"):
+				aCount++
+			default:
+				aCount++
+				bCount++
+			}
+		}
+		fmt.Fprintf(&out, "@@ -%d,%d +%d,%d @@\n", oldStart, aCount, newStart, bCount)
+		for _, hl := range hunkBody {
+			out.WriteString(hl)
+			out.WriteByte('\n')
+		}
+		hunkBody = hunkBody[:0]
+	}
+	for _, line := range lines {
+		if strings.HasPrefix(line, "@@") {
+			flush()
+			continue
+		}
+		hunkBody = append(hunkBody, line)
+	}
+	flush()
+	return strings.TrimRight(out.String(), "\n")
+}
+
+func syntheticEditDiff(oldStr, newStr string) string {
+	// Snippet-only fallback when the file is gone; line numbers are relative
+	// to the replaced block (starts at 1), not the full file.
+	return edit.UnifiedDiff(oldStr, newStr)
+}
+
+func diffStat(diff string) (add, del int) {
+	if diff == "" {
+		return 0, 0
+	}
+	for _, line := range strings.Split(diff, "\n") {
+		switch {
+		case strings.HasPrefix(line, "+++") || strings.HasPrefix(line, "---"):
+			continue
+		case strings.HasPrefix(line, "+"):
+			add++
+		case strings.HasPrefix(line, "-"):
+			del++
+		}
+	}
+	return add, del
+}
+
+func formatDiffStat(add, del int) string {
+	parts := make([]string, 0, 2)
+	if add > 0 {
+		parts = append(parts, "+"+strconv.Itoa(add))
+	}
+	if del > 0 {
+		parts = append(parts, "-"+strconv.Itoa(del))
+	}
+	return strings.Join(parts, " ")
+}
+
+// renderDiff paints a unified diff at full card width with a dual line-number
+// gutter (old/new). + rows get a soft greenish wash, - rows a soft reddish wash.
+func renderDiff(diff string, width int) string {
+	width = max(minPaneWidth, width)
+	lines := strings.Split(strings.TrimRight(diff, "\n"), "\n")
+	// First pass: walk hunk headers so we can size the number gutter.
+	type diffRow struct {
+		kind   byte // 'h' hunk, 'm' meta, 'k' context, 'd' del, 'a' add
+		oldNum int  // 0 = blank in gutter
+		newNum int
+		text   string // body without leading +/-/space for content rows
+	}
+	rows := make([]diffRow, 0, len(lines))
+	oldLn, newLn := 0, 0
+	maxNum := 1
+	for _, line := range lines {
+		switch {
+		case strings.HasPrefix(line, "@@"):
+			o, n, ok := parseHunkHeader(line)
+			if ok {
+				oldLn, newLn = o, n
+			}
+			rows = append(rows, diffRow{kind: 'h', text: line})
+		case strings.HasPrefix(line, "+++") || strings.HasPrefix(line, "---"):
+			rows = append(rows, diffRow{kind: 'm', text: line})
+		case strings.HasPrefix(line, "+"):
+			rows = append(rows, diffRow{kind: 'a', newNum: newLn, text: line[1:]})
+			if newLn > maxNum {
+				maxNum = newLn
+			}
+			newLn++
+		case strings.HasPrefix(line, "-"):
+			rows = append(rows, diffRow{kind: 'd', oldNum: oldLn, text: line[1:]})
+			if oldLn > maxNum {
+				maxNum = oldLn
+			}
+			oldLn++
+		default:
+			// Context (leading space) or bare line.
+			body := line
+			if strings.HasPrefix(line, " ") {
+				body = line[1:]
+			}
+			rows = append(rows, diffRow{kind: 'k', oldNum: oldLn, newNum: newLn, text: body})
+			if oldLn > maxNum {
+				maxNum = oldLn
+			}
+			if newLn > maxNum {
+				maxNum = newLn
+			}
+			oldLn++
+			newLn++
+		}
+	}
+	numW := len(strconv.Itoa(maxNum))
+	if numW < 2 {
+		numW = 2
+	}
+	// " old new │ " gutter: numW + space + numW + space + │ + space
+	gutterW := numW + 1 + numW + 1 + 1 + 1
+	bodyW := max(8, width-gutterW)
+
+	addRow := diffAddStyle.Width(width).MaxWidth(width)
+	delRow := diffDelStyle.Width(width).MaxWidth(width)
+	metaRow := diffMetaStyle.Width(width).MaxWidth(width)
+	ctxRow := diffCtxStyle.Width(width).MaxWidth(width)
+
+	out := make([]string, 0, len(rows))
+	for _, r := range rows {
+		switch r.kind {
+		case 'h', 'm':
+			display := r.text
+			if lipgloss.Width(display) > width {
+				display = ansi.Cut(display, 0, max(1, width-1)) + "…"
+			}
+			out = append(out, metaRow.Render(display))
+		default:
+			marker := " "
+			var style lipgloss.Style
+			switch r.kind {
+			case 'a':
+				marker = "+"
+				style = addRow
+			case 'd':
+				marker = "-"
+				style = delRow
+			default:
+				marker = " "
+				style = ctxRow
+			}
+			gutter := formatDiffGutter(r.oldNum, r.newNum, numW) + "│ "
+			body := r.text
+			if lipgloss.Width(body) > bodyW-1 {
+				body = ansi.Cut(body, 0, max(1, bodyW-2)) + "…"
+			}
+			display := gutter + marker + body
+			if lipgloss.Width(display) > width {
+				display = ansi.Cut(display, 0, max(1, width-1)) + "…"
+			}
+			out = append(out, style.Render(display))
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
+// parseHunkHeader reads @@ -old[,count] +new[,count] @@.
+func parseHunkHeader(line string) (oldStart, newStart int, ok bool) {
+	// Strip trailing "@@ ..." section name.
+	s := strings.TrimSpace(line)
+	if !strings.HasPrefix(s, "@@") {
+		return 0, 0, false
+	}
+	// Find the two ranges after the first @@.
+	rest := strings.TrimSpace(strings.TrimPrefix(s, "@@"))
+	// rest like: "-12,3 +14,4 @@ optional"
+	parts := strings.Fields(rest)
+	if len(parts) < 2 {
+		return 0, 0, false
+	}
+	oldStart, ok1 := parseDiffRange(parts[0])
+	newStart, ok2 := parseDiffRange(parts[1])
+	return oldStart, newStart, ok1 && ok2
+}
+
+func parseDiffRange(tok string) (start int, ok bool) {
+	tok = strings.TrimPrefix(tok, "-")
+	tok = strings.TrimPrefix(tok, "+")
+	// "12" or "12,3"
+	if i := strings.IndexByte(tok, ','); i >= 0 {
+		tok = tok[:i]
+	}
+	n, err := strconv.Atoi(tok)
+	if err != nil {
+		return 0, false
+	}
+	// Unified diffs use 0 for empty file starts; display as 0 is fine.
+	return n, true
+}
+
+func formatDiffGutter(oldNum, newNum, numW int) string {
+	oldS := strings.Repeat(" ", numW)
+	newS := strings.Repeat(" ", numW)
+	if oldNum > 0 {
+		oldS = fmt.Sprintf("%*d", numW, oldNum)
+	}
+	if newNum > 0 {
+		newS = fmt.Sprintf("%*d", numW, newNum)
+	}
+	return oldS + " " + newS + " "
+}
+
+// relWorkPath returns path relative to the session workdir when possible,
+// with forward slashes, so edit/read/write headers show project-local paths.
+func (m Model) relWorkPath(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return p
+	}
+	// Prefer clean relative form; keep absolute only when outside workdir.
+	if m.workdir != "" {
+		abs := p
+		if !filepath.IsAbs(p) {
+			abs = filepath.Join(m.workdir, p)
+		}
+		if rel, err := filepath.Rel(m.workdir, abs); err == nil {
+			// Inside or equal: show relative. Outside: keep original cleaned.
+			if rel == "." {
+				return filepath.Base(abs)
+			}
+			if !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != ".." {
+				return filepath.ToSlash(rel)
+			}
+		}
+	}
+	return filepath.ToSlash(filepath.Clean(p))
 }
 
 func (m Model) toolCardWidth() int {
+	// Full transcript pane width (after work-rail inset when present).
 	return m.metaWidth()
 }
 

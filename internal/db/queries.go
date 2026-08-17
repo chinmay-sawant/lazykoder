@@ -2,12 +2,16 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"strings"
 	"time"
+
+	"github.com/chinmay-sawant/lazykoder/internal/settings"
 )
 
 const (
-	sessionColumns       = `id, title, directory, provider, model, variant, time_created, time_updated, status`
+	sessionColumns       = `id, title, directory, provider, model, variant, time_created, time_updated, status, parent_session_id, kind`
 	messageColumns       = `id, session_id, role, agent, provider_id, model_id, variant, time_created, seq, visible`
 	messageInsertColumns = `id, session_id, role, agent, provider_id, model_id, variant, time_created, seq`
 	partColumns          = `id, message_id, type, time_created, seq, text, time_start, time_end, finish_reason, ` +
@@ -26,10 +30,17 @@ func (s *Store) CreateSession(ctx context.Context, sess Session) (Session, error
 		sess.Provider = "opencode-go"
 	}
 	if sess.Model == "" {
-		sess.Model = "deepseek-v4-flash"
+		sess.Model = settings.DefaultModelID
 	}
 	if sess.Status == "" {
 		sess.Status = "active"
+	}
+	if sess.Kind == "" {
+		if sess.ParentSessionID != nil && *sess.ParentSessionID != "" {
+			sess.Kind = SessionKindSubagent
+		} else {
+			sess.Kind = SessionKindMain
+		}
 	}
 	if sess.TimeCreated == 0 {
 		sess.TimeCreated = time.Now().UnixMilli()
@@ -37,9 +48,9 @@ func (s *Store) CreateSession(ctx context.Context, sess Session) (Session, error
 	if sess.TimeUpdated == 0 {
 		sess.TimeUpdated = sess.TimeCreated
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO sessions (`+sessionColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	_, err := s.db.ExecContext(ctx, `INSERT INTO sessions (`+sessionColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		sess.ID, sess.Title, sess.Directory, sess.Provider, sess.Model, sess.Variant,
-		sess.TimeCreated, sess.TimeUpdated, sess.Status)
+		sess.TimeCreated, sess.TimeUpdated, sess.Status, sess.ParentSessionID, sess.Kind)
 	if err != nil {
 		return Session{}, fmt.Errorf("db: create session: %w", err)
 	}
@@ -47,7 +58,8 @@ func (s *Store) CreateSession(ctx context.Context, sess Session) (Session, error
 }
 
 // InsertMessage inserts a message, filling the ID, TimeCreated and the
-// per-session seq as MAX(seq)+1.
+// per-session seq as MAX(seq)+1. Also bumps the parent session's
+// time_updated so resume lists and age labels stay current.
 func (s *Store) InsertMessage(ctx context.Context, m Message) (Message, error) {
 	if m.ID == "" {
 		m.ID = NewID("msg_")
@@ -68,6 +80,9 @@ func (s *Store) InsertMessage(ctx context.Context, m Message) (Message, error) {
 		m.ID, m.SessionID, m.Role, m.Agent, m.ProviderID, m.ModelID, m.Variant, m.TimeCreated, m.Seq)
 	if err != nil {
 		return Message{}, fmt.Errorf("db: insert message: %w", err)
+	}
+	if err := touchSessionTx(ctx, tx, m.SessionID, m.TimeCreated); err != nil {
+		return Message{}, err
 	}
 	if err := tx.Commit(); err != nil {
 		return Message{}, fmt.Errorf("db: commit message insert: %w", err)
@@ -176,11 +191,54 @@ func (s *Store) ListMessages(ctx context.Context, sessionID string) ([]Message, 
 }
 
 // SetMessageVisibility soft-hides or restores a message without deleting it.
+// Bumps the owning session's time_updated.
 func (s *Store) SetMessageVisibility(ctx context.Context, messageID string, visible bool) error {
-	if _, err := s.db.ExecContext(ctx, `UPDATE messages SET visible = ? WHERE id = ?`, visible, messageID); err != nil {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("db: begin set message visibility: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `UPDATE messages SET visible = ? WHERE id = ?`, visible, messageID); err != nil {
 		return fmt.Errorf("db: set message visibility: %w", err)
 	}
+	var sessionID string
+	if err := tx.QueryRowContext(ctx, `SELECT session_id FROM messages WHERE id = ?`, messageID).Scan(&sessionID); err != nil {
+		return fmt.Errorf("db: message session for visibility: %w", err)
+	}
+	if err := touchSessionTx(ctx, tx, sessionID, 0); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("db: commit set message visibility: %w", err)
+	}
 	return nil
+}
+
+// TouchSession sets sessions.time_updated to now (or when > 0).
+// Used when activity happens without a new message row.
+func (s *Store) TouchSession(ctx context.Context, sessionID string) error {
+	if sessionID == "" {
+		return fmt.Errorf("db: touch session: empty id")
+	}
+	return touchSession(ctx, s.db, sessionID, 0)
+}
+
+type execContext interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+func touchSession(ctx context.Context, db execContext, sessionID string, when int64) error {
+	if when <= 0 {
+		when = time.Now().UnixMilli()
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE sessions SET time_updated = ? WHERE id = ?`, when, sessionID); err != nil {
+		return fmt.Errorf("db: touch session: %w", err)
+	}
+	return nil
+}
+
+func touchSessionTx(ctx context.Context, tx *sql.Tx, sessionID string, when int64) error {
+	return touchSession(ctx, tx, sessionID, when)
 }
 
 // ListParts returns the parts of a message ordered by seq.
@@ -279,17 +337,50 @@ func (s *Store) GetSession(ctx context.Context, id string) (Session, error) {
 	var sess Session
 	err := s.db.QueryRowContext(ctx, `SELECT `+sessionColumns+` FROM sessions WHERE id = ?`, id).
 		Scan(&sess.ID, &sess.Title, &sess.Directory, &sess.Provider, &sess.Model,
-			&sess.Variant, &sess.TimeCreated, &sess.TimeUpdated, &sess.Status)
+			&sess.Variant, &sess.TimeCreated, &sess.TimeUpdated, &sess.Status,
+			&sess.ParentSessionID, &sess.Kind)
 	if err != nil {
 		return Session{}, fmt.Errorf("db: get session: %w", err)
 	}
 	return sess, nil
 }
 
-// ListSessionsByDir returns the sessions of a directory ordered by
-// time_updated DESC.
+// ListChildSessions returns sub-agent sessions spawned under parentID,
+// most recently updated first. Used by the TUI sub-agent picker/log view.
+func (s *Store) ListChildSessions(ctx context.Context, parentID string) ([]Session, error) {
+	if parentID == "" {
+		return nil, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT `+sessionColumns+` FROM sessions
+WHERE parent_session_id = ? AND kind = 'subagent'
+ORDER BY time_updated DESC, time_created DESC`, parentID)
+	if err != nil {
+		return nil, fmt.Errorf("db: list child sessions: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []Session
+	for rows.Next() {
+		var sess Session
+		if err := rows.Scan(&sess.ID, &sess.Title, &sess.Directory, &sess.Provider, &sess.Model,
+			&sess.Variant, &sess.TimeCreated, &sess.TimeUpdated, &sess.Status,
+			&sess.ParentSessionID, &sess.Kind); err != nil {
+			return nil, fmt.Errorf("db: scan child session: %w", err)
+		}
+		out = append(out, sess)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("db: list child sessions: %w", err)
+	}
+	return out, nil
+}
+
+// ListSessionsByDir returns main sessions of a directory ordered by
+// time_updated DESC (stable ties via time_created, id). Sub-agent child
+// sessions are omitted from resume lists.
 func (s *Store) ListSessionsByDir(ctx context.Context, directory string) ([]Session, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+sessionColumns+` FROM sessions WHERE directory = ? ORDER BY time_updated DESC`, directory)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+sessionColumns+` FROM sessions
+WHERE directory = ? AND (kind = 'main' OR kind = '' OR kind IS NULL)
+ORDER BY time_updated DESC, time_created DESC, id DESC`, directory)
 	if err != nil {
 		return nil, fmt.Errorf("db: list sessions: %w", err)
 	}
@@ -298,7 +389,8 @@ func (s *Store) ListSessionsByDir(ctx context.Context, directory string) ([]Sess
 	for rows.Next() {
 		var sess Session
 		if err := rows.Scan(&sess.ID, &sess.Title, &sess.Directory, &sess.Provider, &sess.Model,
-			&sess.Variant, &sess.TimeCreated, &sess.TimeUpdated, &sess.Status); err != nil {
+			&sess.Variant, &sess.TimeCreated, &sess.TimeUpdated, &sess.Status,
+			&sess.ParentSessionID, &sess.Kind); err != nil {
 			return nil, fmt.Errorf("db: scan session: %w", err)
 		}
 		out = append(out, sess)
@@ -309,11 +401,69 @@ func (s *Store) ListSessionsByDir(ctx context.Context, directory string) ([]Sess
 	return out, nil
 }
 
-// DeleteSession removes a session; messages and parts cascade via
-// foreign_keys=ON.
+// DeleteSession removes a session. Child sub-agent sessions cascade via
+// sessions.parent_session_id ON DELETE CASCADE; messages/parts/tool_calls and
+// subagent_jobs cascade from their session FKs (foreign_keys=ON).
 func (s *Store) DeleteSession(ctx context.Context, id string) error {
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE id = ?`, id); err != nil {
 		return fmt.Errorf("db: delete session: %w", err)
 	}
 	return nil
+}
+
+// ReplaceTodos replaces the full todo list for a session (todowrite contract).
+// items may be empty to clear the list. Seq is assigned 0..n-1 in order.
+func (s *Store) ReplaceTodos(ctx context.Context, sessionID string, items []Todo) error {
+	if sessionID == "" {
+		return fmt.Errorf("db: replace todos: empty session id")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("db: begin replace todos: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM todos WHERE session_id = ?`, sessionID); err != nil {
+		return fmt.Errorf("db: clear todos: %w", err)
+	}
+	now := time.Now().UnixMilli()
+	for i, it := range items {
+		st := it.Status
+		if st == "" {
+			st = TodoPending
+		}
+		content := strings.TrimSpace(it.Content)
+		if _, err := tx.ExecContext(ctx, `INSERT INTO todos (session_id, seq, content, status, time_updated)
+VALUES (?, ?, ?, ?, ?)`, sessionID, i, content, st, now); err != nil {
+			return fmt.Errorf("db: insert todo %d: %w", i, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("db: commit replace todos: %w", err)
+	}
+	return nil
+}
+
+// ListTodos returns todos for a session ordered by seq ascending.
+func (s *Store) ListTodos(ctx context.Context, sessionID string) ([]Todo, error) {
+	if sessionID == "" {
+		return nil, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT session_id, seq, content, status, time_updated
+FROM todos WHERE session_id = ? ORDER BY seq ASC`, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("db: list todos: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []Todo
+	for rows.Next() {
+		var t Todo
+		if err := rows.Scan(&t.SessionID, &t.Seq, &t.Content, &t.Status, &t.TimeUpdated); err != nil {
+			return nil, fmt.Errorf("db: scan todo: %w", err)
+		}
+		out = append(out, t)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("db: list todos: %w", err)
+	}
+	return out, nil
 }

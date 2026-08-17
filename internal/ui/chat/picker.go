@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"charm.land/bubbles/v2/viewport"
@@ -9,6 +10,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
+	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
 
 func (m Model) pickerVPHeight() int {
@@ -31,9 +33,9 @@ func (m Model) pickerView() string {
 	cardW := m.pickerDrawerWidth()
 	kind := "models"
 	if m.pickerKind == pickerKindVariant {
-		kind = "variants"
+		kind = "reasoning"
 	}
-	header := hintStyle.Render(kind+"  ·  ") + m.pickerSelectedLabel()
+	header := hintStyle.Render(kind+"  ·  ") + lipgloss.NewStyle().Foreground(theme.ColorText()).Render(m.pickerSelectedLabel())
 	if lipgloss.Width(header) > cardW {
 		header = truncateRunes(header, cardW)
 	}
@@ -61,6 +63,9 @@ func (m Model) pickerView() string {
 	}
 
 	filter := "filter /  •  r refresh  •  enter select  •  esc cancel"
+	if m.pickerKind == pickerKindVariant {
+		filter = "enter select  •  esc cancel  •  sent as reasoning_effort"
+	}
 	if m.pickerFromPrompt {
 		filter = "type to search  •  enter select  •  esc cancel"
 	} else if m.pickerFiltering {
@@ -76,8 +81,8 @@ func (m Model) pickerView() string {
 
 // pickerContent renders the filtered model list with the cursor marker.
 func (m Model) pickerContent(width int) string {
-	sel := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15"))
-	normal := lipgloss.NewStyle().Faint(true)
+	sel := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).Background(theme.ColorBorder())
+	normal := lipgloss.NewStyle().Foreground(theme.ColorMute())
 	var b strings.Builder
 	for i, id := range m.pickerItems {
 		if i > 0 {
@@ -85,7 +90,7 @@ func (m Model) pickerContent(width int) string {
 		}
 		line := m.pickerRow(id, i == m.pickerCursor, width)
 		if i == m.pickerCursor {
-			b.WriteString(sel.Render(line))
+			b.WriteString(sel.MaxWidth(width).Width(width).Render(line))
 			continue
 		}
 		b.WriteString(normal.Render(line))
@@ -238,6 +243,16 @@ func (m Model) selectPickerItem(idx int) (Model, tea.Cmd) {
 	if !m.pickerBuilt || idx < 0 || idx >= len(m.pickerItems) {
 		return m, nil
 	}
+	if m.settingsPickDefault {
+		if m.pickerKind == pickerKindVariant {
+			m = m.setDefaultVariant(m.pickerItems[idx])
+		} else {
+			m = m.setDefaultModel(m.pickerItems[idx])
+		}
+		m = m.finishPickerSelection()
+		m.settingsPickDefault = false
+		return m.openSettings(), nil
+	}
 	if m.pickerKind == pickerKindVariant {
 		m.variant = m.pickerItems[idx]
 		m.syncSessionVariant()
@@ -263,11 +278,16 @@ func (m Model) finishPickerSelection() Model {
 }
 
 func (m Model) closePicker() Model {
+	reopenSettings := m.settingsPickDefault
 	m.pickerMode = false
 	m.pickerFiltering = false
 	m.pickerFromPrompt = false
 	m.pickerKind = pickerKindModel
 	m.dragOn = false
+	m.settingsPickDefault = false
+	if reopenSettings {
+		return m.openSettings()
+	}
 	return m
 }
 
@@ -383,30 +403,45 @@ func (m Model) pickerSelectedLabel() string {
 		if m.variant != "" {
 			return m.variant
 		}
-		return "provider default"
+		return "default"
 	}
 	current := m.model
 	if current == "" && m.client != nil {
 		current = m.client.Model()
 	}
 	if current == "" {
-		return "provider default"
+		return "default"
 	}
 	return current
 }
 
 func (m Model) pickerItemLabel(id string) string {
 	if m.pickerKind == pickerKindVariant {
+		if id == "" {
+			return "default"
+		}
 		return id
 	}
+	label := id
 	info, ok := modelscache.InfoOf(m.modelInfos, id)
 	if ok && modelscache.IsFree(info) {
-		return id + "  free"
+		label += "  free"
+	} else if modelscache.IsFree(modelscache.Info{ID: id}) {
+		label += "  free"
 	}
-	if modelscache.IsFree(modelscache.Info{ID: id}) {
-		return id + "  free"
+	if ok {
+		var bits []string
+		if info.Context > 0 {
+			bits = append(bits, formatTokens(int64(info.Context)))
+		}
+		if info.InputPerM > 0 {
+			bits = append(bits, fmt.Sprintf("$%.2f/M", info.InputPerM))
+		}
+		if len(bits) > 0 {
+			label += "  " + strings.Join(bits, " · ")
+		}
 	}
-	return id
+	return label
 }
 
 func (m Model) persistSelection() tea.Cmd {

@@ -1,15 +1,17 @@
 # Tools
 
-Six tools are wired into the agent loop. Every tool call is persisted as a
-`parts` row (type `tool`) plus a `tool_calls` row, and the result is sent
-back to the model for the next loop step.
+Base tools plus an optional task control plane for sub-agents. Every tool
+call is persisted as a `parts` row (type `tool`) plus a `tool_calls` row,
+and the result is sent back to the model for the next loop step.
 
 ## Dispatch
 
-`internal/agent` dispatches by `tool_calls` name in `executeTool`. Unknown
-names never crash the loop: they are stored with `status = denied` and
-`output = "unknown tool: <name>"`, and the model gets the denial. This keeps
-future tool names preserved in the store instead of dropped.
+`internal/agent` advertises tools from an allowlist (`ToolNames`, default
+parent set) plus task tools when a `SubagentHost` is configured. Dispatch
+is by name in `executeTool`. Unknown names never crash the loop: they are
+stored with `status = denied` and `output = "unknown tool: <name>"`.
+Allowlisted tools that are forbidden for the current role get
+`tool not allowed: <name>`.
 
 ## bash
 
@@ -25,6 +27,18 @@ future tool names preserved in the store instead of dropped.
   (lexical containment + symlink escape checks).
 - Output capped at 1 MiB with `truncated` in metadata; `lines` count in
   metadata. Missing file -> `status = error`, no panic.
+
+## grep
+
+Fast content search under the workdir (ripgrep when installed, pure-Go
+fallback otherwise). Prefer this over reading many files to find symbols.
+
+- Input: `{"pattern": "...", "path?": "...", "glob?": "*.go",
+  "caseInsensitive?": false, "maxMatches?": 50}`.
+- `path` is a file or directory under the workdir (default: workdir root).
+- Output is `path:line:match` hits (capped; `matches` / `truncated` /
+  `engine` in metadata). No matches returns `no matches` as a completed
+  result (not an error).
 
 ## write
 
@@ -46,12 +60,57 @@ future tool names preserved in the store instead of dropped.
   subject = question text, qualifier = header. `y` picks option 0, `n`
   option 1 (questions with fewer than two options fail as an error).
 - Metadata: `answers` (chosen option texts) and `indexes`.
+- Parent only: child agents never receive this tool.
 
 ## webfetch
 
 - Input: `{"url": "...", "format": "markdown"|"text"}`.
 - http/https only (file:// and other schemes rejected). 30s timeout, 5 MiB
   body cap, `truncated` + `content_type` in metadata.
+
+## Task tools (parent only)
+
+When `settings.agents.enabled` is true, the parent agent gets:
+
+| Tool | Purpose |
+| --- | --- |
+| `task` | Spawn a sub-agent (`prompt` required; optional `name`, `role`, `background`, `model`, `max_steps`) |
+| `task_list` | List jobs for this parent session |
+| `task_status` | Status for one id |
+| `task_wait` | Wait for one id or all |
+| `task_cancel` | Cancel one id or all |
+
+Default `task` waits until the child finishes and returns a JSON summary.
+`background: true` returns a handle immediately (preferred for parallel
+spawns; follow with `task_wait`). Default child step budget is 32
+(configurable via settings `agents.child_max_steps` or per-spawn
+`max_steps`). If a child hits its step limit after doing work, the job
+completes with a partial summary and a note instead of status `failed`.
+
+Child wall-clock lifetime is **not** a `task` argument. It always comes
+from project settings `agents.default_timeout_sec` (default 600s / 10m).
+Model-supplied `timeout_ms` / `timeout_sec` fields are ignored so a parent
+model cannot invent a 1s budget and kill every child.
+
+Schemas and pure JSON helpers live in `internal/tools/task`. Runtime
+lifecycle is `internal/subagent.Manager` + `AgentRunner`. Job handles are
+persisted in SQLite (`subagent_jobs`): after a crash or app restart,
+`task_list` / `task_status` / `task_wait` still return finished summaries,
+and open jobs are resumed (same child session when possible).
+
+### Child roles
+
+| Role | Tools |
+| --- | --- |
+| `explore` / `plan` | `bash`, `read`, `grep`, `webfetch` (no write/edit; bash still gated by policy for rm) |
+| `general` | `bash`, `read`, `grep`, `write`, `edit`, `webfetch` |
+
+Children never get `task` or `question` tools (depth 1). Concurrent
+`general` writers are serialized unless `allow_parallel_writers` is on.
+Hard concurrent cap is 20 (default 4).
+
+Multiple `task` tool calls in one step run in parallel under the manager
+semaphore; other tools stay sequential.
 
 ## Part mapping per step
 
