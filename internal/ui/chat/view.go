@@ -114,6 +114,10 @@ func (m Model) chatScreen() string {
 		bottom.WriteString("\n")
 		bottom.WriteString(m.subagentDrawerView())
 	}
+	if m.statusMode {
+		bottom.WriteString("\n")
+		bottom.WriteString(m.statusDrawerView())
+	}
 	if m.err != "" {
 		bottom.WriteString("\n")
 		bottom.WriteString(errStyle.Width(max(minPaneWidth, m.width)).Render(m.err))
@@ -295,6 +299,9 @@ func (m Model) composerTop() int {
 	if m.subagentPickerMode && !m.subagentLogMode {
 		top += 1 + lipgloss.Height(m.subagentDrawerView())
 	}
+	if m.statusMode {
+		top += 1 + lipgloss.Height(m.statusDrawerView())
+	}
 	if m.err != "" {
 		top += 1 + lipgloss.Height(errStyle.Width(max(minPaneWidth, m.width)).Render(m.err))
 	}
@@ -338,11 +345,8 @@ func (m Model) promptLine() string {
 }
 
 func (m Model) composerFooter(width int) string {
-	if m.statusMode {
-		return m.statusPickerView(width)
-	}
 	left := m.composerLeft()
-	right := m.fitFooterRight(max(4, width-lipgloss.Width(left)-1))
+	right := m.statusChipLabel()
 	gap := width - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 1 {
 		gap = 1
@@ -370,7 +374,7 @@ func (m Model) footerPieces() (tokens, cache, cost, tps string) {
 			tokens = "0/" + formatTokens(int64(window))
 		}
 	}
-	if m.statusSegmentEnabled("tokens") && (m.cacheHit > 0 || m.cacheMiss > 0) {
+	if m.statusSegmentEnabled("cache") && (m.cacheHit > 0 || m.cacheMiss > 0) {
 		cache = formatCache(m.cacheHit, m.cacheMiss)
 	}
 	if m.statusSegmentEnabled("cost") && (m.tokensUsed > 0 || m.cacheHit > 0 || m.cacheMiss > 0 || m.sessionCost > 0) {
@@ -392,8 +396,10 @@ func (m Model) footerStatParts() []string {
 			parts = append(parts, p)
 		}
 	}
-	if s := m.subsStatusLabel(); s != "" {
-		parts = append(parts, s)
+	if m.statusSegmentEnabled("subs") {
+		if s := m.subsStatusLabel(); s != "" {
+			parts = append(parts, s)
+		}
 	}
 	parts = append(parts, m.footerExtraSegments()...)
 	return parts
@@ -432,7 +438,10 @@ func (m Model) fitFooterRight(budget int) string {
 		model = strings.TrimSpace(m.modelChipLabel() + "  " + m.variantChipLabel())
 	}
 	tokens, cache, cost, tps := m.footerPieces()
-	subs := m.subsStatusLabel()
+	subs := ""
+	if m.statusSegmentEnabled("subs") {
+		subs = m.subsStatusLabel()
+	}
 	extras := m.footerExtraSegments()
 	chips := model
 	try := func(lead string, bits ...string) string {
@@ -601,6 +610,9 @@ func (m Model) transcriptRenderHeight() int {
 	if m.subagentPickerMode && !m.subagentLogMode {
 		fixedRows += 1 + lipgloss.Height(m.subagentDrawerView())
 	}
+	if m.statusMode {
+		fixedRows += 1 + lipgloss.Height(m.statusDrawerView())
+	}
 	if m.err != "" {
 		fixedRows += lipgloss.Height(errStyle.Width(max(minPaneWidth, m.width)).Render(m.err))
 	}
@@ -665,6 +677,7 @@ func (m Model) helpOverlay() string {
 		{"/continue", "after a step-limit stop"},
 		{"/settings", "project defaults"},
 		{"/agents", "sub-agents + logs"},
+		{"/status", "status details and visibility"},
 		{"/model", "switch live model"},
 		{"/variant", "reasoning effort"},
 		{"/refresh", "reload models.json"},
@@ -936,6 +949,10 @@ func splitPaneWidths(total int) (left, right int) {
 // footerChipHit reports which footer chip contains (x,y). If both model
 // and variant boxes overlap, the closer center wins.
 func (m Model) footerChipHit(x, y int) (hit bool, which string) {
+	if left, top, right, bottom, ok := m.statusChipRect(); ok &&
+		x >= left && x < right && y >= top && y < bottom {
+		return true, "status"
+	}
 	ml, mt, mr, mb, mok := m.modelStatusRect()
 	vl, vt, vr, vb, vok := m.variantStatusRect()
 	in := func(l, t, r, b int) bool {
@@ -960,6 +977,21 @@ func (m Model) footerChipHit(x, y int) (hit bool, which string) {
 	}
 }
 
+func (m Model) statusChipRect() (left, top, right, bottom int, ok bool) {
+	if m.busy || m.pickerMode || m.sessionPickerMode || m.usageMode || m.settingsMode || m.subagentLogMode || m.statusMode {
+		return 0, 0, 0, 0, false
+	}
+	plain, y, found := m.composerFooterPlainLine()
+	if !found {
+		return 0, 0, 0, 0, false
+	}
+	start, end, hit := displaySpan(plain, m.statusChipLabel())
+	if !hit {
+		return 0, 0, 0, 0, false
+	}
+	return max(0, start-1), y, end, y + 1, true
+}
+
 func absInt(n int) int {
 	if n < 0 {
 		return -n
@@ -978,7 +1010,7 @@ func (m Model) variantStatusRect() (left, top, right, bottom int, ok bool) {
 func (m Model) footerChipRect(chip string) (left, top, right, bottom int, ok bool) {
 	// Allow hits while the sub-agent drawer or slash menu is open; only
 	// suppress when another full-screen/modal chrome owns the mouse.
-	if chip == "" || m.busy || m.pickerMode || m.sessionPickerMode || m.usageMode || m.settingsMode || m.subagentLogMode {
+	if chip == "" || m.busy || m.pickerMode || m.sessionPickerMode || m.usageMode || m.settingsMode || m.subagentLogMode || m.statusMode {
 		return 0, 0, 0, 0, false
 	}
 	plain, y, found := m.composerFooterPlainLine()

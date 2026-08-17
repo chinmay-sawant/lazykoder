@@ -202,9 +202,7 @@ func (m Model) runSlash(name string) (Model, tea.Cmd) {
 	case "/usage":
 		return m.openUsageModal(), m.fetchUsage()
 	case "/status":
-		m.statusMode = true
-		m.statusCursor = 0
-		return m, nil
+		return m.openStatusDrawer(), nil
 	case "/settings", "/slot":
 		return m.openSettings(), m.maybeFetchUsage()
 	case "/agents", "/subs", "/subagents":

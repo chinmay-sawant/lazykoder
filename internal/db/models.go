@@ -27,8 +27,10 @@ type Session struct {
 	StatusSegments  []string
 }
 
-// StatusSegmentNames are the persisted footer segment identifiers.
-var StatusSegmentNames = []string{"model", "tps", "tokens", "cost", "scroll", "models", "prompt"}
+// StatusSegmentNames are the persisted status drawer segment identifiers.
+var StatusSegmentNames = []string{
+	"model", "variant", "tokens", "cache", "cost", "tps", "subs", "models", "scroll", "prompt",
+}
 
 // DefaultStatusSegments returns a fresh copy of the default footer layout.
 func DefaultStatusSegments() []string {

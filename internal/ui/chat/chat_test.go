@@ -820,9 +820,9 @@ func TestModelsFetchedOnStartup(t *testing.T) {
 	p.run(m.Init())
 
 	m = p.runStep(m, p.next())
-	v := stripANSI(viewText(m))
+	v := statusDrawerText(m)
 	if !strings.Contains(v, "deepseek-v4-flash") {
-		t.Errorf("header/status missing current model label: %q", v)
+		t.Errorf("status drawer missing current model label: %q", v)
 	}
 	if strings.Contains(v, "enter to send") || strings.Contains(v, "q to quit") {
 		t.Errorf("idle status still dumps key hints: %q", v)
@@ -1418,15 +1418,15 @@ func TestReplayRestoresCacheHitMiss(t *testing.T) {
 	}
 	mm, _ := m.Update(tea.WindowSizeMsg{Width: 140, Height: 24})
 	m = mm.(Model)
-	v := stripANSI(viewText(m))
+	v := statusDrawerText(m)
 	if !strings.Contains(v, "hit 68k") || !strings.Contains(v, "miss 790") {
-		t.Fatalf("footer missing cache stats: %q", v)
+		t.Fatalf("status drawer missing cache stats: %q", v)
 	}
 	if !strings.Contains(v, "99%") {
-		t.Fatalf("footer missing cache hit percent: %q", v)
+		t.Fatalf("status drawer missing cache hit percent: %q", v)
 	}
 	if !strings.Contains(v, "1%") {
-		t.Fatalf("footer missing cache miss percent: %q", v)
+		t.Fatalf("status drawer missing cache miss percent: %q", v)
 	}
 }
 
@@ -1459,9 +1459,9 @@ func TestModelsMsgRestoresMissingSessionCost(t *testing.T) {
 	}
 	mm, _ = m.Update(tea.WindowSizeMsg{Width: 140, Height: 24})
 	m = mm.(Model)
-	v := stripANSI(viewText(m))
+	v := statusDrawerText(m)
 	if !strings.Contains(v, "$0.420") && !strings.Contains(v, "$0.42") {
-		t.Fatalf("footer missing restored cost: %q", v)
+		t.Fatalf("status drawer missing restored cost: %q", v)
 	}
 }
 
@@ -1744,9 +1744,9 @@ func TestComposerShowsCost(t *testing.T) {
 	m.applyPart(db.Part{Type: "step-finish", TokensInput: &in, TokensOutput: &out, TokensTotal: ptrInt64(2_000_000)})
 	mm, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
 	m = mm.(Model)
-	v := stripANSI(viewText(m))
+	v := statusDrawerText(m)
 	if !strings.Contains(v, "$0.420") && !strings.Contains(v, "$0.42") {
-		t.Fatalf("footer missing session cost: %q", v)
+		t.Fatalf("status drawer missing session cost: %q", v)
 	}
 }
 
@@ -1759,12 +1759,12 @@ func TestComposerShowsZeroCostAfterUsage(t *testing.T) {
 	m.cacheMiss = miss
 	mm, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
 	m = mm.(Model)
-	v := stripANSI(viewText(m))
+	v := statusDrawerText(m)
 	if !strings.Contains(v, "hit 0") || !strings.Contains(v, "miss 397") {
-		t.Fatalf("footer missing cache counts: %q", v)
+		t.Fatalf("status drawer missing cache counts: %q", v)
 	}
 	if !strings.Contains(v, "$0.00") {
-		t.Fatalf("footer missing zero cost after usage: %q", v)
+		t.Fatalf("status drawer missing zero cost after usage: %q", v)
 	}
 }
 
@@ -1823,9 +1823,9 @@ func TestTokensPerSecUsesGeneratedNotSessionTotal(t *testing.T) {
 	}
 	mm, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
 	m = mm.(Model)
-	v := stripANSI(viewText(m))
+	v := statusDrawerText(m)
 	if !strings.Contains(v, "80 tps") && !strings.Contains(v, "79 tps") && !strings.Contains(v, "81 tps") {
-		t.Fatalf("footer missing turn tps: %q", v)
+		t.Fatalf("status drawer missing turn tps: %q", v)
 	}
 }
 
@@ -1850,9 +1850,9 @@ func TestFooterShowsLiveTPSWhileBusy(t *testing.T) {
 	m.turnGenTokens = 80
 	mm, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
 	m = mm.(Model)
-	v := stripANSI(viewText(m))
+	v := statusDrawerText(m)
 	if !strings.Contains(v, "80 tps") && !strings.Contains(v, "79 tps") && !strings.Contains(v, "81 tps") {
-		t.Fatalf("busy footer missing live tps: %q", v)
+		t.Fatalf("busy status drawer missing live tps: %q", v)
 	}
 }
 
@@ -1884,15 +1884,15 @@ func TestFooterShowsHitAndMissPercentsAt80(t *testing.T) {
 	for _, width := range []int{80, 100, 120} {
 		mm, _ := m.Update(tea.WindowSizeMsg{Width: width, Height: 24})
 		got := mm.(Model)
-		v := stripANSI(viewText(got))
+		v := statusDrawerText(got)
 		if !strings.Contains(v, "1.5k/100k") {
-			t.Fatalf("width %d missing token window: %q", width, v)
+			t.Fatalf("width %d status drawer missing token window: %q", width, v)
 		}
 		if !strings.Contains(v, "hit 1.4k") || !strings.Contains(v, "93%") {
-			t.Fatalf("width %d missing hit percent: %q", width, v)
+			t.Fatalf("width %d status drawer missing hit percent: %q", width, v)
 		}
 		if !strings.Contains(v, "miss 100") || !strings.Contains(v, "7%") {
-			t.Fatalf("width %d missing miss percent: %q", width, v)
+			t.Fatalf("width %d status drawer missing miss percent: %q", width, v)
 		}
 	}
 }
@@ -1904,30 +1904,29 @@ func TestComposerShowsContext(t *testing.T) {
 	m.tokensUsed = 1200
 	mm, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = mm.(Model)
-	v := stripANSI(viewText(m))
+	v := statusDrawerText(m)
 	if !strings.Contains(v, "deepseek-v4-flash") || !strings.Contains(v, "1.2k/128k") {
-		t.Fatalf("footer missing context: %q", v)
+		t.Fatalf("status drawer missing context: %q", v)
 	}
 }
 
-func TestComposerPutsModelOnTheRight(t *testing.T) {
+func TestComposerPutsStatusOnTheRight(t *testing.T) {
 	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
-	m.model = "deepseek-v4-flash"
 	mm, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = mm.(Model)
 	var footer string
 	for _, line := range strings.Split(stripANSI(viewText(m)), "\n") {
-		if strings.Contains(line, "deepseek-v4-flash") {
+		if strings.Contains(line, "status ▾") {
 			footer = line
 		}
 	}
 	if footer == "" {
-		t.Fatal("model missing from composer")
+		t.Fatal("status control missing from composer")
 	}
 	idxHint := strings.Index(footer, "enter send")
-	idxModel := strings.Index(footer, "deepseek-v4-flash")
-	if idxHint < 0 || idxModel < 0 || idxModel < idxHint {
-		t.Fatalf("model is not right of the hint: %q", footer)
+	idxStatus := strings.Index(footer, "status ▾")
+	if idxHint < 0 || idxStatus < 0 || idxStatus < idxHint {
+		t.Fatalf("status control is not right of the hint: %q", footer)
 	}
 }
 

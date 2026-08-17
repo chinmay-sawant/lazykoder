@@ -600,6 +600,43 @@ func TestUpdateSessionSegmentsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestLegacyStatusSegmentsExpandOnMigration(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	sess, err := s.CreateSession(ctx, Session{Directory: "/legacy-status"})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	legacy := `["model","tps","tokens","cost","scroll","models","prompt"]`
+	if _, err := s.db.ExecContext(ctx, `UPDATE sessions SET status_segments = ? WHERE id = ?`, legacy, sess.ID); err != nil {
+		t.Fatalf("seed legacy segments: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM schema_migrations WHERE version = ?`, migrationStatusV2); err != nil {
+		t.Fatalf("rewind migration: %v", err)
+	}
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	got, err := s.GetSession(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	for _, name := range []string{"model", "variant", "tokens", "cache", "cost", "tps", "subs", "scroll", "models", "prompt"} {
+		if !containsString(got.StatusSegments, name) {
+			t.Fatalf("migrated segments %v missing %q", got.StatusSegments, name)
+		}
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestCreateSessionListedByProjectRoot(t *testing.T) {
 	ctx := context.Background()
 	s := openTestStore(t)

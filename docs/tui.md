@@ -33,9 +33,11 @@ pickers are centered cards.
   turn is running and stays as a static line after the turn ends and
   when the session is reopened. Typed text uses
   the same black background as the rest of the screen (no cursor-line
-  highlight). The footer left side stays idle (`enter send`). The right side shows
-  `model  used/window  hit N 93%  miss N 7%  $cost  tps` (click the
-  model to switch). hit is cached input tokens (`cache_read` /
+  highlight). The footer left side stays idle (`enter send`). The right side
+  stays compact as a clickable `status ▾` control. Use `/status` to open the
+  drawer with the current model, variant, token window, cache hit/miss, cost,
+  tokens/sec, sub-agent count, model count, scroll state, and prompt hint.
+  hit is cached input tokens (`cache_read` /
   `prompt_cache_hit`); miss is uncached input (`prompt - hit`, or the
   full prompt when the API reports input and cache separately). Each
   count carries its share of hit+miss. tps is this turn's generated tokens (output, or
@@ -107,8 +109,9 @@ box (**edit**). Actions:
 | `ctrl+p` | expand or collapse all thinking blocks |
 | `ctrl+s` | open the session picker (idle only) |
 | `/resume` | same as `ctrl+s` |
-| click model | open the model picker |
+| `/model` | open the model picker |
 | `/agents` | open the sub-agent list and logs (aliases `/subs`) |
+| `/status` | open the status details and visibility drawer |
 | click `subs:N` | same as `/agents` when sub-agents exist for this session |
 | `ctrl+c` | two-step quit (press twice) |
 
@@ -259,7 +262,7 @@ runs the command, `esc` closes and leaves `/` in the prompt.
 
 Selecting a model:
 
-1. updates the current chat model (shown in the status line),
+1. updates the current chat model (shown in the `/status` drawer),
 2. persists to `sessions.model` via `db.UpdateSessionModel` (when a session
    exists), and
 3. sends `ChatRequest.Model` and the stored `endpoint` on every
@@ -268,13 +271,15 @@ Selecting a model:
 The chosen model survives restart because the app resumes the latest session
 for the cwd on startup.
 
-## Status segments and todos
+## Status drawer and todos
 
-The footer has named `model`, `tps`, `tokens`, `cost`, `scroll`, `models`, and
-`prompt` segments. Type `/status` to open the one-line picker, use arrows to
-select a segment, `enter` to toggle it, and `esc` to close. Visibility is
-stored in the current session's `status_segments` JSON column and restored on
-replay.
+The footer keeps only a compact `status ▾` control so detailed metrics do not
+compete with the prompt. Type `/status` or click that control to open the
+agent-style drawer. All rows are enabled by default. The drawer owns the
+visibility state for `model`, `variant`, `tokens`, `cache`, `cost`, `tps`,
+`subs`, `models`, `scroll`, and `prompt`; `↑`/`↓` select, `enter` toggles,
+and `←`/`esc` closes. Visibility is stored in the current session's
+`status_segments` JSON column and restored on replay.
 
 The model can call `todowrite` with the complete `{todos:[...]}` list. The
 tracker under the session title replaces the stored list atomically and shows

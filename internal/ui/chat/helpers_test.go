@@ -287,16 +287,14 @@ func stampOnRight(view, left, stamp string) bool {
 
 func clickModelStatus(t *testing.T, m Model) Model {
 	t.Helper()
-	left, top, right, bottom, ok := m.modelStatusRect()
-	if !ok || right <= left || bottom <= top {
-		t.Fatal("model status click target not found")
-	}
-	mm, _ := m.Update(tea.MouseClickMsg(tea.Mouse{
-		X:      (left + right) / 2,
-		Y:      top,
-		Button: tea.MouseLeft,
-	}))
-	return mm.(Model)
+	// Model selection moved behind /model when the footer became a compact
+	// status control. Keep picker tests focused on picker behavior.
+	return m.openPicker()
+}
+
+func statusDrawerText(m Model) string {
+	m.statusMode = true
+	return stripANSI(m.statusDrawerView())
 }
 
 func enter() tea.KeyPressMsg {

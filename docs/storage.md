@@ -14,7 +14,7 @@ messages, parts and tool runs.
   when parent and sub-agents wrote in parallel. One connection serializes
   all store access safely for concurrent agents.
 - Numbered migrations recorded in `schema_migrations` (version 1 creates the
-  full schema; later versions alter or rebuild). Current version: **10**.
+  full schema; later versions alter or rebuild). Current version: **11**.
   `Migrate` is idempotent.
 
 ## Schema
@@ -24,7 +24,7 @@ sessions(id TEXT PK, title, directory, provider, model, variant,
          time_created, time_updated, status,
          parent_session_id -> sessions ON DELETE CASCADE,
          kind TEXT NOT NULL DEFAULT 'main',
-         status_segments TEXT NOT NULL DEFAULT '["model","tps","tokens","cost","scroll","models","prompt"]')
+         status_segments TEXT NOT NULL DEFAULT '["model","variant","tokens","cache","cost","tps","subs","models","scroll","prompt"]')
 messages(id TEXT PK, session_id -> sessions ON DELETE CASCADE,
          role, agent, provider_id, model_id, variant, time_created, seq,
          UNIQUE(session_id, seq))
@@ -65,9 +65,10 @@ messages/parts/tools, and durable `subagent_jobs`. Deleting only a child
 session nulls `subagent_jobs.child_session_id` but keeps the job summary.
 Child messages set `messages.agent` to the sub-agent name.
 
-Schema version is 10 (`schema_migrations`). Migrations 7-8 rebuild tables
+Schema version is 11 (`schema_migrations`). Migrations 7-8 rebuild tables
 to add FKs SQLite cannot express with `ALTER TABLE`; migration 9 adds the
-session todo table and migration 10 adds the additive footer segment column.
+session todo table, migration 10 adds the additive footer segment column, and
+migration 11 expands legacy footer visibility into the status drawer fields.
 
 `subagent_jobs` is the durable task registry: spawn/status/finish are
 upserted so `task_list`, `task_status`, and `task_wait` still work after a

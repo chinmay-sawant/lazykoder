@@ -192,7 +192,8 @@ const (
 	migrationJobsFK     = 8
 	migrationTodos      = 9
 	migrationSegments   = 10
-	schemaVersion       = migrationSegments
+	migrationStatusV2   = 11
+	schemaVersion       = migrationStatusV2
 )
 
 // Migrate runs numbered migrations. schema_migrations records the applied
@@ -232,8 +233,10 @@ func (s *Store) Migrate(ctx context.Context) error {
 			// Footer visibility is session state so resume restores the same
 			// status-line layout. JSON keeps the column additive and extensible.
 			err = s.applyMigration(ctx, migrationSegments, []string{
-				`ALTER TABLE sessions ADD COLUMN status_segments TEXT NOT NULL DEFAULT '["model","tps","tokens","cost","scroll","models","prompt"]'`,
+				`ALTER TABLE sessions ADD COLUMN status_segments TEXT NOT NULL DEFAULT '["model","variant","tokens","cache","cost","tps","subs","models","scroll","prompt"]'`,
 			})
+		case migrationStatusV2:
+			err = s.migrateV11StatusSegments(ctx)
 		default:
 			if i < 1 || i > len(schemaMigrations) {
 				return fmt.Errorf("db: missing migration statements for version %d", i)

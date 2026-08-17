@@ -9,6 +9,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/chinmay-sawant/lazykoder/internal/db"
 )
 
 // jumpBarRow is the screen row of the jump-to-latest icon above the input
@@ -25,7 +27,7 @@ func (m Model) mousePress(msg tea.MouseClickMsg) (Model, tea.Cmd) {
 	// Model / variant chips live on the composer footer. Handle them before
 	// the prompt and sub-agent drawer so those never swallow chip clicks
 	// (including while the sub-agent strip is open).
-	if mu.Button == tea.MouseLeft && !m.pickerMode && !m.usageMode && !m.settingsMode && !m.sessionPickerMode && !m.subagentLogMode && !m.busy {
+	if mu.Button == tea.MouseLeft && !m.pickerMode && !m.usageMode && !m.settingsMode && !m.sessionPickerMode && !m.subagentLogMode && !m.statusMode && !m.busy {
 		if hit, which := m.footerChipHit(mu.X, mu.Y); hit {
 			m = m.clearTextSelection()
 			m = m.clearPromptSelection()
@@ -37,11 +39,21 @@ func (m Model) mousePress(msg tea.MouseClickMsg) (Model, tea.Cmd) {
 				m.slashMode = false
 				m.slashCursor = 0
 			}
+			if which == "status" {
+				return m.openStatusDrawer(), nil
+			}
 			if which == "variant" {
 				return m.openVariantPicker(), nil
 			}
 			return m.openPicker(), nil
 		}
+	}
+	if mu.Button == tea.MouseLeft && m.statusMode {
+		if idx, ok := m.statusIndexAtScreenY(mu.Y); ok {
+			m.statusCursor = idx
+			return m.toggleStatusSegment(db.StatusSegmentNames[idx])
+		}
+		return m, nil
 	}
 	// Sub-agent drawer sits above the composer: handle it before prompt hits
 	// so the compact strip is not stolen by the input box geometry.
