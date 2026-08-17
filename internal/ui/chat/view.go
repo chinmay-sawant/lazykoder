@@ -32,6 +32,9 @@ func (m Model) frame() string {
 	if m.settingsMode {
 		return m.settingsScreen()
 	}
+	if m.usageMode {
+		return m.usageScreen()
+	}
 	if m.helpMode {
 		return m.helpScreen()
 	}
@@ -92,7 +95,9 @@ func (m Model) chatScreen() string {
 
 	var bottom strings.Builder
 	if m.slashMode {
-		bottom.WriteString("\n")
+		if m.width >= slashCompactMaxWidth {
+			bottom.WriteString("\n")
+		}
 		bottom.WriteString(m.slashView())
 	}
 	if m.pickerMode {
@@ -224,7 +229,7 @@ func (m Model) jumpBarVisible() bool {
 	// Keep the jump-to-latest affordance available while the sub-agent drawer
 	// is open so a stuck mid-scroll background can still be recovered. Full-
 	// screen overlays still hide it.
-	if m.pickerMode || m.slashMode || m.confirmMode || m.askMode || m.helpMode || m.settingsMode || m.filePickerMode || m.sessionPickerMode {
+	if m.pickerMode || m.slashMode || m.confirmMode || m.askMode || m.helpMode || m.usageMode || m.settingsMode || m.filePickerMode || m.sessionPickerMode {
 		return false
 	}
 	return !m.transcript.AtBottom()
@@ -939,7 +944,7 @@ func (m Model) variantStatusRect() (left, top, right, bottom int, ok bool) {
 func (m Model) footerChipRect(chip string) (left, top, right, bottom int, ok bool) {
 	// Allow hits while the sub-agent drawer or slash menu is open; only
 	// suppress when another full-screen/modal chrome owns the mouse.
-	if chip == "" || m.busy || m.pickerMode || m.sessionPickerMode || m.settingsMode || m.subagentLogMode {
+	if chip == "" || m.busy || m.pickerMode || m.sessionPickerMode || m.usageMode || m.settingsMode || m.subagentLogMode {
 		return 0, 0, 0, 0, false
 	}
 	plain, y, found := m.composerFooterPlainLine()
@@ -1067,7 +1072,7 @@ func (m Model) composerFooterTop() int {
 
 // subsStatusRect is the click target for the persistent "subs:N" footer chip.
 func (m Model) subsStatusRect() (left, top, right, bottom int, ok bool) {
-	if m.busy || m.pickerMode || m.sessionPickerMode || m.subagentPickerMode || m.settingsMode {
+	if m.busy || m.pickerMode || m.sessionPickerMode || m.subagentPickerMode || m.usageMode || m.settingsMode {
 		return 0, 0, 0, 0, false
 	}
 	subs := m.subsStatusLabel()

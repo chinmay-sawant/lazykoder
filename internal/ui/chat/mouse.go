@@ -25,7 +25,7 @@ func (m Model) mousePress(msg tea.MouseClickMsg) (Model, tea.Cmd) {
 	// Model / variant chips live on the composer footer. Handle them before
 	// the prompt and sub-agent drawer so those never swallow chip clicks
 	// (including while the sub-agent strip is open).
-	if mu.Button == tea.MouseLeft && !m.pickerMode && !m.settingsMode && !m.sessionPickerMode && !m.subagentLogMode && !m.busy {
+	if mu.Button == tea.MouseLeft && !m.pickerMode && !m.usageMode && !m.settingsMode && !m.sessionPickerMode && !m.subagentLogMode && !m.busy {
 		if hit, which := m.footerChipHit(mu.X, mu.Y); hit {
 			m = m.clearTextSelection()
 			m = m.clearPromptSelection()
@@ -82,6 +82,11 @@ func (m Model) mousePress(msg tea.MouseClickMsg) (Model, tea.Cmd) {
 	if m.settingsMode {
 		if next, cmd, hit := m.settingsHit(mu.X, mu.Y, mu.Button); hit {
 			return next, cmd
+		}
+	}
+	if m.usageMode {
+		if x0, y, x1, ok := m.usageCloseRect(); ok && mu.Button == tea.MouseLeft && mu.Y == y && mu.X >= x0 && mu.X < x1 {
+			return m.closeUsageModal(), nil
 		}
 	}
 	// Full-screen sub-agent log card: [x] closes back to the drawer list.

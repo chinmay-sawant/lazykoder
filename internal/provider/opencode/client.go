@@ -12,6 +12,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 )
 
 const (
@@ -539,6 +540,85 @@ func zenModelsURL(base string) (string, bool) {
 		return "", false
 	}
 	return zen + "/models", true
+}
+
+// BillingWindow is one billing window's consumption reported by the OpenCode Go
+// API. Percent is a 0-100 floor of usage against the plan limit; ResetsAt is
+// the RFC3339 time the window rolls over. RateLimited is true at 100%.
+type BillingWindow struct {
+	Status      string // "ok" | "rate-limited"
+	Percent     int    // 0-100
+	ResetsAt    time.Time
+	RateLimited bool
+}
+
+// BillingUsage is the parsed GET <base>/usage response. The OpenCode Go API
+// tracks three windows: a rolling window (the "hourly-like" rollingUsage bucket),
+// weekly, and monthly. Any window missing from the payload stays zero.
+type BillingUsage struct {
+	Rolling BillingWindow
+	Weekly  BillingWindow
+	Monthly BillingWindow
+}
+
+type wireBillingWindow struct {
+	Status   string `json:"status"`
+	Percent  int    `json:"percent"`
+	ResetsAt string `json:"resetsAt"`
+}
+
+type wireBillingUsage struct {
+	Usage struct {
+		Rolling *wireBillingWindow `json:"rolling"`
+		Weekly  *wireBillingWindow `json:"weekly"`
+		Monthly *wireBillingWindow `json:"monthly"`
+	} `json:"usage"`
+}
+
+// Usage GETs <base>/usage and returns the rolling, weekly, and monthly
+// billing windows. A non-Go base URL returns an empty Usage without error so
+// tests and future providers can gate on the endpoint existing.
+func (c *Client) Usage(ctx context.Context) (BillingUsage, error) {
+	if !strings.Contains(c.baseURL, "/zen/go/") && !strings.Contains(c.baseURL, "/zen/") {
+		return BillingUsage{}, nil
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/usage", nil)
+	if err != nil {
+		return BillingUsage{}, fmt.Errorf("opencode: build usage request: %w", err)
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return BillingUsage{}, fmt.Errorf("opencode: usage request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return BillingUsage{}, statusError("usage request", resp.StatusCode, resp.Body)
+	}
+	var wire wireBillingUsage
+	if err := json.NewDecoder(resp.Body).Decode(&wire); err != nil {
+		return BillingUsage{}, fmt.Errorf("opencode: decode usage response: %w", err)
+	}
+	out := BillingUsage{}
+	if wire.Usage.Rolling != nil {
+		out.Rolling = billingWindowFromWire(wire.Usage.Rolling)
+	}
+	if wire.Usage.Weekly != nil {
+		out.Weekly = billingWindowFromWire(wire.Usage.Weekly)
+	}
+	if wire.Usage.Monthly != nil {
+		out.Monthly = billingWindowFromWire(wire.Usage.Monthly)
+	}
+	return out, nil
+}
+
+func billingWindowFromWire(w *wireBillingWindow) BillingWindow {
+	out := BillingWindow{Status: w.Status, Percent: w.Percent}
+	out.RateLimited = w.Status == "rate-limited"
+	if t, err := time.Parse(time.RFC3339, w.ResetsAt); err == nil {
+		out.ResetsAt = t
+	}
+	return out
 }
 
 type wireModel struct {

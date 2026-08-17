@@ -20,7 +20,7 @@ type slashPaletteGroup struct {
 var slashPaletteGroups = []slashPaletteGroup{
 	{title: "Session", names: []string{"/new", "/resume", "/continue"}},
 	{title: "Model", names: []string{"/model", "/variant", "/refresh"}},
-	{title: "Project", names: []string{"/agents", "/settings"}},
+	{title: "Project", names: []string{"/agents", "/settings", "/usage"}},
 	{title: "Help", names: []string{"/help"}},
 }
 
@@ -80,6 +80,11 @@ func (m Model) slashView() string {
 				continue
 			}
 			body.WriteString("\n")
+			if compact && len(groupItems) == 1 {
+				cmd := groupItems[0]
+				body.WriteString(groupSt.Render(g.title) + "  " + slashCommandRow(cmd, cmd.name == selName, compact, cardW, nameW, sel, nameSt, descSt))
+				continue
+			}
 			body.WriteString(groupSt.Render(g.title))
 			for _, cmd := range groupItems {
 				body.WriteString("\n")
@@ -194,14 +199,18 @@ func (m Model) runSlash(name string) (Model, tea.Cmd) {
 		return m.openVariantPicker(), nil
 	case "/refresh":
 		return m, m.refreshModels
+	case "/usage":
+		return m.openUsageModal(), m.fetchUsage()
 	case "/settings", "/slot":
-		return m.openSettings(), nil
+		return m.openSettings(), m.maybeFetchUsage()
 	case "/agents", "/subs", "/subagents":
 		return m.openSubagentPicker(), nil
 	case "/continue":
 		return m.runContinue()
 	case "/help", "/keys":
 		m.helpMode = true
+		m.usageMode = false
+		m.usageLoading = false
 	}
 	return m, nil
 }

@@ -294,7 +294,7 @@ func (m Model) mousePressPrompt(mu tea.Mouse) (Model, tea.Cmd, bool) {
 	if mu.Button != tea.MouseLeft {
 		return m, nil, false
 	}
-	if m.confirmMode || m.askMode || m.helpMode || m.settingsMode || m.filePickerMode ||
+	if m.confirmMode || m.askMode || m.helpMode || m.usageMode || m.settingsMode || m.filePickerMode ||
 		m.pickerMode || m.sessionPickerMode || m.subagentLogMode {
 		return m, nil, false
 	}

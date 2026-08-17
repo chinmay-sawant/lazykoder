@@ -66,8 +66,12 @@ pickers are centered cards.
   long titles truncate with an ellipsis, and the list scrolls with the wheel.
 - Empty session: a short hint in the transcript, not a blank pane.
 - `/help` or `?` (empty prompt) opens a centered key card (two columns
-  at 100+ width) listing send, slash commands including `/settings` and
-  `/continue`, copy/quit, and undo. `esc`, `?`, or `[x]` closes it.
+  at 100+ width) listing send, slash commands including `/settings`,
+  `/usage`, and `/continue`, copy/quit, and undo. `esc`, `?`, or `[x]`
+  closes it.
+- `/usage` opens a centered OpenCode Go usage card. It fetches the rolling,
+  weekly, and monthly plan windows, showing percentage used, rate-limit
+  status, and reset times. Press `r` to refresh and `esc` or `x` to close.
 - `@` in the prompt opens a project file picker. Enter inserts `@path`.
 - Dragging across transcript rows selects and copies the range on mouse
   release; a temporary `text copied` notice appears above the prompt. The
@@ -211,6 +215,10 @@ persist in `<cwd>/.lazykoder/settings.json`.
 | child bash confirms | `ask parent` or `deny` |
 | parent bash allowlist | on/off; parent-only, children are not filtered |
 | allowed executables | chip/count editor for the parent allowlist |
+
+The settings card also displays the latest OpenCode Go rolling, weekly, and
+monthly usage percentages. Opening `/settings` loads usage when it has not
+already been fetched; `/usage` can be used for an explicit refresh.
 
 When sub-agents are running, the footer may show `subs:N/M` (active / max
 concurrent). Cancelling the parent turn also cancels child jobs.

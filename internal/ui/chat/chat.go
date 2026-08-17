@@ -206,6 +206,12 @@ type Model struct {
 
 	helpMode bool
 
+	usageMode    bool
+	usage        opencode.BillingUsage
+	usageLoaded  bool
+	usageErr     string
+	usageLoading bool
+
 	settingsMode      bool
 	settingsCursor    int
 	settingsEdit      bool
@@ -333,6 +339,7 @@ var slashCommands = []slashCmd{
 	{name: "/variant", description: "switch live reasoning effort (low / medium / high / max)"},
 	{name: "/agents", description: "open the sub-agent drawer and logs", aliases: []string{"subs", "subagents"}},
 	{name: "/refresh", description: "reload the model list into models.json"},
+	{name: "/usage", description: "show OpenCode Go plan usage (rolling, weekly, monthly)"},
 	{name: "/settings", description: "project defaults (model, steps, agents, safety)", aliases: []string{"slot"}},
 	{name: "/continue", description: "resume after a step-limit stop (or send continue)"},
 	{name: "/help", description: "keyboard shortcuts (?, also /keys)", aliases: []string{"keys"}},
@@ -596,6 +603,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, clearCopyNotice()
 		}
 		return m, nil
+	case usageMsg:
+		m.usage = msg.usage
+		m.usageLoaded = msg.err == nil
+		m.usageLoading = false
+		m.usageErr = ""
+		if msg.err != nil {
+			m.usageErr = msg.err.Error()
+		}
+		return m, nil
 	case errMsg:
 		if msg.err != nil {
 			m.err = msg.err.Error()
@@ -696,6 +712,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.helpMode {
 			return m.updateHelpKey(msg)
+		}
+		if m.usageMode {
+			return m.updateUsageKey(msg)
 		}
 		if m.settingsMode {
 			return m.updateSettingsKey(msg)

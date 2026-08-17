@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
+	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 	"github.com/chinmay-sawant/lazykoder/internal/settings"
 	"github.com/chinmay-sawant/lazykoder/internal/subagent"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
@@ -59,7 +60,9 @@ const (
 )
 
 // openSettings opens the full-screen settings card (same layout family as
-// /resume and /help: centered bordered card over the chat).
+// /resume and /help: centered bordered card over the chat). It marks usage as
+// loading when the plan usage has not been loaded yet; the caller kicks off
+// the fetch via maybeFetchUsage.
 func (m Model) openSettings() Model {
 	m.settingsMode = true
 	m.settingsCursor = settingsRowModel
@@ -69,6 +72,8 @@ func (m Model) openSettings() Model {
 	m.slashCursor = 0
 	m.pickerMode = false
 	m.helpMode = false
+	m.usageMode = false
+	m.usageLoading = false
 	m.filePickerMode = false
 	m.sessionPickerMode = false
 	m.prompt.SetValue("")
@@ -238,7 +243,32 @@ func (m Model) settingsPaintLines(innerW int) []settingsPaintLine {
 		m.settingsPaintRow(settingsRowAllowlist, allowlistVal, innerW, false),
 		settingsPaintLine{kind: settingsLineHint, row: -1, text: "children are not filtered by this list"},
 	)
+	if m.usageLoaded {
+		out = append(out, settingsPaintLine{kind: settingsLineHeader, row: -1, text: "opencode usage"})
+		out = append(out,
+			m.settingsUsageRow("rolling", m.usage.Rolling, innerW),
+			m.settingsUsageRow("weekly", m.usage.Weekly, innerW),
+			m.settingsUsageRow("monthly", m.usage.Monthly, innerW),
+		)
+	} else if m.usageErr != "" {
+		out = append(out, settingsPaintLine{kind: settingsLineHint, row: -1, text: "opencode usage: " + truncateRunes(m.usageErr, max(20, innerW-16))})
+	} else {
+		out = append(out, settingsPaintLine{kind: settingsLineHint, row: -1, text: "opencode usage: run /usage to load plan usage"})
+	}
 	return out
+}
+
+// settingsUsageRow builds a compact usage line for the settings card.
+func (m Model) settingsUsageRow(label string, w opencode.BillingWindow, innerW int) settingsPaintLine {
+	stat := "ok"
+	if w.RateLimited {
+		stat = "limited"
+	}
+	val := fmt.Sprintf("%d%%  %s", w.Percent, stat)
+	if !w.ResetsAt.IsZero() {
+		val += "  ·  " + w.ResetsAt.Local().Format("Jan 2 15:04")
+	}
+	return settingsPaintLine{kind: settingsLineRow, row: -1, text: settingsKVRow(false, label, val, innerW), dim: w.RateLimited}
 }
 
 func (m Model) settingsPaintRow(row int, value string, innerW int, dim bool) settingsPaintLine {

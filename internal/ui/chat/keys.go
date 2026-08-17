@@ -173,6 +173,8 @@ func (m Model) updateKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 	case '?':
 		if m.prompt.Value() == "" {
 			m.helpMode = true
+			m.usageMode = false
+			m.usageLoading = false
 			return m, nil
 		}
 	case 't', 'T':
@@ -529,7 +531,7 @@ func (m Model) promptEditing() bool {
 	if m.subagentLogMode {
 		return false
 	}
-	return !m.confirmMode && !m.askMode && !m.helpMode && !m.settingsMode && !m.filePickerMode && !m.pickerMode && !m.sessionPickerMode && !m.slashMode
+	return !m.confirmMode && !m.askMode && !m.helpMode && !m.usageMode && !m.settingsMode && !m.filePickerMode && !m.pickerMode && !m.sessionPickerMode && !m.slashMode
 }
 
 func (m Model) selectedHistoryItem() (inputHistoryItem, bool) {

@@ -52,6 +52,8 @@ func (m Model) openSubagentPicker() Model {
 	m.slashCursor = 0
 	m.pickerMode = false
 	m.helpMode = false
+	m.usageMode = false
+	m.usageLoading = false
 	m.filePickerMode = false
 	m.sessionPickerMode = false
 	m.settingsMode = false
