@@ -498,6 +498,9 @@ func TestSendUsageAndReasoning(t *testing.T) {
 		t.Errorf("text = %v, want %q", parts[2].Text, "visible text")
 	}
 	sf := parts[3]
+	if sf.TimeStart == nil || sf.TimeEnd == nil || *sf.TimeEnd < *sf.TimeStart {
+		t.Fatalf("step-finish timestamps = start %v end %v", sf.TimeStart, sf.TimeEnd)
+	}
 	if sf.FinishReason == nil || *sf.FinishReason != "stop" {
 		t.Errorf("finish_reason = %v, want stop", sf.FinishReason)
 	}
@@ -596,6 +599,45 @@ func TestSendDeniedBash(t *testing.T) {
 		if !contains(partTypes, want) {
 			t.Errorf("part types %v missing %q", partTypes, want)
 		}
+	}
+}
+
+func TestSendTodowriteReplacesAndPersistsRows(t *testing.T) {
+	input := `{"todos":[{"content":"first","status":"in_progress"},{"content":"second","status":"unknown"}]}`
+	tc := fakeToolCall{ID: "todo_1", Name: "todowrite", Args: input}
+	fake := newFakeProvider(t,
+		respBody("", "", "tool-calls", []fakeToolCall{tc}, testUsage),
+		respBody("done", "", "stop", nil, testUsage),
+	)
+	st, _ := newTestEnv(t)
+	a := New(st, newClient(t, fake.srv), t.TempDir(), Options{DisableStreaming: true})
+	events, err := sendAndCollect(t, a, "track this")
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	sid := sessionIDFromEvents(t, events)
+	items, err := st.ListTodos(context.Background(), sid)
+	if err != nil {
+		t.Fatalf("ListTodos: %v", err)
+	}
+	if len(items) != 2 || items[0].Status != db.TodoInProgress || items[1].Status != db.TodoPending {
+		t.Fatalf("todos = %+v", items)
+	}
+	calls, err := st.ListToolCalls(context.Background(), sid)
+	if err != nil {
+		t.Fatalf("ListToolCalls: %v", err)
+	}
+	found := false
+	for _, call := range calls {
+		if call.Tool == "todowrite" {
+			found = true
+			if call.Status != "completed" || call.InputJSON != input || call.Output == nil || *call.Output != "todos updated: 2" {
+				t.Fatalf("todowrite call = %+v", call)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("todowrite call missing: %+v", calls)
 	}
 }
 

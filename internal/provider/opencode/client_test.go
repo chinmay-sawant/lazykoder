@@ -587,3 +587,59 @@ func TestChatRequestModelOverride(t *testing.T) {
 		t.Errorf("model with override = %q, want picked-model", got)
 	}
 }
+
+func TestUsageParsesBillingWindows(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/zen/go/v1/usage" {
+			t.Errorf("path = %q, want /zen/go/v1/usage", r.URL.Path)
+		}
+		if auth := r.Header.Get("Authorization"); auth != "Bearer k" {
+			t.Errorf("Authorization = %q, want Bearer k", auth)
+		}
+		fmt.Fprint(w, `{"usage":{"rolling":{"status":"ok","percent":26,"resetsAt":"2026-08-17T13:21:22.000Z"},"weekly":{"status":"ok","percent":10,"resetsAt":"2026-08-24T00:00:00.000Z"},"monthly":{"status":"rate-limited","percent":100,"resetsAt":"2026-09-01T21:29:16.000Z"}}}`)
+	}))
+	defer srv.Close()
+	c := NewClient("k", WithBaseURL(strings.TrimSuffix(srv.URL, "/")+"/zen/go/v1"))
+	u, err := c.Usage(context.Background())
+	if err != nil {
+		t.Fatalf("Usage(): %v", err)
+	}
+	if u.Rolling.Percent != 26 || u.Rolling.Status != "ok" || u.Rolling.RateLimited {
+		t.Errorf("rolling = %+v", u.Rolling)
+	}
+	if u.Rolling.ResetsAt.Year() != 2026 || u.Rolling.ResetsAt.Month() != 8 {
+		t.Errorf("rolling resetsAt = %v", u.Rolling.ResetsAt)
+	}
+	if u.Weekly.Percent != 10 || u.Weekly.Status != "ok" || u.Weekly.RateLimited {
+		t.Errorf("weekly = %+v", u.Weekly)
+	}
+	if !u.Monthly.RateLimited || u.Monthly.Percent != 100 || u.Monthly.Status != "rate-limited" {
+		t.Errorf("monthly = %+v", u.Monthly)
+	}
+}
+
+func TestUsageSkippedOnNonZenBase(t *testing.T) {
+	c := NewClient("k", WithBaseURL("http://127.0.0.1:1"))
+	u, err := c.Usage(context.Background())
+	if err != nil {
+		t.Fatalf("Usage(): %v", err)
+	}
+	if u.Rolling.Percent != 0 || u.Weekly.Percent != 0 || u.Monthly.Percent != 0 {
+		t.Errorf("expected empty usage on non-zen base, got %+v", u)
+	}
+}
+
+func TestUsageParsesPartialWindows(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"usage":{"weekly":{"status":"ok","percent":42}}}`)
+	}))
+	defer srv.Close()
+	c := NewClient("k", WithBaseURL(strings.TrimSuffix(srv.URL, "/")+"/zen/go/v1"))
+	u, err := c.Usage(context.Background())
+	if err != nil {
+		t.Fatalf("Usage(): %v", err)
+	}
+	if u.Weekly.Percent != 42 || u.Rolling.Percent != 0 || u.Monthly.Percent != 0 {
+		t.Errorf("partial usage = %+v", u)
+	}
+}

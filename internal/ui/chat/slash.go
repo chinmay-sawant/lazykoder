@@ -9,7 +9,12 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
 
+// slashCompactMaxWidth is the compact slash palette card width cap.
 const slashCompactMaxWidth = 100
+
+// slashMinNameGap is the minimum gap (columns) between a slash name and its
+// description, plus the 2-col space left for the shorthand pad.
+const slashMinNameGap = 2
 
 type slashPaletteGroup struct {
 	title string
@@ -20,7 +25,7 @@ type slashPaletteGroup struct {
 var slashPaletteGroups = []slashPaletteGroup{
 	{title: "Session", names: []string{"/new", "/resume", "/continue"}},
 	{title: "Model", names: []string{"/model", "/variant", "/refresh"}},
-	{title: "Project", names: []string{"/agents", "/settings"}},
+	{title: "Project", names: []string{"/agents", "/settings", "/usage"}},
 	{title: "Help", names: []string{"/help"}},
 }
 
@@ -80,6 +85,11 @@ func (m Model) slashView() string {
 				continue
 			}
 			body.WriteString("\n")
+			if compact && len(groupItems) == 1 {
+				cmd := groupItems[0]
+				body.WriteString(groupSt.Render(g.title) + "  " + slashCommandRow(cmd, cmd.name == selName, compact, cardW, nameW, sel, nameSt, descSt))
+				continue
+			}
 			body.WriteString(groupSt.Render(g.title))
 			for _, cmd := range groupItems {
 				body.WriteString("\n")
@@ -120,7 +130,7 @@ func slashCommandRow(cmd slashCmd, selected, compact bool, cardW, nameW int, sel
 		}
 		return nameSt.Render(line)
 	}
-	gap := max(2, nameW-lipgloss.Width(cmd.name)+2)
+	gap := max(slashMinNameGap, nameW-lipgloss.Width(cmd.name)+slashMinNameGap)
 	plain := prefix + cmd.name + strings.Repeat(" ", gap) + cmd.description
 	if lipgloss.Width(plain) > cardW {
 		plain = truncateRunes(plain, cardW)
@@ -194,14 +204,20 @@ func (m Model) runSlash(name string) (Model, tea.Cmd) {
 		return m.openVariantPicker(), nil
 	case "/refresh":
 		return m, m.refreshModels
+	case "/usage":
+		return m.openUsageModal(), m.fetchUsage()
+	case "/status":
+		return m.openStatusDrawer(), nil
 	case "/settings", "/slot":
-		return m.openSettings(), nil
+		return m.openSettings(), m.maybeFetchUsage()
 	case "/agents", "/subs", "/subagents":
 		return m.openSubagentPicker(), nil
 	case "/continue":
 		return m.runContinue()
 	case "/help", "/keys":
 		m.helpMode = true
+		m.usageMode = false
+		m.usageLoading = false
 	}
 	return m, nil
 }
@@ -269,6 +285,9 @@ func filterSlashItems(partial string) []slashCmd {
 		}
 	}
 	for _, cmd := range slashCommands {
+		if cmd.name == "/status" && partial == "" {
+			continue
+		}
 		if seen[cmd.name] || !matchesSlashPartial(cmd, partial) {
 			continue
 		}

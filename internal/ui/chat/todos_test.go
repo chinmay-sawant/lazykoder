@@ -41,7 +41,6 @@ func TestTodoPanelRendersUnderHeader(t *testing.T) {
 	if !strings.Contains(v, "in progress") {
 		t.Fatalf("missing in-progress mark: %q", v)
 	}
-	m = m.toggleTodos()
 	v = stripANSI(viewText(m))
 	if !strings.Contains(v, "[x]") || !strings.Contains(v, "[>]") || !strings.Contains(v, "[ ]") {
 		t.Fatalf("missing checklist marks after expand: %q", v)
@@ -52,7 +51,7 @@ func TestTodoPanelRendersUnderHeader(t *testing.T) {
 	}
 }
 
-func TestTodoPanelCollapsedByDefault(t *testing.T) {
+func TestTodoPanelExpandedWhenSessionResumed(t *testing.T) {
 	st := newTestStore(t)
 	workdir := t.TempDir()
 	sess, err := st.CreateSession(context.Background(), db.Session{Directory: workdir, Title: "main"})
@@ -69,44 +68,32 @@ func TestTodoPanelCollapsedByDefault(t *testing.T) {
 	m := New(Options{Store: st, Client: deadClient(), Workdir: workdir, Session: &sess})
 	mm, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 36})
 	m = mm.(Model)
-	if m.todosExpanded {
-		t.Fatal("todosExpanded should default false")
+	if !m.todosExpanded {
+		t.Fatal("stored todos should be expanded when the session is resumed")
 	}
 	panel := stripANSI(m.todoPanelView())
-	if strings.Contains(panel, "\n") {
-		t.Fatalf("collapsed panel should be one line, got %q", panel)
-	}
 	if !strings.Contains(panel, "todos") || !strings.Contains(panel, "1/3") {
-		t.Fatalf("missing summary: %q", panel)
+		t.Fatalf("missing progress: %q", panel)
 	}
-	bodies := 0
 	for _, body := range []string{"scaffold tracker", "wire todowrite", "tests"} {
-		if strings.Contains(panel, body) {
-			bodies++
+		if !strings.Contains(panel, body) {
+			t.Fatalf("resumed panel missing todo %q: %q", body, panel)
 		}
-	}
-	if bodies == 3 {
-		t.Fatalf("collapsed panel showed all bodies: %q", panel)
-	}
-	v := stripANSI(viewText(m))
-	if strings.Contains(v, "[x]") && strings.Contains(v, "[>]") && strings.Contains(v, "[ ]") {
-		t.Fatalf("default View showed all checklist bodies: %q", v)
-	}
-
-	m = m.toggleTodos()
-	if !m.todosExpanded {
-		t.Fatal("toggleTodos did not expand")
-	}
-	panel = stripANSI(m.todoPanelView())
-	if !strings.Contains(panel, "scaffold tracker") || !strings.Contains(panel, "wire todowrite") || !strings.Contains(panel, "tests") {
-		t.Fatalf("expanded missing bodies: %q", panel)
 	}
 	m = m.toggleTodos()
 	if m.todosExpanded {
-		t.Fatal("toggleTodos did not collapse")
+		t.Fatal("toggleTodos did not collapse the resumed checklist")
 	}
-	if strings.Contains(stripANSI(m.todoPanelView()), "\n") {
-		t.Fatalf("re-collapsed panel should be one line: %q", m.todoPanelView())
+	panel = stripANSI(m.todoPanelView())
+	if strings.Contains(panel, "scaffold tracker") || strings.Contains(panel, "wire todowrite") || strings.Contains(panel, "tests") {
+		t.Fatalf("collapsed panel still showed checklist bodies: %q", panel)
+	}
+	m = m.toggleTodos()
+	if !m.todosExpanded {
+		t.Fatal("toggleTodos did not re-expand the resumed checklist")
+	}
+	if !strings.Contains(stripANSI(m.todoPanelView()), "scaffold tracker") {
+		t.Fatal("re-expanded panel missing checklist body")
 	}
 }
 
@@ -116,6 +103,92 @@ func TestTodoPanelEmptyHides(t *testing.T) {
 	m = mm.(Model)
 	if m.todoPanelView() != "" {
 		t.Fatalf("empty panel should hide, got %q", m.todoPanelView())
+	}
+}
+
+func TestTodoPanelScrollsLongChecklist(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = mm.(Model)
+	for i := 0; i < maxTodoPanelRows+3; i++ {
+		m.todos = append(m.todos, db.Todo{Content: fmt.Sprintf("todo-%d", i+1), Status: db.TodoPending})
+	}
+	m.todosExpanded = true
+	m = m.resizeTodoPanel()
+	panel := stripANSI(m.todoPanelView())
+	if strings.Contains(panel, "more") || strings.Contains(panel, "…") {
+		t.Fatalf("long checklist still uses a summary row: %q", panel)
+	}
+	if !strings.Contains(panel, "todo-1") || strings.Contains(panel, "todo-9") {
+		t.Fatalf("initial checklist viewport is wrong: %q", panel)
+	}
+	if m.todoVp.TotalLineCount() <= m.todoVp.Height() {
+		t.Fatalf("todo viewport did not overflow: lines=%d height=%d", m.todoVp.TotalLineCount(), m.todoVp.Height())
+	}
+
+	y := m.todoPanelTop() + 1
+	mm, _ = m.Update(tea.MouseWheelMsg(tea.Mouse{X: 2, Y: y, Button: tea.MouseWheelDown}))
+	m = mm.(Model)
+	if m.todoVp.YOffset() == 0 {
+		t.Fatal("todo wheel did not scroll its viewport")
+	}
+	panel = stripANSI(m.todoPanelView())
+	if !strings.Contains(panel, "todo-9") {
+		t.Fatalf("scrolled checklist did not reveal the final todo: %q", panel)
+	}
+}
+
+func TestTodoPanelFollowsActiveTodo(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = mm.(Model)
+	for i := 0; i < maxTodoPanelRows+3; i++ {
+		status := db.TodoPending
+		if i == maxTodoPanelRows {
+			status = db.TodoInProgress
+		}
+		m.todos = append(m.todos, db.Todo{Content: fmt.Sprintf("todo-%d", i+1), Status: status})
+	}
+	m.todosExpanded = true
+	m = m.resizeTodoPanel()
+	m = m.focusTodoViewport()
+
+	if got, want := m.todoVp.YOffset(), 1; got != want {
+		t.Fatalf("active todo offset = %d, want %d", got, want)
+	}
+	panel := stripANSI(m.todoPanelView())
+	if strings.Contains(panel, "todo-1") {
+		t.Fatalf("viewport stayed at the first todo: %q", panel)
+	}
+	if !strings.Contains(panel, "[>] todo-7") {
+		t.Fatalf("active seventh todo is not visible or highlighted: %q", panel)
+	}
+}
+
+func TestTodoPanelResumeStartsAtNewestRows(t *testing.T) {
+	st := newTestStore(t)
+	workdir := t.TempDir()
+	sess, err := st.CreateSession(context.Background(), db.Session{Directory: workdir, Title: "main"})
+	if err != nil {
+		t.Fatalf("session: %v", err)
+	}
+	items := make([]db.Todo, 0, maxTodoPanelRows+4)
+	for i := 0; i < cap(items); i++ {
+		items = append(items, db.Todo{Content: fmt.Sprintf("todo-%d", i+1), Status: db.TodoCompleted})
+	}
+	if err := st.ReplaceTodos(context.Background(), sess.ID, items); err != nil {
+		t.Fatalf("ReplaceTodos: %v", err)
+	}
+
+	m := New(Options{Store: st, Client: deadClient(), Workdir: workdir, Session: &sess})
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = mm.(Model)
+	if got, want := m.todoVp.YOffset(), len(items)-m.todoVp.Height(); got != want {
+		t.Fatalf("resumed todo offset = %d, want newest-page offset %d", got, want)
+	}
+	panel := stripANSI(m.todoPanelView())
+	if strings.Contains(panel, "[x] todo-1 ") || !strings.Contains(panel, "[x] todo-10") {
+		t.Fatalf("resumed panel did not show newest todos: %q", panel)
 	}
 }
 
@@ -252,9 +325,12 @@ func TestLoadTodosVisibleOnSessionOpen(t *testing.T) {
 	if !strings.Contains(v, "0/2") {
 		t.Fatalf("view missing progress: %q", v)
 	}
-	// collapsed by default still shows the summary line under the header
+	// Resumed sessions show the checklist body immediately.
 	if !strings.Contains(v, "in progress") {
 		t.Fatalf("view missing in progress: %q", v)
+	}
+	if !strings.Contains(v, "Launch 4 subagent audits") || !strings.Contains(v, "Capture screenshots") {
+		t.Fatalf("view missing resumed checklist bodies: %q", v)
 	}
 }
 

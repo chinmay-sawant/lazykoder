@@ -123,7 +123,10 @@ func (m Model) updateKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 		case 'e', 'E':
 			// Toggle last tool card (including edit) even while the prompt has text.
 			m.quitConfirm = false
-			return m.toggleLastTool(), nil
+			return m.toggleAllTools(), nil
+		case 'p', 'P':
+			m.quitConfirm = false
+			return m.toggleAllReasoning(), nil
 		}
 		var cmd tea.Cmd
 		m.prompt, cmd = m.prompt.Update(key)
@@ -173,15 +176,9 @@ func (m Model) updateKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 	case '?':
 		if m.prompt.Value() == "" {
 			m.helpMode = true
+			m.usageMode = false
+			m.usageLoading = false
 			return m, nil
-		}
-	case 't', 'T':
-		if m.prompt.Value() == "" {
-			return m.toggleReasoning(), nil
-		}
-	case 'e', 'E':
-		if m.prompt.Value() == "" {
-			return m.toggleLastTool(), nil
 		}
 	case tea.KeyBackspace:
 		m.historyCursor = -1
@@ -313,7 +310,8 @@ func (m Model) submit(text string) (Model, tea.Cmd) {
 	m.items = append(m.items, transcriptItem{kind: itemUser, text: text, when: time.Now().UnixMilli()})
 	m.turnItemFrom = len(m.items)
 	m.turnGenTokens = 0
-	m.tokensPerSec = 0
+	m.tpsSamples = nil
+	m.stepMetrics = false
 	m.syncTranscript()
 	m.turnSeq++
 	seq := m.turnSeq
@@ -365,7 +363,8 @@ func (m Model) resumeAfterLimit() (Model, tea.Cmd) {
 	m.items = append(m.items, transcriptItem{kind: itemNote, text: "continuing…"})
 	m.turnItemFrom = len(m.items)
 	m.turnGenTokens = 0
-	m.tokensPerSec = 0
+	m.tpsSamples = nil
+	m.stepMetrics = false
 	m.syncTranscript()
 	m.turnSeq++
 	seq := m.turnSeq
@@ -529,7 +528,7 @@ func (m Model) promptEditing() bool {
 	if m.subagentLogMode {
 		return false
 	}
-	return !m.confirmMode && !m.askMode && !m.helpMode && !m.settingsMode && !m.filePickerMode && !m.pickerMode && !m.sessionPickerMode && !m.slashMode
+	return !m.confirmMode && !m.askMode && !m.helpMode && !m.usageMode && !m.settingsMode && !m.statusMode && !m.filePickerMode && !m.pickerMode && !m.sessionPickerMode && !m.slashMode
 }
 
 func (m Model) selectedHistoryItem() (inputHistoryItem, bool) {

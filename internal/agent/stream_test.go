@@ -8,9 +8,19 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/chinmay-sawant/lazykoder/internal/db"
 )
+
+func TestFormatTokensPerSecond(t *testing.T) {
+	if got := FormatTokensPerSecond(60, 2*time.Second); got != "30.0" {
+		t.Fatalf("rate = %q, want 30.0", got)
+	}
+	if got := FormatTokensPerSecond(60, 0); got != "-" {
+		t.Fatalf("zero elapsed rate = %q, want -", got)
+	}
+}
 
 func TestSendStreamingReasoningAndText(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

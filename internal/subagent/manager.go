@@ -14,6 +14,15 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/db"
 )
 
+// Poll tuning for recovering a job that is open in the store but not yet in
+// memory (Recover/race window).
+const (
+	// handlePollStep is the pause between handle-map polls.
+	handlePollStep = 5 * time.Millisecond
+	// handlePollDeadline bounds how long Wait polls before giving up.
+	handlePollDeadline = 50 * time.Millisecond
+)
+
 // Manager owns the sub-agent job table, concurrency semaphore, and writer lock.
 // When a Store is attached, jobs are durable: task_list/status/wait work after
 // restart, and open jobs are resumed via Recover.
@@ -164,6 +173,8 @@ func (m *Manager) Spawn(ctx context.Context, parentSessionID, parentPartID strin
 	m.handles[id] = h
 
 	job := m.buildJob(id, parentSessionID, parentPartID, name, role, spec, timeout, rt, "", false)
+	h.snap.Model = job.Model
+	h.snap.Variant = job.Variant
 	// Bind session id as soon as the runner creates it (stable drawer identity).
 	job.OnSession = func(childSessionID string) {
 		h.mu.Lock()
@@ -265,6 +276,8 @@ func (m *Manager) resumeJob(ctx context.Context, row db.SubagentJob, runner Runn
 	}
 	m.handles[row.ID] = h
 	job := m.buildJob(row.ID, row.ParentSessionID, row.ParentPartID, row.Name, role, spec, timeout, rt, row.ChildSessionID, true)
+	h.snap.Model = job.Model
+	h.snap.Variant = job.Variant
 	job.OnSession = func(childSessionID string) {
 		h.mu.Lock()
 		h.snap.ChildSessionID = childSessionID
@@ -577,15 +590,15 @@ func (m *Manager) Wait(ctx context.Context, id string) (Result, error) {
 				return resultFromRow(row), nil
 			}
 			// Open job not in memory yet: wait briefly for Recover/race, else error.
-			deadline := time.Now().Add(50 * time.Millisecond)
+			deadline := time.Now().Add(handlePollDeadline)
 			for time.Now().Before(deadline) {
 				m.mu.Lock()
-				h, ok = m.handles[id]
+				_, ok = m.handles[id]
 				m.mu.Unlock()
 				if ok {
 					return m.Wait(ctx, id)
 				}
-				time.Sleep(5 * time.Millisecond)
+				time.Sleep(handlePollStep)
 			}
 			return Result{}, fmt.Errorf("subagent: job %q is open but not running (try again after recover)", id)
 		}
@@ -789,8 +802,8 @@ func (m *Manager) rowFromHandle(h *handle) db.SubagentJob {
 		Status:          h.snap.Status,
 		Prompt:          h.spec.Prompt,
 		Description:     firstNonEmpty(h.spec.Description, h.snap.Name),
-		Model:           h.spec.Model,
-		Variant:         h.spec.Variant,
+		Model:           firstNonEmpty(h.snap.Model, h.spec.Model),
+		Variant:         firstNonEmpty(h.snap.Variant, h.spec.Variant),
 		MaxSteps:        maxSteps,
 		TimeoutMS:       timeoutMS,
 		Summary:         h.snap.Summary,
@@ -811,6 +824,8 @@ func snapshotFromRow(row db.SubagentJob) Snapshot {
 		ID:              row.ID,
 		Name:            row.Name,
 		Role:            row.Role,
+		Model:           row.Model,
+		Variant:         row.Variant,
 		Status:          row.Status,
 		ParentSessionID: row.ParentSessionID,
 		ChildSessionID:  row.ChildSessionID,

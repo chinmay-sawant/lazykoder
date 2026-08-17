@@ -13,6 +13,7 @@ import (
 )
 
 const (
+	// maxTodoPanelRows is the visible body height; longer checklists scroll.
 	maxTodoPanelRows = 6
 	todoMarkPending  = "[ ]"
 	todoMarkActive   = "[>]"
@@ -24,6 +25,8 @@ const (
 func (m Model) loadTodos() Model {
 	if m.store == nil || m.session == nil {
 		m.todos = nil
+		m.todosExpanded = false
+		m.todoVp.GotoTop()
 		return m
 	}
 	items, err := m.store.ListTodos(context.Background(), m.session.ID)
@@ -32,7 +35,9 @@ func (m Model) loadTodos() Model {
 		return m
 	}
 	m.todos = items
-	return m
+	m.todosExpanded = len(items) > 0
+	m = m.resizeTodoPanel()
+	return m.focusTodoViewport()
 }
 
 // applyTodosFromTool updates the checklist when a todowrite tool event lands.
@@ -68,6 +73,8 @@ func (m Model) applyTodosFromTool(tc db.ToolCall) Model {
 		return m
 	}
 
+	m = m.resizeTodoPanel()
+	m = m.focusTodoViewport()
 	// Model-driven checklist updates should surface the bodies immediately.
 	m.todosExpanded = true
 	// Keep agents visible as a compact summary strip under the checklist
@@ -148,23 +155,76 @@ func (m Model) todoPanelView() string {
 		return head
 	}
 
+	m = m.resizeTodoPanel()
+	body := withScrollbar(m.todoVp.View(), m.todoVp.Width(), m.todoVp.Height(),
+		m.todoVp.ScrollPercent(), m.todoVp.TotalLineCount() > m.todoVp.Height())
+	return lipgloss.JoinVertical(lipgloss.Left, head, body)
+}
+
+func (m Model) todoPanelBodyHeight() int {
+	return min(maxTodoPanelRows, max(1, len(m.todos)))
+}
+
+func (m Model) todoPanelContent(width int) string {
 	var b strings.Builder
-	b.WriteString(head)
-	shown := 0
-	for _, t := range m.todos {
-		if shown >= maxTodoPanelRows {
-			rest := total - shown
+	for i, t := range m.todos {
+		if i > 0 {
 			b.WriteString("\n")
-			b.WriteString(hintStyle.Width(w).Render(fmt.Sprintf("  … %d more", rest)))
-			break
 		}
 		mark, style := todoMarkStyle(t.Status)
 		line := mark + " " + t.Content
-		b.WriteString("\n")
-		b.WriteString(style.Width(w).MaxWidth(w).Render(truncateRunes(line, w)))
-		shown++
+		b.WriteString(style.Width(width).MaxWidth(width).Render(truncateRunes(line, width)))
 	}
 	return b.String()
+}
+
+func (m Model) resizeTodoPanel() Model {
+	if len(m.todos) == 0 {
+		m.todoVp.SetContent("")
+		return m
+	}
+	width := max(minPaneWidth, m.width)
+	m.todoVp.SetWidth(max(1, width-1))
+	m.todoVp.SetHeight(m.todoPanelBodyHeight())
+	m.todoVp.SetContent(m.todoPanelContent(m.todoVp.Width()))
+	return m
+}
+
+// focusTodoViewport keeps the active row visible while a checklist is being
+// updated. A completed or idle checklist opens at its newest rows instead of
+// forcing a resumed session back to the first page.
+func (m Model) focusTodoViewport() Model {
+	if len(m.todos) == 0 {
+		m.todoVp.GotoTop()
+		return m
+	}
+	height := max(1, m.todoVp.Height())
+	target := max(0, len(m.todos)-height)
+	for i, todo := range m.todos {
+		if todo.Status == db.TodoInProgress {
+			target = max(0, i-height+1)
+			break
+		}
+	}
+	maxOffset := max(0, m.todoVp.TotalLineCount()-height)
+	m.todoVp.SetYOffset(min(target, maxOffset))
+	return m
+}
+
+func (m Model) todoPanelTop() int {
+	return lipgloss.Height(m.headerView()) + 1
+}
+
+func (m Model) todoPanelHeaderAt(y int) bool {
+	return len(m.todos) > 0 && y == m.todoPanelTop()
+}
+
+func (m Model) todoPanelBodyAt(y int) bool {
+	if !m.todosExpanded || len(m.todos) == 0 {
+		return false
+	}
+	top := m.todoPanelTop() + 1
+	return y >= top && y < top+m.todoPanelBodyHeight()
 }
 
 func (m Model) todoPanelHead(w, done, total, cancelled int) string {
@@ -222,6 +282,17 @@ func (m Model) toggleTodos() Model {
 		return m
 	}
 	m.todosExpanded = !m.todosExpanded
+	if !m.todosExpanded {
+		m.todoVp.GotoTop()
+	} else {
+		m = m.focusTodoViewport()
+	}
+	m = m.resizeTodoPanel()
+	follow := m.transcript.AtBottom()
+	m.syncTranscript()
+	if follow {
+		m.transcript.GotoBottom()
+	}
 	return m
 }
 

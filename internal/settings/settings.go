@@ -293,9 +293,6 @@ func NormalizeAfterLoad(s Settings, raw []byte) Settings {
 	if !jsonHasKey(raw, "slot", "limit_enabled") {
 		s.Slot.LimitEnabled = true
 	}
-	if !jsonHasKey(raw, "model", "default") && s.Model.Default == DefaultModelID {
-		// keep default; already set by normalized
-	}
 	if s.Model.Default == "" {
 		s.Model.Default = DefaultModelID
 	}

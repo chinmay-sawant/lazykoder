@@ -53,6 +53,8 @@ type Snapshot struct {
 	ID              string `json:"id"`
 	Name            string `json:"name"`
 	Role            string `json:"role"`
+	Model           string `json:"model,omitempty"`
+	Variant         string `json:"variant,omitempty"`
 	Status          string `json:"status"`
 	ParentSessionID string `json:"parent_session_id,omitempty"`
 	ChildSessionID  string `json:"child_session_id,omitempty"`

@@ -5,6 +5,7 @@ package grep
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -96,10 +97,10 @@ func Run(ctx context.Context, rootDir string, opts Options, r *Runner) (Result, 
 	defer cancel()
 
 	meta := map[string]any{
-		"pattern":      pattern,
-		"path":         relOrSelf(searchPath, root),
-		"max_matches":  max,
-		"engine":       "rg",
+		"pattern":          pattern,
+		"path":             relOrSelf(searchPath, root),
+		"max_matches":      max,
+		"engine":           "rg",
 		"case_insensitive": opts.CaseInsensitive,
 	}
 	if opts.Glob != "" {
@@ -159,7 +160,8 @@ func runRG(ctx context.Context, r *Runner, rgPath, root, searchPath, pattern, gl
 	err := cmd.Run()
 	// rg: 0 = matches, 1 = no matches, 2 = error
 	if err != nil {
-		if ee, ok := err.(*exec.ExitError); ok {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
 			if ee.ExitCode() == 1 {
 				return "no matches", 0, false, nil
 			}
@@ -197,7 +199,7 @@ func runGo(ctx context.Context, root, searchPath, pattern, glob string, ci bool,
 	truncated := false
 	walkErr := filepath.WalkDir(searchPath, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
-			return nil // skip unreadable entries
+			return err
 		}
 		select {
 		case <-ctx.Done():
@@ -217,12 +219,18 @@ func runGo(ctx context.Context, root, searchPath, pattern, glob string, ci bool,
 			return nil
 		}
 		info, err := d.Info()
-		if err != nil || info.Size() > maxFileBytes || info.Size() == 0 {
+		if err != nil {
+			return err
+		}
+		if info.Size() > maxFileBytes || info.Size() == 0 {
 			return nil
 		}
 		data, err := os.ReadFile(path)
-		if err != nil || !utf8.Valid(data) || bytes.IndexByte(data, 0) >= 0 {
-			return nil // skip binary / unreadable
+		if err != nil {
+			return err
+		}
+		if !utf8.Valid(data) || bytes.IndexByte(data, 0) >= 0 {
+			return nil // skip binary
 		}
 		rel := relOrSelf(path, root)
 		lines := strings.Split(string(data), "\n")
@@ -245,7 +253,7 @@ func runGo(ctx context.Context, root, searchPath, pattern, glob string, ci bool,
 		}
 		return nil
 	})
-	if walkErr != nil && walkErr != errStop {
+	if walkErr != nil && !errors.Is(walkErr, errStop) {
 		return "", 0, false, fmt.Errorf("grep: %w", walkErr)
 	}
 	if hits == 0 {

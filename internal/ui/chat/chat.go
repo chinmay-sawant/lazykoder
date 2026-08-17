@@ -52,17 +52,10 @@ const (
 	minRightPane  = 8
 	pickerMaxRows = 16
 
-	// titleBlockRows are the fixed rows above the transcript: the title
-	// line and one blank line.
-	titleBlockRows = 2
 	// centerDiv splits the leftover space for centering the overlay card.
 	centerDiv = 2
-	// paneDivider is the width of the " │ " separator between panes.
-	paneDivider = 3
 	// pickerVpMinWidth is the floor for the picker list viewport.
 	pickerVpMinWidth = 12
-	// slashQueryMinWidth is the floor for the slash menu query row.
-	slashQueryMinWidth = 16
 	// pickerVpDefaultW/H seed the picker viewport before the first resize.
 	pickerVpDefaultW = 58
 	pickerVpDefaultH = 10
@@ -82,12 +75,12 @@ const (
 	// cardBorder is the two columns of border/margin chrome on each side
 	// of the overlay card content.
 	cardBorder = 2
+	// askCardContentTop is the rounded border row plus top padding row.
+	askCardContentTop = 2
 	// cardPad is the horizontal padding inside overlay cards (help, pickers).
 	cardPad = 2
 	// percentBase converts a percentage to a fraction.
 	percentBase = 100
-	// paneCount is the number of overlay columns (left, divider, right).
-	paneCount = 3
 	// pickerDrawerChrome is the models-drawer header and filter rows.
 	pickerDrawerChrome = 2
 	pickerKindModel    = "model"
@@ -95,6 +88,20 @@ const (
 	// pulseInterval and pulseSteps throb the in-progress reply rail.
 	pulseInterval = 70 * time.Millisecond
 	pulseSteps    = 16
+	// tpsWindowDuration bounds the live rolling rate calculation.
+	tpsWindowDuration = 2 * time.Second
+
+	// activityMaxRunes caps the activity line preview for reasoning/text.
+	activityMaxRunes = 48
+	// doneMaxRunes caps the tool command shown after a completed call.
+	doneMaxRunes = 40
+	// countKilo and countTenKilo are the token-count formatting thresholds.
+	countKilo    = 1000
+	countTenKilo = 10_000
+	// pulseMinSteps guards the pulse ratio when the step count is tiny.
+	pulseMinSteps = 2
+	// composerPad is the prompt textarea border/padding width per side.
+	composerPad = 2
 )
 
 var (
@@ -186,11 +193,14 @@ type Model struct {
 	tokensUsed    int64
 	sessionCost   float64
 	tokensPerSec  float64
+	tpsEstimated  bool
 	cacheHit      int64
 	cacheMiss     int64
 	turnStarted   time.Time
 	turnGenTokens int64
 	turnItemFrom  int
+	tpsSamples    []tpsSample
+	stepMetrics   bool
 
 	confirmCh   chan confirmRequest
 	askCh       chan askRequest
@@ -206,6 +216,12 @@ type Model struct {
 
 	helpMode bool
 
+	usageMode    bool
+	usage        opencode.BillingUsage
+	usageLoaded  bool
+	usageErr     string
+	usageLoading bool
+
 	settingsMode      bool
 	settingsCursor    int
 	settingsEdit      bool
@@ -219,9 +235,13 @@ type Model struct {
 	filePickerAt     int
 
 	// todos is the session checklist from todowrite (shown under the header).
-	todos []db.Todo
-	// todosExpanded shows the checklist bodies; default is the one-line strip.
-	todosExpanded bool
+	todos  []db.Todo
+	todoVp viewport.Model
+	// todosExpanded shows checklist bodies; stored session todos start expanded.
+	todosExpanded  bool
+	statusSegments []string
+	statusMode     bool
+	statusCursor   int
 
 	// userNavHover is the Medium-style right-rail mark under the pointer (-1 = none).
 	userNavHover int
@@ -326,6 +346,11 @@ type textSelection struct {
 
 type copyNoticeMsg struct{}
 
+type tpsSample struct {
+	at     time.Time
+	tokens int64
+}
+
 var slashCommands = []slashCmd{
 	{name: "/new", description: "start a new session and clear the transcript"},
 	{name: "/resume", description: "open past sessions (ctrl+s, also /session)", aliases: []string{"sessions", "session"}},
@@ -333,6 +358,8 @@ var slashCommands = []slashCmd{
 	{name: "/variant", description: "switch live reasoning effort (low / medium / high / max)"},
 	{name: "/agents", description: "open the sub-agent drawer and logs", aliases: []string{"subs", "subagents"}},
 	{name: "/refresh", description: "reload the model list into models.json"},
+	{name: "/usage", description: "show OpenCode Go plan usage (rolling, weekly, monthly)"},
+	{name: "/status", description: "open the status drawer and toggle details"},
 	{name: "/settings", description: "project defaults (model, steps, agents, safety)", aliases: []string{"slot"}},
 	{name: "/continue", description: "resume after a step-limit stop (or send continue)"},
 	{name: "/help", description: "keyboard shortcuts (?, also /keys)", aliases: []string{"keys"}},
@@ -412,6 +439,7 @@ func New(opts Options) Model {
 		userNavTip:          -1,
 		cachePath:           opts.CachePath,
 		transcript:          viewport.New(viewport.WithWidth(defaultWidth-1), viewport.WithHeight(defaultHeight-chromeLines)),
+		todoVp:              viewport.New(viewport.WithWidth(defaultWidth-1), viewport.WithHeight(maxTodoPanelRows)),
 		prompt:              newPromptArea(defaultWidth),
 		renderCache:         &renderCache{},
 	}
@@ -443,10 +471,12 @@ func New(opts Options) Model {
 		}
 		m.replay(m.session.ID)
 		m = m.loadTodos()
+		m.statusSegments = db.NormalizeStatusSegments(m.session.StatusSegments)
 	} else {
 		// New run: seed live model/variant from project defaults.
 		m.model = cfg.EffectiveModel()
 		m.variant = cfg.EffectiveVariant()
+		m.statusSegments = db.DefaultStatusSegments()
 	}
 	return m
 }
@@ -596,6 +626,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, clearCopyNotice()
 		}
 		return m, nil
+	case usageMsg:
+		m.usage = msg.usage
+		m.usageLoaded = msg.err == nil
+		m.usageLoading = false
+		m.usageErr = ""
+		if msg.err != nil {
+			m.usageErr = msg.err.Error()
+		}
+		return m, nil
 	case errMsg:
 		if msg.err != nil {
 			m.err = msg.err.Error()
@@ -616,6 +655,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		m = m.resizeTodoPanel()
+		m = m.focusTodoViewport()
 		m.transcript.SetWidth(m.transcriptContentWidth())
 		// Keep textarea width identical to the bordered composer content so
 		// soft-wrap and mouse hit-testing agree with what is painted.
@@ -697,8 +738,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.helpMode {
 			return m.updateHelpKey(msg)
 		}
+		if m.usageMode {
+			return m.updateUsageKey(msg)
+		}
 		if m.settingsMode {
 			return m.updateSettingsKey(msg)
+		}
+		if m.statusMode {
+			return m.updateStatusKey(msg)
 		}
 		if m.filePickerMode {
 			return m.updateFilePickerKey(msg)
@@ -717,6 +764,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m.updateKey(msg)
 	case tea.MouseWheelMsg:
+		if m.askMode {
+			return m, nil
+		}
 		if m.sessionPickerMode {
 			vp, _ := m.sessionVp.Update(msg)
 			m.sessionVp = vp
@@ -734,6 +784,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.subagentVp = vp
 			return m, nil
 		}
+		if m.todoPanelBodyAt(msg.Mouse().Y) {
+			vp, _ := m.todoVp.Update(msg)
+			m.todoVp = vp
+			return m, nil
+		}
 		if m.pickerMode {
 			vp, _ := m.pickerVp.Update(msg)
 			m.pickerVp = vp
@@ -747,6 +802,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseClickMsg:
 		return m.mousePress(msg)
 	case tea.MouseMotionMsg:
+		if m.askMode {
+			return m, nil
+		}
 		if m.sessionPickerMode {
 			m.sessionHover = -1
 			if idx, ok := m.sessionIndexAtScreenY(msg.Mouse().Y); ok {
@@ -835,6 +893,25 @@ func (m Model) applyEvent(ev agent.Event) Model {
 		if ev.Tool.Tool == "todowrite" {
 			m = m.applyTodosFromTool(ev.Tool)
 		}
+	case agent.EventTokenDelta:
+		if ev.TokenDelta > 0 {
+			now := time.Now()
+			m.tpsSamples = append(m.tpsSamples, tpsSample{at: now, tokens: ev.TokenDelta})
+			cutoff := now.Add(-tpsWindowDuration)
+			first := 0
+			for first < len(m.tpsSamples) && m.tpsSamples[first].at.Before(cutoff) {
+				first++
+			}
+			if first > 0 {
+				m.tpsSamples = m.tpsSamples[first:]
+			}
+		}
+	case agent.EventStepMetrics:
+		m.stepMetrics = true
+		if ev.TokensOutput > 0 && ev.ElapsedMS > 0 {
+			m.tokensPerSec = tokensPerSec(ev.TokensOutput, time.Duration(ev.ElapsedMS)*time.Millisecond)
+			m.tpsEstimated = false
+		}
 	case agent.EventError:
 		if ev.Err != nil && !isCancelErr(ev.Err) {
 			m.err = ev.Err.Error()
@@ -897,8 +974,11 @@ func (m Model) finishTurn(err error) Model {
 		m.pulseOn = false
 	}
 	m.syncTranscript()
-	if !m.turnStarted.IsZero() {
-		m.tokensPerSec = tokensPerSec(m.generatedThisTurn(), time.Since(m.turnStarted))
+	if !m.stepMetrics && !m.turnStarted.IsZero() {
+		if n := tokensPerSec(m.generatedThisTurn(), time.Since(m.turnStarted)); n > 0 {
+			m.tokensPerSec = n
+			m.tpsEstimated = true
+		}
 	}
 	m.bumpTokenFloor()
 	return m
@@ -918,9 +998,41 @@ func tokensPerSec(generated int64, elapsed time.Duration) float64 {
 
 func (m Model) displayTPS() float64 {
 	if m.busy && !m.turnStarted.IsZero() {
-		return tokensPerSec(m.generatedThisTurn(), time.Since(m.turnStarted))
+		if m.stepMetrics && m.tokensPerSec > 0 {
+			return m.tokensPerSec
+		}
+		if n := rollingTPS(m.tpsSamples, time.Now()); n > 0 {
+			return n
+		}
+		if n := tokensPerSec(m.generatedThisTurn(), time.Since(m.turnStarted)); n > 0 {
+			return n
+		}
 	}
 	return m.tokensPerSec
+}
+
+func rollingTPS(samples []tpsSample, now time.Time) float64 {
+	if len(samples) == 0 {
+		return 0
+	}
+	cutoff := now.Add(-tpsWindowDuration)
+	var total int64
+	var first time.Time
+	for _, sample := range samples {
+		if sample.at.Before(cutoff) {
+			continue
+		}
+		if sample.tokens > 0 {
+			total += sample.tokens
+		}
+		if first.IsZero() || sample.at.Before(first) {
+			first = sample.at
+		}
+	}
+	if total <= 0 || first.IsZero() || now.Before(first) {
+		return 0
+	}
+	return tokensPerSec(total, now.Sub(first))
 }
 
 func (m Model) generatedThisTurn() int64 {
@@ -937,13 +1049,13 @@ func (m Model) noteActivityFromPart(p db.Part) Model {
 	switch p.Type {
 	case "reasoning":
 		if p.Text != nil && *p.Text != "" {
-			m.activity = "thinking  " + firstLine(*p.Text, 48)
+			m.activity = "thinking  " + firstLine(*p.Text, activityMaxRunes)
 		} else {
 			m.activity = "thinking"
 		}
 	case "text":
 		if p.Text != nil && *p.Text != "" {
-			m.activity = "writing  " + firstLine(*p.Text, 48)
+			m.activity = "writing  " + firstLine(*p.Text, activityMaxRunes)
 		}
 	case "step-start":
 		if m.activity == "" {
@@ -962,14 +1074,14 @@ func toolActivity(tc db.ToolCall) string {
 	switch tc.Status {
 	case "completed":
 		if cmd != "" {
-			return name + " done  " + truncateRunes(cmd, 40)
+			return name + " done  " + truncateRunes(cmd, doneMaxRunes)
 		}
 		return name + " done"
 	case "error", "denied":
 		return name + " " + tc.Status
 	default:
 		if cmd != "" {
-			return name + "  " + truncateRunes(cmd, 48)
+			return name + "  " + truncateRunes(cmd, activityMaxRunes)
 		}
 		return name
 	}
@@ -984,13 +1096,13 @@ func firstLine(s string, maxRunes int) string {
 }
 
 func formatTokens(n int64) string {
-	if n < 1000 {
+	if n < countKilo {
 		return fmt.Sprintf("%d", n)
 	}
-	if n < 10_000 {
-		return fmt.Sprintf("%.1fk", float64(n)/1000)
+	if n < countTenKilo {
+		return fmt.Sprintf("%.1fk", float64(n)/countKilo)
 	}
-	return fmt.Sprintf("%dk", n/1000)
+	return fmt.Sprintf("%dk", n/countKilo)
 }
 
 func pulseTick() tea.Cmd {
@@ -1004,13 +1116,13 @@ func tipsTick() tea.Cmd {
 
 func (m Model) pulseT() float64 {
 	step := m.pulse
-	if step > pulseSteps/2 {
+	if step > pulseSteps/pulseMinSteps {
 		step = pulseSteps - step
 	}
-	if pulseSteps < 2 {
+	if pulseSteps < pulseMinSteps {
 		return 0
 	}
-	return float64(step) / float64(pulseSteps/2)
+	return float64(step) / float64(pulseSteps/pulseMinSteps)
 }
 
 func isCancelErr(err error) bool {
@@ -1032,8 +1144,8 @@ func newPromptArea(width int) textarea.Model {
 	ta.MinHeight = promptMinRows
 	ta.MaxHeight = promptMaxRows
 	// Match bordered composer content width (not full terminal width).
-	innerW := max(minPaneWidth, width-2)
-	ta.SetWidth(max(minPaneWidth, innerW-2))
+	innerW := max(minPaneWidth, width-composerPad)
+	ta.SetWidth(max(minPaneWidth, innerW-composerPad))
 	ta.SetHeight(promptMinRows)
 	ta.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("shift+enter"))
 	ta.KeyMap.WordBackward = key.NewBinding(key.WithKeys("alt+left", "ctrl+left", "alt+b"))
@@ -1108,26 +1220,6 @@ func (m Model) promptHasMultipleLines() bool {
 	return m.prompt.LineInfo().Height > 1
 }
 
-func (m Model) chromeHeight() int {
-	h := lipgloss.Height(m.headerView()) + 1 + lipgloss.Height(m.composerBlock())
-	if panel := m.todoPanelView(); panel != "" {
-		h += lipgloss.Height(panel)
-	}
-	if m.slashMode {
-		h += 1 + lipgloss.Height(m.slashView())
-	}
-	if m.pickerMode {
-		h += 1 + lipgloss.Height(m.pickerView())
-	}
-	if m.subagentPickerMode && !m.subagentLogMode {
-		h += 1 + lipgloss.Height(m.subagentDrawerView())
-	}
-	if m.err != "" {
-		h += lipgloss.Height(errStyle.Width(max(minPaneWidth, m.width)).Render(m.err))
-	}
-	return max(chromeLines, h)
-}
-
 func (m Model) modelLabel() string {
 	label := m.model
 	if label == "" && m.client != nil {
@@ -1154,10 +1246,6 @@ func (m Model) modelEndpoint() string {
 		return ""
 	}
 	return opencode.ChatURLForModel(m.client.BaseURL(), id)
-}
-
-func (m Model) modelDisplayLabel() string {
-	return m.modelChipLabel()
 }
 
 func (m Model) modelChipLabel() string {
@@ -1222,13 +1310,10 @@ func (m Model) updateHelpKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 
 func (m Model) resolveAskIndex(idx int) Model {
 	if idx < 0 {
+		// Deny-equivalent: do not invent an answer when the user cancels.
+		// Esc cancels; a returned error denies the tool. Use -1 and let
+		// askHook map cancel to error.
 		idx = 0
-		if m.pendingAsk != nil && len(m.askQuestion.Options) > 1 {
-			// deny-equivalent: do not invent an answer; send 0 only if one option
-			// out of range is rejected by the tool, so pick 0 as the first option
-			// when the user cancels? Plan: esc cancels. Agent ask returning error
-			// denies the tool. Use -1 and let askHook map cancel to error.
-		}
 	}
 	if m.pendingAsk != nil {
 		select {

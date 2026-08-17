@@ -37,11 +37,9 @@ func TestSettingsSlashOpensCard(t *testing.T) {
 			t.Fatalf("settings card missing %q: %q", want, v)
 		}
 	}
-	// Full-screen card, not a drawer glued above the prompt.
-	if strings.Contains(v, "ask lazykoder") && strings.Contains(v, "SETTINGS") {
-		// Composer may still paint under Place only if not full replacement.
-		// settingsMode uses dedicated screen - prompt should not be the focus frame.
-	}
+	// Full-screen card, not a drawer glued above the prompt. Composer may
+	// still paint under Place only if not full replacement; settingsMode uses
+	// a dedicated screen so the prompt should not be the focus frame.
 	if !strings.Contains(v, "SETTINGS") {
 		t.Fatal("missing SETTINGS title")
 	}
@@ -160,7 +158,7 @@ func TestSettingsMouseAdjustSteps(t *testing.T) {
 	if !ok {
 		t.Fatalf("decrease chevron missing in %q", line)
 	}
-	inc0, inc1, ok := displaySpanLast(line, "▸")
+	_, _, ok = displaySpanLast(line, "▸")
 	if !ok {
 		t.Fatalf("increase chevron missing in %q", line)
 	}
@@ -171,7 +169,7 @@ func TestSettingsMouseAdjustSteps(t *testing.T) {
 	}
 	// Re-read after re-render.
 	line = settingsPaintedRow(m, "parent max steps")
-	inc0, inc1, ok = displaySpanLast(line, "▸")
+	inc0, inc1, ok := displaySpanLast(line, "▸")
 	if !ok {
 		t.Fatal("▸ missing after decrease")
 	}

@@ -138,3 +138,37 @@ func TestInternalSpecTimeoutStillHonored(t *testing.T) {
 		t.Fatalf("Job.Timeout = %v, want internal Spec.Timeout %v", got, want)
 	}
 }
+
+func TestSnapshotReportsResolvedChildModel(t *testing.T) {
+	r := &captureRunner{release: make(chan struct{})}
+	close(r.release)
+	cfg := NewConfig()
+	cfg.Model = "configured-child-model"
+	cfg.Variant = "high"
+	m := NewManager(cfg, r)
+	m.SetRuntime(Runtime{Workdir: t.TempDir(), Model: "parent-model", Variant: "parent-thinking"})
+	h := NewHost(m)
+	h.ParentSessionID = "ses_parent"
+
+	result, _, status, err := h.Execute(context.Background(), "ses_parent", "task", `{
+		"prompt":"inspect the project",
+		"name":"worker",
+		"background":true
+	}`, "prt_1")
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if status != "queued" && status != "running" && status != "completed" {
+		t.Fatalf("status = %q", status)
+	}
+	var snap Snapshot
+	if err := json.Unmarshal([]byte(result), &snap); err != nil {
+		t.Fatalf("result json: %v %s", err, result)
+	}
+	if snap.Model != "configured-child-model" {
+		t.Fatalf("snapshot model = %q, want resolved configured-child-model", snap.Model)
+	}
+	if snap.Variant != "high" {
+		t.Fatalf("snapshot variant = %q, want resolved high", snap.Variant)
+	}
+}

@@ -30,6 +30,9 @@ const (
 	userNavHitXExtra = 2
 	// userNavTipDuration is how long the label bubble stays after show.
 	userNavTipDuration = 2 * time.Second
+
+	// userNavHalf is the halving divisor for midpoint centering.
+	userNavHalf = 2
 )
 
 // userTurnMark is one progress tick for a user message.
@@ -141,7 +144,7 @@ func placeUserNavMarks(marks []userTurnMark, viewH int) {
 		return
 	}
 	if n == 1 {
-		marks[0].ScreenRow = viewH / 2
+		marks[0].ScreenRow = viewH / userNavHalf
 		return
 	}
 	maxR := viewH - 1
@@ -312,7 +315,7 @@ func userNavHitIndex(marks []userTurnMark, rel int) (int, bool) {
 		return 0, true
 	}
 	for i := 0; i < len(marks)-1; i++ {
-		mid := (marks[i].ScreenRow + marks[i+1].ScreenRow) / 2
+		mid := (marks[i].ScreenRow + marks[i+1].ScreenRow) / userNavHalf
 		if rel <= mid {
 			return i, true
 		}

@@ -31,6 +31,29 @@ const (
 	itemNote
 )
 
+const (
+	maxToolBodyLines  = 100
+	maxToolBodyRunes  = 6000
+	toolBodyHeadLines = 70
+	toolBodyTailLines = maxToolBodyLines - toolBodyHeadLines - 1
+
+	// estimateCharsPerToken is the rough chars-per-token divisor for the
+	// transcript estimate line.
+	estimateCharsPerToken = 4
+	// transcriptLinearPad is the 2-col inset applied to a transcript line.
+	transcriptLinearPad = 2
+	// diffStatParts is the max "+, -" segments in a diff stat.
+	diffStatParts = 2
+	// diffNumMinWidth is the minimum gutter number-column width.
+	diffNumMinWidth = 2
+	// diffBodyMinWidth is the floor width of a diff body column.
+	diffBodyMinWidth = 8
+	// diffHunkParts is the number of "-/+ range" fields in a hunk header.
+	diffHunkParts = 2
+	// diffEllipsisPad is the 2-col space reserved for the trailing ellipsis.
+	diffEllipsisPad = 2
+)
+
 type transcriptItem struct {
 	kind      itemKind
 	text      string
@@ -256,7 +279,7 @@ func estimateTokens(items []transcriptItem) int64 {
 	if n == 0 {
 		return 0
 	}
-	return int64(n / 4)
+	return int64(n / estimateCharsPerToken)
 }
 
 func (m *Model) syncTranscript() {
@@ -316,6 +339,12 @@ func (m Model) renderedItems() []string {
 
 func (m Model) buildRenderedItems() []string {
 	out := make([]string, 0, len(m.items))
+	var itemKeys []uint64
+	var itemRows []string
+	if m.renderCache != nil {
+		itemKeys = make([]uint64, len(m.items))
+		itemRows = make([]string, len(m.items))
+	}
 	for i, it := range m.items {
 		if i > 0 && (it.kind == itemUser || it.kind == itemAssistant) {
 			if it.kind == itemUser {
@@ -324,7 +353,25 @@ func (m Model) buildRenderedItems() []string {
 				out = append(out, m.railedItem(i, " "))
 			}
 		}
-		out = append(out, m.railedItem(i, m.renderItemCopy(i, it)))
+		body := ""
+		if m.renderCache != nil {
+			key := m.itemRenderKey(i, it)
+			itemKeys[i] = key
+			if i < len(m.renderCache.itemKeys) && m.renderCache.itemKeys[i] == key {
+				body = m.renderCache.itemRows[i]
+			} else {
+				body = m.railedItem(i, m.renderItemCopy(i, it))
+				m.renderCache.itemRenders++
+			}
+			itemRows[i] = body
+		} else {
+			body = m.railedItem(i, m.renderItemCopy(i, it))
+		}
+		out = append(out, body)
+	}
+	if m.renderCache != nil {
+		m.renderCache.itemKeys = itemKeys
+		m.renderCache.itemRows = itemRows
 	}
 	return out
 }
@@ -423,7 +470,7 @@ func frameUserPrompt(text string, width int) string {
 		}
 	}
 	if width > 0 {
-		innerW = min(innerW, max(1, width-2))
+		innerW = min(innerW, max(1, width-transcriptLinearPad))
 	}
 	innerW = max(1, innerW)
 	row := func(line, marker string) string {
@@ -516,6 +563,9 @@ func (m Model) plainTranscriptRows() []string {
 
 func (m *Model) applyPart(p db.Part) {
 	switch p.Type {
+	case "step-start":
+		m.tpsSamples = nil
+		m.stepMetrics = false
 	case "text":
 		if p.Text == nil {
 			return
@@ -661,6 +711,10 @@ func (m Model) findToolItemIndex(tc db.ToolCall, part db.Part) int {
 }
 
 func (m Model) renderItem(it transcriptItem, selected bool, streaming bool) string {
+	return m.renderItemWithToolMode(it, selected, streaming, false)
+}
+
+func (m Model) renderItemWithToolMode(it transcriptItem, selected bool, streaming, fullToolOutput bool) string {
 	switch it.kind {
 	case itemUser:
 		return m.roleLine(roleYou, it.when) + "\n" + userStyle.Render(frameUserPrompt(it.text, m.contentWidth(it.when)))
@@ -682,7 +736,7 @@ func (m Model) renderItem(it transcriptItem, selected bool, streaming bool) stri
 		}
 		return head + "\n" + reasoningStyle.Render(ansi.Wrap(body, m.contentWidth(it.when), " "))
 	case itemTool:
-		return m.renderTool(agent.Event{Part: it.part, Tool: it.tool}, it.collapsed, it.when)
+		return m.renderToolMode(agent.Event{Part: it.part, Tool: it.tool}, it.collapsed, it.when, fullToolOutput)
 	case itemNote:
 		return hintStyle.Render(it.text)
 	}
@@ -693,6 +747,12 @@ func (m Model) renderItem(it transcriptItem, selected bool, streaming bool) stri
 }
 
 func (m Model) renderTool(ev agent.Event, collapsed bool, when int64) string {
+	return m.renderToolMode(ev, collapsed, when, false)
+}
+
+// renderToolMode renders the main transcript with bounded expanded bodies.
+// The full-body mode is reserved for the full-screen sub-agent audit log.
+func (m Model) renderToolMode(ev agent.Event, collapsed bool, when int64, fullToolOutput bool) string {
 	name := ev.Tool.Tool
 	if name == "" && ev.Part.ToolName != nil {
 		name = *ev.Part.ToolName
@@ -748,8 +808,8 @@ func (m Model) renderTool(ev agent.Event, collapsed bool, when int64) string {
 	switch ev.Tool.Tool {
 	case "write":
 		if ev.Tool.Output != nil && *ev.Tool.Output != "" {
-			preview := *ev.Tool.Output
-			if len([]rune(preview)) > 400 {
+			preview := strings.TrimSuffix(*ev.Tool.Output, "\n")
+			if !fullToolOutput && len([]rune(preview)) > 400 {
 				preview = string([]rune(preview)[:400]) + "…"
 			}
 			body = append(body, toolOutputStyle.Width(bodyWidth).Render(strings.TrimSuffix(preview, "\n")))
@@ -760,6 +820,9 @@ func (m Model) renderTool(ev agent.Event, collapsed bool, when int64) string {
 		}
 		if ev.Tool.Output != nil && *ev.Tool.Output != "" {
 			output := strings.TrimSuffix(*ev.Tool.Output, "\n")
+			if !fullToolOutput {
+				output, _ = truncateToolOutputForView(output)
+			}
 			outputLabel := hintStyle.Width(bodyWidth).Render("  output")
 			outputBox := toolOutputStyle.Width(bodyWidth).Render("  " + output)
 			body = append(body, "", outputLabel, outputBox)
@@ -993,7 +1056,7 @@ func diffStat(diff string) (add, del int) {
 }
 
 func formatDiffStat(add, del int) string {
-	parts := make([]string, 0, 2)
+	parts := make([]string, 0, diffStatParts)
 	if add > 0 {
 		parts = append(parts, "+"+strconv.Itoa(add))
 	}
@@ -1058,12 +1121,12 @@ func renderDiff(diff string, width int) string {
 		}
 	}
 	numW := len(strconv.Itoa(maxNum))
-	if numW < 2 {
-		numW = 2
+	if numW < diffNumMinWidth {
+		numW = diffNumMinWidth
 	}
 	// " old new │ " gutter: numW + space + numW + space + │ + space
 	gutterW := numW + 1 + numW + 1 + 1 + 1
-	bodyW := max(8, width-gutterW)
+	bodyW := max(diffBodyMinWidth, width-gutterW)
 
 	addRow := diffAddStyle.Width(width).MaxWidth(width)
 	delRow := diffDelStyle.Width(width).MaxWidth(width)
@@ -1080,7 +1143,7 @@ func renderDiff(diff string, width int) string {
 			}
 			out = append(out, metaRow.Render(display))
 		default:
-			marker := " "
+			var marker string
 			var style lipgloss.Style
 			switch r.kind {
 			case 'a':
@@ -1096,7 +1159,7 @@ func renderDiff(diff string, width int) string {
 			gutter := formatDiffGutter(r.oldNum, r.newNum, numW) + "│ "
 			body := r.text
 			if lipgloss.Width(body) > bodyW-1 {
-				body = ansi.Cut(body, 0, max(1, bodyW-2)) + "…"
+				body = ansi.Cut(body, 0, max(1, bodyW-diffEllipsisPad)) + "…"
 			}
 			display := gutter + marker + body
 			if lipgloss.Width(display) > width {
@@ -1119,7 +1182,7 @@ func parseHunkHeader(line string) (oldStart, newStart int, ok bool) {
 	rest := strings.TrimSpace(strings.TrimPrefix(s, "@@"))
 	// rest like: "-12,3 +14,4 @@ optional"
 	parts := strings.Fields(rest)
-	if len(parts) < 2 {
+	if len(parts) < diffHunkParts {
 		return 0, 0, false
 	}
 	oldStart, ok1 := parseDiffRange(parts[0])
@@ -1219,36 +1282,87 @@ func truncateRunes(s string, n int) string {
 	return string(r[:n-1]) + "…"
 }
 
-func (m Model) toggleSelectedMeta() Model {
-	idx := m.selectedItem
-	if idx < 0 || idx >= len(m.items) {
-		idx = m.lastMetaIndex()
+func truncateToolOutputForView(s string) (string, bool) {
+	s = strings.TrimSuffix(s, "\n")
+	lines := strings.Split(s, "\n")
+	omitted := false
+	if len(lines) > maxToolBodyLines {
+		omitted = true
+		omittedLines := len(lines) - toolBodyHeadLines - toolBodyTailLines
+		note := fmt.Sprintf("… %d lines omitted · showing first %d + last %d", omittedLines, toolBodyHeadLines, toolBodyTailLines)
+		tail := append([]string{}, lines[len(lines)-toolBodyTailLines:]...)
+		lines = append(append([]string{}, lines[:toolBodyHeadLines]...), note)
+		lines = append(lines, tail...)
 	}
-	if idx < 0 {
+	body := strings.Join(lines, "\n")
+	if len([]rune(body)) > maxToolBodyRunes {
+		omitted = true
+		note := fmt.Sprintf("… output truncated to %d runes", maxToolBodyRunes)
+		noteRunes := len([]rune(note))
+		prefixRunes := maxToolBodyRunes - noteRunes - 1
+		if prefixRunes < 0 {
+			return string([]rune(body)[:maxToolBodyRunes]), true
+		}
+		body = string([]rune(body)[:prefixRunes]) + "\n" + note
+	}
+	return body, omitted
+}
+
+// toggleAllTools applies the bulk keyboard rule to every tool card in the
+// main transcript. A mixed or partially open set collapses; an all-collapsed
+// set expands. The transcript is synchronized once after the flip.
+func (m Model) toggleAllTools() Model {
+	anyOpen := false
+	hasTool := false
+	for _, it := range m.items {
+		if it.kind != itemTool {
+			continue
+		}
+		hasTool = true
+		if !it.collapsed {
+			anyOpen = true
+			break
+		}
+	}
+	if !hasTool {
 		return m
 	}
-	it := m.items[idx]
-	if it.kind != itemReasoning && it.kind != itemTool {
-		idx = m.lastMetaIndex()
-		if idx < 0 {
-			return m
+	for i, it := range m.items {
+		if it.kind == itemTool {
+			it.collapsed = anyOpen
+			m.items[i] = it
+			m.lastTool = i
 		}
-		it = m.items[idx]
 	}
-	it.collapsed = !it.collapsed
-	m.items[idx] = it
-	m.selectedItem = idx
 	m.syncTranscript()
 	return m
 }
 
-func (m Model) lastMetaIndex() int {
-	for i := len(m.items) - 1; i >= 0; i-- {
-		if m.items[i].kind == itemReasoning || m.items[i].kind == itemTool {
-			return i
+// toggleAllReasoning applies the same bulk rule to every thinking block.
+func (m Model) toggleAllReasoning() Model {
+	anyOpen := false
+	hasReasoning := false
+	for _, it := range m.items {
+		if it.kind != itemReasoning {
+			continue
+		}
+		hasReasoning = true
+		if !it.collapsed {
+			anyOpen = true
+			break
 		}
 	}
-	return -1
+	if !hasReasoning {
+		return m
+	}
+	for i, it := range m.items {
+		if it.kind == itemReasoning {
+			it.collapsed = anyOpen
+			m.items[i] = it
+		}
+	}
+	m.syncTranscript()
+	return m
 }
 
 func (m Model) lastReasoningIndex() int {
@@ -1258,53 +1372,4 @@ func (m Model) lastReasoningIndex() int {
 		}
 	}
 	return -1
-}
-
-func (m Model) lastToolIndex() int {
-	for i := len(m.items) - 1; i >= 0; i-- {
-		if m.items[i].kind == itemTool {
-			return i
-		}
-	}
-	return -1
-}
-
-func (m Model) toggleReasoning() Model {
-	idx := m.lastReasoningIndex()
-	if idx < 0 {
-		return m
-	}
-	it := m.items[idx]
-	it.collapsed = !it.collapsed
-	m.items[idx] = it
-	m.selectedItem = idx
-	m.syncTranscript()
-	return m
-}
-
-func (m Model) toggleLastTool() Model {
-	idx := m.lastToolIndex()
-	if idx < 0 {
-		return m
-	}
-	it := m.items[idx]
-	it.collapsed = !it.collapsed
-	m.items[idx] = it
-	m.selectedItem = idx
-	m.lastTool = idx
-	m.syncTranscript()
-	return m
-}
-
-func (m Model) currentToolName() string {
-	idx := m.lastToolIndex()
-	if idx < 0 {
-		return ""
-	}
-	name := m.items[idx].tool.Tool
-	status := m.items[idx].tool.Status
-	if status == "pending" || status == "running" {
-		return name
-	}
-	return ""
 }

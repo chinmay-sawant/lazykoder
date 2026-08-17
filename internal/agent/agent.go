@@ -99,6 +99,10 @@ const (
 	EventPart
 	// EventTool fires when a tool_calls row is written or updated.
 	EventTool
+	// EventTokenDelta fires for one streamed text/reasoning delta.
+	EventTokenDelta
+	// EventStepMetrics fires after a step-finish row is persisted.
+	EventStepMetrics
 	// EventError fires on a fatal turn error.
 	EventError
 	// EventDone fires after a successful turn, before the channel closes.
@@ -107,13 +111,16 @@ const (
 
 // Event is one streamed write or error during Send.
 type Event struct {
-	Kind      EventKind
-	SessionID string
-	MessageID string
-	Role      string
-	Part      db.Part
-	Tool      db.ToolCall
-	Err       error
+	Kind         EventKind
+	SessionID    string
+	MessageID    string
+	Role         string
+	Part         db.Part
+	Tool         db.ToolCall
+	TokenDelta   int64
+	TokensOutput int64
+	ElapsedMS    int64
+	Err          error
 }
 
 type bashArgs struct {
@@ -361,6 +368,7 @@ func concatText(parts []db.Part) string {
 }
 
 func (a *Agent) writeResponse(ctx context.Context, events chan<- Event, resp *opencode.ChatResponse) error {
+	started := time.Now()
 	m, err := a.beginAssistant(ctx, events)
 	if err != nil {
 		return err
@@ -378,7 +386,7 @@ func (a *Agent) writeResponse(ctx context.Context, events chan<- Event, resp *op
 	if err := a.runTools(ctx, events, m.ID, resp.ToolCalls); err != nil {
 		return err
 	}
-	return a.writeStepFinish(ctx, events, m.ID, resp)
+	return a.writeStepFinish(ctx, events, m.ID, resp, started)
 }
 
 // runTools executes non-task tools sequentially, then task-family tools in parallel.

@@ -89,7 +89,8 @@ These stay `[~]` in 0.0.1. Do not implement unless a later plan file takes them.
 - [~] Blob table for multi-MB tool output
 - [~] Sticky tool permissions
 - [~] Reading OpenCode's global `~/.local/share/opencode/opencode.db`
-- [~] Streaming token paint in the TUI
+- [x] Streaming token paint in the TUI - completed by Phase 4 live delta
+  metrics and chat rolling tps rendering; see `phase-4-tokens-status-todos.md`
 
 ## 3.10 Run entry: `lk` binary (P1, added 2026-08-15)
 

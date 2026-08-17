@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -11,7 +12,7 @@ import (
 )
 
 const (
-	sessionColumns       = `id, title, directory, provider, model, variant, time_created, time_updated, status, parent_session_id, kind`
+	sessionColumns       = `id, title, directory, provider, model, variant, time_created, time_updated, status, parent_session_id, kind, status_segments`
 	messageColumns       = `id, session_id, role, agent, provider_id, model_id, variant, time_created, seq, visible`
 	messageInsertColumns = `id, session_id, role, agent, provider_id, model_id, variant, time_created, seq`
 	partColumns          = `id, message_id, type, time_created, seq, text, time_start, time_end, finish_reason, ` +
@@ -42,15 +43,20 @@ func (s *Store) CreateSession(ctx context.Context, sess Session) (Session, error
 			sess.Kind = SessionKindMain
 		}
 	}
+	sess.StatusSegments = NormalizeStatusSegments(sess.StatusSegments)
+	segmentsJSON, err := json.Marshal(sess.StatusSegments)
+	if err != nil {
+		return Session{}, fmt.Errorf("db: encode status segments: %w", err)
+	}
 	if sess.TimeCreated == 0 {
 		sess.TimeCreated = time.Now().UnixMilli()
 	}
 	if sess.TimeUpdated == 0 {
 		sess.TimeUpdated = sess.TimeCreated
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO sessions (`+sessionColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	_, err = s.db.ExecContext(ctx, `INSERT INTO sessions (`+sessionColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		sess.ID, sess.Title, sess.Directory, sess.Provider, sess.Model, sess.Variant,
-		sess.TimeCreated, sess.TimeUpdated, sess.Status, sess.ParentSessionID, sess.Kind)
+		sess.TimeCreated, sess.TimeUpdated, sess.Status, sess.ParentSessionID, sess.Kind, string(segmentsJSON))
 	if err != nil {
 		return Session{}, fmt.Errorf("db: create session: %w", err)
 	}
@@ -315,6 +321,28 @@ func (s *Store) UpdateSessionVariant(ctx context.Context, sessionID, variant str
 	return nil
 }
 
+// UpdateSessionSegments persists the visible footer segment identifiers.
+func (s *Store) UpdateSessionSegments(ctx context.Context, sessionID string, segments []string) error {
+	segments = NormalizeStatusSegments(segments)
+	raw, err := json.Marshal(segments)
+	if err != nil {
+		return fmt.Errorf("db: encode status segments: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE sessions SET status_segments = ?, time_updated = ? WHERE id = ?`,
+		string(raw), time.Now().UnixMilli(), sessionID); err != nil {
+		return fmt.Errorf("db: update session segments: %w", err)
+	}
+	return nil
+}
+
+func decodeStatusSegments(raw string) []string {
+	var values []string
+	if json.Unmarshal([]byte(raw), &values) != nil {
+		return DefaultStatusSegments()
+	}
+	return NormalizeStatusSegments(values)
+}
+
 // lazykoderDirSuffix is the workspace folder incorrectly stored as
 // sessions.directory before findings 1.2.
 const lazykoderDirSuffix = "/.lazykoder"
@@ -335,13 +363,15 @@ WHERE directory LIKE '%`+lazykoderDirSuffix+`'`, len(lazykoderDirSuffix))
 // GetSession returns one session by id.
 func (s *Store) GetSession(ctx context.Context, id string) (Session, error) {
 	var sess Session
+	var statusSegments string
 	err := s.db.QueryRowContext(ctx, `SELECT `+sessionColumns+` FROM sessions WHERE id = ?`, id).
 		Scan(&sess.ID, &sess.Title, &sess.Directory, &sess.Provider, &sess.Model,
 			&sess.Variant, &sess.TimeCreated, &sess.TimeUpdated, &sess.Status,
-			&sess.ParentSessionID, &sess.Kind)
+			&sess.ParentSessionID, &sess.Kind, &statusSegments)
 	if err != nil {
 		return Session{}, fmt.Errorf("db: get session: %w", err)
 	}
+	sess.StatusSegments = decodeStatusSegments(statusSegments)
 	return sess, nil
 }
 
@@ -361,11 +391,13 @@ ORDER BY time_updated DESC, time_created DESC`, parentID)
 	var out []Session
 	for rows.Next() {
 		var sess Session
+		var statusSegments string
 		if err := rows.Scan(&sess.ID, &sess.Title, &sess.Directory, &sess.Provider, &sess.Model,
 			&sess.Variant, &sess.TimeCreated, &sess.TimeUpdated, &sess.Status,
-			&sess.ParentSessionID, &sess.Kind); err != nil {
+			&sess.ParentSessionID, &sess.Kind, &statusSegments); err != nil {
 			return nil, fmt.Errorf("db: scan child session: %w", err)
 		}
+		sess.StatusSegments = decodeStatusSegments(statusSegments)
 		out = append(out, sess)
 	}
 	if err := rows.Err(); err != nil {
@@ -388,11 +420,13 @@ ORDER BY time_updated DESC, time_created DESC, id DESC`, directory)
 	var out []Session
 	for rows.Next() {
 		var sess Session
+		var statusSegments string
 		if err := rows.Scan(&sess.ID, &sess.Title, &sess.Directory, &sess.Provider, &sess.Model,
 			&sess.Variant, &sess.TimeCreated, &sess.TimeUpdated, &sess.Status,
-			&sess.ParentSessionID, &sess.Kind); err != nil {
+			&sess.ParentSessionID, &sess.Kind, &statusSegments); err != nil {
 			return nil, fmt.Errorf("db: scan session: %w", err)
 		}
+		sess.StatusSegments = decodeStatusSegments(statusSegments)
 		out = append(out, sess)
 	}
 	if err := rows.Err(); err != nil {

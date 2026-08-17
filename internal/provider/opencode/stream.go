@@ -15,6 +15,10 @@ const (
 	maxStreamLine = 1 << 20
 	// streamPeek is enough to tell event-stream data from a JSON object.
 	streamPeek = 64
+	// streamReaderBytes sizes the SSE/NDJSON reader buffer.
+	streamReaderBytes = 32 << 10
+	// streamBufferBytes sizes the scanner buffer for event-stream lines.
+	streamBufferBytes = 64 << 10
 )
 
 // Delta is one streamed chat chunk. Content and Reasoning are this chunk
@@ -35,7 +39,7 @@ func (c *Client) ChatStream(ctx context.Context, req ChatRequest, onDelta func(D
 		return nil, err
 	}
 	defer resp.Body.Close()
-	br := bufio.NewReaderSize(resp.Body, 32*1024)
+	br := bufio.NewReaderSize(resp.Body, streamReaderBytes)
 	peek, _ := br.Peek(streamPeek)
 	if isEventStream(resp.Header.Get("Content-Type"), peek) {
 		return parseEventStream(ctx, br, onDelta)
@@ -76,7 +80,7 @@ func completeJSONAsStream(raw []byte, onDelta func(Delta) error) (*ChatResponse,
 
 func parseEventStream(ctx context.Context, r io.Reader, onDelta func(Delta) error) (*ChatResponse, error) {
 	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 64*1024), maxStreamLine)
+	sc.Buffer(make([]byte, streamBufferBytes), maxStreamLine)
 	acc := newStreamAcc()
 	for sc.Scan() {
 		if err := ctx.Err(); err != nil {

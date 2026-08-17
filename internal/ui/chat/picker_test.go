@@ -357,9 +357,9 @@ func TestModelsLoadedFromCacheSkipsAPI(t *testing.T) {
 	p.run(m.Init())
 	m = p.runStep(m, p.next())
 
-	v := stripANSI(viewText(m))
+	v := statusDrawerText(m)
 	if !strings.Contains(v, "deepseek-v4-flash") {
-		t.Errorf("status missing cached label: %q", v)
+		t.Errorf("status drawer missing cached label: %q", v)
 	}
 	if !m.modelsCached {
 		t.Error("modelsCached = false, want true for fresh cache")

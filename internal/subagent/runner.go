@@ -11,6 +11,9 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/tools/question"
 )
 
+// maxTitleRunes caps the rune length of a child session title.
+const maxTitleRunes = 60
+
 // AgentRunner runs a child job via agent.Agent on a dedicated child session.
 type AgentRunner struct {
 	Store  *db.Store
@@ -43,8 +46,8 @@ func (r AgentRunner) Run(ctx context.Context, job Job) (Result, error) {
 	if title == "" {
 		title = "subagent"
 	}
-	if len([]rune(title)) > 60 {
-		title = string([]rune(title)[:60])
+	if len([]rune(title)) > maxTitleRunes {
+		title = string([]rune(title)[:maxTitleRunes])
 	}
 
 	var sess db.Session

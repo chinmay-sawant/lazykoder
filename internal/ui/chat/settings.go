@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
+	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 	"github.com/chinmay-sawant/lazykoder/internal/settings"
 	"github.com/chinmay-sawant/lazykoder/internal/subagent"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
@@ -50,6 +51,20 @@ const (
 	settingsCardVertPad = 1
 	// settingsCardHorzPad is the Padding(1, 2) horizontal inset.
 	settingsCardHorzPad = 2
+	// settingsCardColsPerVertPad is the factor applied to the vertical pad.
+	settingsCardColsPerVertPad = 2
+	// settingsUsageReserveRows is the headroom added to the paint buffer.
+	settingsUsageReserveRows = 8
+	// settingsUsageMaxCorners is the extra width kept for the error line.
+	settingsUsageMaxCorners = 16
+	// settingsUsageMinTextW is the floor width for the usage text row.
+	settingsUsageMinTextW = 20
+	// settingsAllowlistMinBudget is the floor width for an allowlist preview.
+	settingsAllowlistMinBudget = 8
+	// settingsKVRowMinLeftW is the floor width for a KV row label.
+	settingsKVRowMinLeftW = 4
+	// settingsTimeoutMinute is seconds per minute.
+	settingsTimeoutMinute = 60
 )
 
 const (
@@ -59,7 +74,9 @@ const (
 )
 
 // openSettings opens the full-screen settings card (same layout family as
-// /resume and /help: centered bordered card over the chat).
+// /resume and /help: centered bordered card over the chat). It marks usage as
+// loading when the plan usage has not been loaded yet; the caller kicks off
+// the fetch via maybeFetchUsage.
 func (m Model) openSettings() Model {
 	m.settingsMode = true
 	m.settingsCursor = settingsRowModel
@@ -69,6 +86,8 @@ func (m Model) openSettings() Model {
 	m.slashCursor = 0
 	m.pickerMode = false
 	m.helpMode = false
+	m.usageMode = false
+	m.usageLoading = false
 	m.filePickerMode = false
 	m.sessionPickerMode = false
 	m.prompt.SetValue("")
@@ -151,7 +170,7 @@ func (m Model) settingsCardView() string {
 
 func (m Model) settingsCardMinInnerHeight() int {
 	minCard := max(minPaneHeight+settingsCardChromeRows, m.height*sessionCardHeightPct/percentBase)
-	inner := minCard - cardBorder - 2*settingsCardVertPad
+	inner := minCard - cardBorder - settingsCardColsPerVertPad*settingsCardVertPad
 	if inner < minPaneHeight {
 		return minPaneHeight
 	}
@@ -213,7 +232,7 @@ func (m Model) settingsPaintLines(innerW int) []settingsPaintLine {
 		allowlistVal = m.settingsEditValue
 	}
 
-	out := make([]settingsPaintLine, 0, settingsRowCount+8)
+	out := make([]settingsPaintLine, 0, settingsRowCount+settingsUsageReserveRows)
 	out = append(out, settingsPaintLine{kind: settingsLineHeader, row: -1, text: "model"})
 	out = append(out,
 		m.settingsPaintRow(settingsRowModel, "◂ "+modelVal+" ▸", innerW, false),
@@ -238,7 +257,32 @@ func (m Model) settingsPaintLines(innerW int) []settingsPaintLine {
 		m.settingsPaintRow(settingsRowAllowlist, allowlistVal, innerW, false),
 		settingsPaintLine{kind: settingsLineHint, row: -1, text: "children are not filtered by this list"},
 	)
+	if m.usageLoaded {
+		out = append(out, settingsPaintLine{kind: settingsLineHeader, row: -1, text: "opencode usage"})
+		out = append(out,
+			m.settingsUsageRow("rolling", m.usage.Rolling, innerW),
+			m.settingsUsageRow("weekly", m.usage.Weekly, innerW),
+			m.settingsUsageRow("monthly", m.usage.Monthly, innerW),
+		)
+	} else if m.usageErr != "" {
+		out = append(out, settingsPaintLine{kind: settingsLineHint, row: -1, text: "opencode usage: " + truncateRunes(m.usageErr, max(settingsUsageMinTextW, innerW-settingsUsageMaxCorners))})
+	} else {
+		out = append(out, settingsPaintLine{kind: settingsLineHint, row: -1, text: "opencode usage: run /usage to load plan usage"})
+	}
 	return out
+}
+
+// settingsUsageRow builds a compact usage line for the settings card.
+func (m Model) settingsUsageRow(label string, w opencode.BillingWindow, innerW int) settingsPaintLine {
+	stat := "ok"
+	if w.RateLimited {
+		stat = "limited"
+	}
+	val := fmt.Sprintf("%d%%  %s", w.Percent, stat)
+	if !w.ResetsAt.IsZero() {
+		val += "  ·  " + w.ResetsAt.Local().Format("Jan 2 15:04")
+	}
+	return settingsPaintLine{kind: settingsLineRow, row: -1, text: settingsKVRow(false, label, val, innerW), dim: w.RateLimited}
 }
 
 func (m Model) settingsPaintRow(row int, value string, innerW int, dim bool) settingsPaintLine {
@@ -293,13 +337,13 @@ func formatSettingsTimeout(sec int) string {
 	if sec <= 0 {
 		return "off"
 	}
-	if sec%60 == 0 {
-		return fmt.Sprintf("%dm", sec/60)
+	if sec%settingsTimeoutMinute == 0 {
+		return fmt.Sprintf("%dm", sec/settingsTimeoutMinute)
 	}
-	if sec < 60 {
+	if sec < settingsTimeoutMinute {
 		return fmt.Sprintf("%ds", sec)
 	}
-	return fmt.Sprintf("%dm%ds", sec/60, sec%60)
+	return fmt.Sprintf("%dm%ds", sec/settingsTimeoutMinute, sec%settingsTimeoutMinute)
 }
 
 func formatAllowlistValue(names []string, innerW int) string {
@@ -308,7 +352,7 @@ func formatAllowlistValue(names []string, innerW int) string {
 		return "0 allowed"
 	}
 	joined := strings.Join(names, ", ")
-	budget := max(8, innerW/settingsAllowlistPreviewBudget)
+	budget := max(settingsAllowlistMinBudget, innerW/settingsAllowlistPreviewBudget)
 	if lipgloss.Width(joined) <= budget {
 		return joined
 	}
@@ -331,7 +375,7 @@ func settingsKVRow(selected bool, label, value string, width int) string {
 	right := value
 	gap := width - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 1 {
-		left = truncateRunes(left, max(4, width-lipgloss.Width(right)-1))
+		left = truncateRunes(left, max(settingsKVRowMinLeftW, width-lipgloss.Width(right)-1))
 		gap = width - lipgloss.Width(left) - lipgloss.Width(right)
 	}
 	if gap < 1 {
@@ -441,11 +485,6 @@ func (m Model) activateSettingsRow() (Model, tea.Cmd) {
 
 func (m Model) setAllowlistEnabled(on bool) Model {
 	m.projectSettings.Agents.BashAllowlistEnabled = on
-	return m.persistSettings()
-}
-
-func (m Model) setAllowlist(value string) Model {
-	m.projectSettings.Agents.BashAllowlist = strings.Split(value, ",")
 	return m.persistSettings()
 }
 

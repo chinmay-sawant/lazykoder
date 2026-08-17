@@ -13,13 +13,14 @@ pickers are centered cards.
   Reasoning streams live as `▾ thinking` with the growing body under
   the header. It collapses to `▸ thinking` as soon as the assistant
   reply, a tool card, or the end of the turn arrives. The same clock
-  sits on the far right; `t` expands a collapsed block when the prompt
-  is empty. Tool runs are
+  sits on the far right. Tool runs are
   full-width cards that start collapsed (`◆  ▸  bash  title` on the left,
   `15:32:05` on the far right). The diamond is the only status mark: white
-  while pending or running, green on success, red on error or deny. `e`
-  expands the last run. Clicks on a
-  thinking or tool header toggle that item.
+  while pending or running, green on success, red on error or deny. `ctrl+e`
+  expands all tools when they are all closed, or collapses all tools otherwise.
+  `ctrl+p` applies the same rule to all thinking blocks. Plain `t` and `e`
+  always type into the composer. Tool-card header clicks toggle their body;
+  thinking headers select rows without toggling them.
 - Composer: a rounded input box on the solid black layer. Long prompts
   grow up to six rows and scroll inside the box. Up/down move the
   cursor through that text first; at the top of a multi-line draft, up
@@ -32,15 +33,19 @@ pickers are centered cards.
   turn is running and stays as a static line after the turn ends and
   when the session is reopened. Typed text uses
   the same black background as the rest of the screen (no cursor-line
-  highlight). The footer left side stays idle (`enter send`). The right side shows
-  `model  used/window  hit N 93%  miss N 7%  $cost  tps` (click the
-  model to switch). hit is cached input tokens (`cache_read` /
-  `prompt_cache_hit`); miss is uncached input (`prompt - hit`, or the
-  full prompt when the API reports input and cache separately). Each
-  count carries its share of hit+miss. tps is this turn's generated tokens (output, or
-  reasoning if output is missing) divided by turn wall time. While a
-  turn is running it updates from streamed output; after the turn it
-  stays as that turn's average. It is never the session total.
+  highlight). The footer left side stays idle (`enter send`). The right side
+  stays compact as a clickable `status ▾` control. Use `/status` to open the
+  drawer with the current model, variant, token window, cache hit/miss, cost,
+  tokens/sec, sub-agent count, model count, scroll state, and prompt hint.
+	  hit is cached input tokens (`cache_read` /
+	  `prompt_cache_hit`); miss is uncached input (`prompt - hit`, or the
+	  full prompt when the API reports input and cache separately). Each
+	  count carries its share of hit+miss. tps uses provider-reported output
+	  tokens divided by the provider step duration when usage is available.
+	  During streaming, a `~` value is a provisional estimate from recent
+	  streamed text; if no sample exists yet the drawer says `measuring`.
+	  Values above 99 are shown numerically, not as a capped greater-than
+	  label. It is never the session total.
   Context
   windows, list prices, cache read/write prices, and reasoning variants
   come from GET /models plus the live models.dev OpenCode catalog, then
@@ -66,15 +71,19 @@ pickers are centered cards.
   long titles truncate with an ellipsis, and the list scrolls with the wheel.
 - Empty session: a short hint in the transcript, not a blank pane.
 - `/help` or `?` (empty prompt) opens a centered key card (two columns
-  at 100+ width) listing send, slash commands including `/settings` and
-  `/continue`, copy/quit, and undo. `esc`, `?`, or `[x]` closes it.
+  at 100+ width) listing send, slash commands including `/settings`,
+  `/usage`, and `/continue`, copy/quit, and undo. `esc`, `?`, or `[x]`
+  closes it.
+- `/usage` opens a centered OpenCode Go usage card. It fetches the rolling,
+  weekly, and monthly plan windows, showing percentage used, rate-limit
+  status, and reset times. Press `r` to refresh and `esc` or `x` to close.
 - `@` in the prompt opens a project file picker. Enter inserts `@path`.
 - Dragging across transcript rows selects and copies the range on mouse
   release; a temporary `text copied` notice appears above the prompt. The
   left work rail and user-frame curls stay on screen for layout, but are
   stripped from the clipboard so the paste is plain message text. A
-  click on a tool card or reasoning header expands or collapses that item
-  instead of starting a selection. Clicks on the model status and scrollbar
+  click on a tool card or reasoning header selects that row without changing
+  its collapsed state. Clicks on the model status and scrollbar
   keep their existing navigation behavior. A click on a slash-menu row runs
   that command.
 - Assistant Markdown formats headings, emphasis, lists, inline code, and fenced
@@ -89,21 +98,24 @@ pickers are centered cards.
 | `q` | type the letter `q` (the prompt is focused) |
 | `esc` | cancel an in-flight turn (and live sub-agents); when idle, twice clears the prompt |
 
-While a turn is running, the status strip above the input shows **working** plus
-the live activity (thinking / tool). You can still type a draft in the input
-box (**edit**). Actions:
+While a turn is running, the status strip shows **working** plus the live
+activity (thinking / tool). With the sub-agent drawer open, this strip is the
+first row inside the drawer, above the sub-agent list. You can still type a
+draft in the input box (**edit**). Actions:
 
 | While busy | Action |
 | --- | --- |
 | type | edit a draft without waiting for the turn to finish |
 | `enter` (with draft) | cancel the current turn and send the draft immediately |
 | `esc` | cancel the current turn only (no new send) |
-| `t` | expand or collapse reasoning (empty prompt) |
-| `e` | expand or collapse the last tool card (empty prompt) |
+| `ctrl+e` | expand or collapse all tool cards |
+| `ctrl+p` | expand or collapse all thinking blocks |
+| click a collapsed tool header | expand that tool card (click again to collapse) |
 | `ctrl+s` | open the session picker (idle only) |
 | `/resume` | same as `ctrl+s` |
-| click model | open the model picker |
+| `/model` | open the model picker |
 | `/agents` | open the sub-agent list and logs (aliases `/subs`) |
+| `/status` | open the status details and visibility drawer |
 | click `subs:N` | same as `/agents` when sub-agents exist for this session |
 | `ctrl+c` | two-step quit (press twice) |
 
@@ -118,20 +130,34 @@ prompt** opens (same layout family as `/model`): one row per sub-agent.
 | Green `◆` | completed |
 | Red `◆` | failed, cancelled, or timed out |
 
-The right side of each row is a one-liner for the latest tool activity
-(for example `bash  go test ./...` or `read  path.go`). Past sub-agents
+The right side of each row includes the resolved model and, when it fits, a
+one-liner for the latest tool activity (for example `bash  go test ./...` or
+`read  path.go`). Past sub-agents
 for the session stay in the list after they finish.
+
+Each row also shows `model: <id>` and `thinking: <variant>` on the right. The
+values are resolved for that child job, including explicit child overrides and
+configured defaults, and are read from the job snapshot or child session record. An
+empty variant is shown as `thinking: default`, meaning the provider default.
+The UI does not infer a vendor or substitute a hard-coded model.
 
 - `/agents` (aliases `/subs`) focuses the drawer; it also opens when a
   `task` tool runs.
 - Footer chip `subs:live/total` (or `subs:total`) stays next to the model
   stats; click it to open the drawer.
-- `j`/`k` or click a row, then **enter**: full-screen (100% terminal) log
+- `↑`/`↓` or `j`/`k` selects a row. `→` or **enter** opens its full-screen
+  (100% terminal) log
   for that child, using the same design as the main chat: `you` / `assistant`
   roles, collapsible **thinking** (expanded by default), tool cards with
   status diamonds, and the vertical work rail (`│`).
-- In the log view: `t` toggles thinking, `e` toggles the last tool, `enter`
-  toggles the selected block; `esc` / `[x]` returns to the drawer; `d` closes.
+- In the log view: `↑`/`↓` scrolls, `→` opens the next agent's log, and `←`
+  returns to the drawer. `ctrl+p` expands or collapses all thinking, `ctrl+e`
+  expands or collapses all tools, and `enter` toggles the selected block;
+  `esc` / `[x]` also returns to the drawer; `d` closes. Header clicks only
+  select a row.
+- A log opens at its latest output and follows the live tail as new child
+  events arrive. After scrolling up, the transparent `▼` row above the
+  footer jumps back to the latest output.
 - `d` on a live drawer row cancels it; `esc` closes the drawer.
 
 Child sessions stay in SQLite (`kind=subagent`) so completed agents still
@@ -163,8 +189,11 @@ While this overlay is up, no keys leak to the prompt or transcript.
 ## Question overlay
 
 The `question` tool opens an option list over the chat: the question text,
-optional header, then numbered options. `j`/`k` or arrows move, `1`-`9` or
-enter selects, `esc` cancels.
+optional header, then numbered options. Text wraps at word boundaries inside
+a dark dialog card; unusually long words are split only when necessary.
+`j`/`k` or arrows move, `1`-`9` or enter selects, `esc` cancels, and clicking
+any wrapped option row selects it. Clicks outside the card do not reach the
+chat underneath.
 
 ## Model picker
 
@@ -212,6 +241,10 @@ persist in `<cwd>/.lazykoder/settings.json`.
 | parent bash allowlist | on/off; parent-only, children are not filtered |
 | allowed executables | chip/count editor for the parent allowlist |
 
+The settings card also displays the latest OpenCode Go rolling, weekly, and
+monthly usage percentages. Opening `/settings` loads usage when it has not
+already been fetched; `/usage` can be used for an explicit refresh.
+
 When sub-agents are running, the footer may show `subs:N/M` (active / max
 concurrent). Cancelling the parent turn also cancels child jobs.
 
@@ -246,7 +279,7 @@ runs the command, `esc` closes and leaves `/` in the prompt.
 
 Selecting a model:
 
-1. updates the current chat model (shown in the status line),
+1. updates the current chat model (shown in the `/status` drawer),
 2. persists to `sessions.model` via `db.UpdateSessionModel` (when a session
    exists), and
 3. sends `ChatRequest.Model` and the stored `endpoint` on every
@@ -254,6 +287,28 @@ Selecting a model:
 
 The chosen model survives restart because the app resumes the latest session
 for the cwd on startup.
+
+## Status drawer and todos
+
+The footer keeps only a compact `status ▾` control so detailed metrics do not
+compete with the prompt. Type `/status` or click that control to open the
+agent-style drawer. All rows are enabled by default. The drawer owns the
+visibility state for `model`, `variant`, `tokens`, `cache`, `cost`, `tps`,
+`subs`, `models`, `scroll`, and `prompt`; `↑`/`↓` select, `enter` toggles,
+and `←`/`esc` closes. Visibility is stored in the current session's
+`status_segments` JSON column and restored on replay.
+
+The model can call `todowrite` with the complete `{todos:[...]}` list. The
+tracker under the session title replaces the stored list atomically and shows
+pending, in-progress, completed, and cancelled marks. Reopening a session
+loads the tracker from SQLite without a provider request and expands it so the
+stored task bodies are visible immediately. The expanded body has six visible
+rows and its own viewport; use the mouse wheel over the checklist to scroll
+longer lists. A scrollbar marks overflow, and the header click collapses or
+reopens the body. While work is active, the viewport follows the first
+in-progress row so later tasks remain visible and highlighted. When resuming a
+completed list, it opens at the newest page instead of the first six rows.
+There is no hidden `+N` summary row.
 
 ## Session replay
 

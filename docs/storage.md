@@ -14,7 +14,7 @@ messages, parts and tool runs.
   when parent and sub-agents wrote in parallel. One connection serializes
   all store access safely for concurrent agents.
 - Numbered migrations recorded in `schema_migrations` (version 1 creates the
-  full schema; later versions alter or rebuild). Current version: **8**.
+  full schema; later versions alter or rebuild). Current version: **11**.
   `Migrate` is idempotent.
 
 ## Schema
@@ -23,7 +23,8 @@ messages, parts and tool runs.
 sessions(id TEXT PK, title, directory, provider, model, variant,
          time_created, time_updated, status,
          parent_session_id -> sessions ON DELETE CASCADE,
-         kind TEXT NOT NULL DEFAULT 'main')
+         kind TEXT NOT NULL DEFAULT 'main',
+         status_segments TEXT NOT NULL DEFAULT '["model","variant","tokens","cache","cost","tps","subs","models","scroll","prompt"]')
 messages(id TEXT PK, session_id -> sessions ON DELETE CASCADE,
          role, agent, provider_id, model_id, variant, time_created, seq,
          UNIQUE(session_id, seq))
@@ -43,6 +44,8 @@ subagent_jobs(id TEXT PK,
               name, role, status, prompt, description, model, variant,
               max_steps, timeout_ms, summary, error,
               time_created, time_updated, time_started, time_finished)
+todos(session_id -> sessions ON DELETE CASCADE, seq, content, status,
+      time_updated, PRIMARY KEY(session_id, seq))
 ```
 
 Indexes (hot paths first):
@@ -62,8 +65,10 @@ messages/parts/tools, and durable `subagent_jobs`. Deleting only a child
 session nulls `subagent_jobs.child_session_id` but keeps the job summary.
 Child messages set `messages.agent` to the sub-agent name.
 
-Schema version is 8 (`schema_migrations`). Migrations 7-8 rebuild tables
-to add FKs SQLite cannot express with `ALTER TABLE`.
+Schema version is 11 (`schema_migrations`). Migrations 7-8 rebuild tables
+to add FKs SQLite cannot express with `ALTER TABLE`; migration 9 adds the
+session todo table, migration 10 adds the additive footer segment column, and
+migration 11 expands legacy footer visibility into the status drawer fields.
 
 `subagent_jobs` is the durable task registry: spawn/status/finish are
 upserted so `task_list`, `task_status`, and `task_wait` still work after a
@@ -101,8 +106,12 @@ process restart. Open (`queued`/`running`) rows are resumed on startup via
 `TouchSession`, `DeleteSession`, `ListMessages`, `ListParts`,
 `ListSessionsByDir` (latest first), `ListToolCalls` (per session),
 `UpdateSessionModel` / `UpdateSessionVariant` (also bump `time_updated`),
+`UpdateSessionSegments` (JSON footer visibility, also bumps `time_updated`),
 `UpsertSubagentJob` / `GetSubagentJob` / `ListSubagentJobs` /
 `ListOpenSubagentJobs` (durable sub-agent registry).
+
+`ReplaceTodos` replaces all rows for one session in one transaction and
+assigns `seq` from zero. `ListTodos` returns the rows in display order.
 
 ## Tool call lifecycle
 

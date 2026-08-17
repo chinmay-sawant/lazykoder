@@ -19,6 +19,10 @@ const (
 	toolTaskStatus = "task_status"
 	toolTaskWait   = "task_wait"
 	toolTaskCancel = "task_cancel"
+
+	// toolRegistryExtraSlots is the extra capacity reserved beyond len(names)
+	// when building tool spec slices and dedup maps.
+	toolRegistryExtraSlots = 5
 )
 
 // DefaultParentTools is the full parent allowlist without task tools.
@@ -175,8 +179,8 @@ func toolSpecsFor(names []string, host SubagentHost) []opencode.ToolSpec {
 	if len(names) == 0 {
 		names = DefaultParentTools
 	}
-	out := make([]opencode.ToolSpec, 0, len(names)+5)
-	seen := make(map[string]struct{}, len(names)+5)
+	out := make([]opencode.ToolSpec, 0, len(names)+toolRegistryExtraSlots)
+	seen := make(map[string]struct{}, len(names)+toolRegistryExtraSlots)
 	for _, n := range names {
 		if _, ok := seen[n]; ok {
 			continue

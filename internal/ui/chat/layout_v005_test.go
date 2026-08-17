@@ -149,12 +149,10 @@ func TestExpandedToolHasOutputSplit(t *testing.T) {
 	}
 }
 
-func TestFooterChipRectsMatchPaintedLine(t *testing.T) {
+func TestStatusChipRectMatchesPaintedLine(t *testing.T) {
 	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
 	mm, _ := m.Update(tea.WindowSizeMsg{Width: 140, Height: 36})
 	m = mm.(Model)
-	m.model = "deepseek-v4-flash"
-	m.variant = "xhigh"
 	m.todos = []db.Todo{
 		{Content: "one", Status: db.TodoInProgress},
 		{Content: "two", Status: db.TodoPending},
@@ -169,7 +167,7 @@ func TestFooterChipRectsMatchPaintedLine(t *testing.T) {
 	lines := strings.Split(stripANSI(viewText(m)), "\n")
 	footerY := -1
 	for i, line := range lines {
-		if strings.Contains(line, "enter send") && strings.Contains(line, "deepseek-v4-flash") {
+		if strings.Contains(line, "enter send") && strings.Contains(line, "status ▾") {
 			footerY = i
 			break
 		}
@@ -178,28 +176,16 @@ func TestFooterChipRectsMatchPaintedLine(t *testing.T) {
 		t.Fatalf("footer line missing:\n%s", viewText(m))
 	}
 	plain := lines[footerY]
-	ml, mt, mr, _, ok := m.modelStatusRect()
+	ml, mt, mr, _, ok := m.statusChipRect()
 	if !ok {
-		t.Fatal("model chip rect missing")
+		t.Fatal("status chip rect missing")
 	}
 	if mt != footerY {
-		t.Fatalf("model chip Y=%d, painted footer Y=%d", mt, footerY)
+		t.Fatalf("status chip Y=%d, painted footer Y=%d", mt, footerY)
 	}
-	nameAt, nameEnd, foundName := displaySpan(plain, "deepseek-v4-flash")
+	nameAt, nameEnd, foundName := displaySpan(plain, "status ▾")
 	if !foundName || ml > nameAt || mr < nameEnd || mr <= ml {
-		t.Fatalf("model chip X=[%d,%d) vs painted [%d,%d) in %q", ml, mr, nameAt, nameEnd, plain)
-	}
-
-	vl, vt, vr, _, ok := m.variantStatusRect()
-	if !ok {
-		t.Fatal("variant chip rect missing")
-	}
-	if vt != footerY {
-		t.Fatalf("variant chip Y=%d, painted footer Y=%d", vt, footerY)
-	}
-	varAt, varEnd, foundVar := displaySpan(plain, "xhigh")
-	if !foundVar || vl > varAt || vr < varEnd || vr <= vl {
-		t.Fatalf("variant chip X=[%d,%d) vs painted [%d,%d) in %q", vl, vr, varAt, varEnd, plain)
+		t.Fatalf("status chip X=[%d,%d) vs painted [%d,%d) in %q", ml, mr, nameAt, nameEnd, plain)
 	}
 
 	// A click on the prompt row (above the footer) must not open a picker.
@@ -213,17 +199,12 @@ func TestFooterChipRectsMatchPaintedLine(t *testing.T) {
 		t.Fatal("click on the input row opened a picker")
 	}
 
-	cur = clickModelStatus(t, m)
-	if !cur.pickerMode || cur.pickerKind != pickerKindModel {
-		t.Fatalf("model chip click: pickerMode=%v kind=%q", cur.pickerMode, cur.pickerKind)
-	}
-	vl, vt, vr, _, _ = m.variantStatusRect()
 	next, _ = m.Update(tea.MouseClickMsg(tea.Mouse{
-		X: (vl + vr) / 2, Y: vt, Button: tea.MouseLeft,
+		X: (ml + mr) / 2, Y: mt, Button: tea.MouseLeft,
 	}))
 	cur = next.(Model)
-	if !cur.pickerMode || cur.pickerKind != pickerKindVariant {
-		t.Fatalf("variant chip click: pickerMode=%v kind=%q", cur.pickerMode, cur.pickerKind)
+	if !cur.statusMode {
+		t.Fatalf("status chip click did not open drawer: statusMode=%v", cur.statusMode)
 	}
 }
 
@@ -247,16 +228,16 @@ func TestFooterChipsClickWithSubagentDrawerOpen(t *testing.T) {
 	if !m.subagentPickerMode {
 		t.Fatal("expected sub-agent strip open")
 	}
-	ml, mt, mr, _, ok := m.modelStatusRect()
+	ml, mt, mr, _, ok := m.statusChipRect()
 	if !ok {
-		t.Fatal("model chip should stay clickable with sub-agent drawer open")
+		t.Fatal("status chip should stay clickable with sub-agent drawer open")
 	}
 	mm, _ = m.Update(tea.MouseClickMsg(tea.Mouse{
 		X: (ml + mr) / 2, Y: mt, Button: tea.MouseLeft,
 	}))
 	m = mm.(Model)
-	if !m.pickerMode || m.pickerKind != pickerKindModel {
-		t.Fatalf("model chip click with drawer open: pickerMode=%v kind=%q", m.pickerMode, m.pickerKind)
+	if !m.statusMode || m.subagentPickerMode {
+		t.Fatalf("status chip click with drawer open: statusMode=%v subagents=%v", m.statusMode, m.subagentPickerMode)
 	}
 }
 
@@ -365,5 +346,30 @@ func TestBusyTurnKeepsComposerAndNoLeftScrollJunk(t *testing.T) {
 		if strings.HasPrefix(trim, "░") || strings.HasPrefix(trim, "█") {
 			t.Fatalf("scrollbar chrome on the left: %q", line)
 		}
+	}
+}
+
+func TestBusyTurnStatusChipOpensDrawer(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 36})
+	m = mm.(Model)
+	m.busy = true
+	m.activity = "thinking"
+	plain := stripANSI(viewText(m))
+	if !strings.Contains(plain, "status ▾") {
+		t.Fatalf("busy footer missing status control:\n%s", plain)
+	}
+	left, top, right, _, ok := m.statusChipRect()
+	if !ok {
+		t.Fatal("busy status chip rect missing")
+	}
+	next, _ := m.Update(tea.MouseClickMsg(tea.Mouse{
+		X:      (left + right) / 2,
+		Y:      top,
+		Button: tea.MouseLeft,
+	}))
+	got := next.(Model)
+	if !got.statusMode {
+		t.Fatal("busy status chip click did not open drawer")
 	}
 }

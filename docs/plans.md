@@ -21,6 +21,13 @@ snapshots:
 | `v0.0.5/phase-1-trust-overlays.md` | opaque cards, `@` viewport, settings safety rows, `/help` |
 | `v0.0.5/phase-2-chrome-settings.md` | slash palette, todos, footer chips, settings card |
 | `v0.0.5/phase-3-polish-compact.md` | resume/model polish, overlay recipe, 80x24 |
+| `v0.0.6/README.md` | transcript performance and meta keybindings |
+| `v0.0.6/phase-1-meta-keys.md` | composer-safe meta keybindings |
+| `v0.0.6/phase-2-tool-output-truncate.md` | bounded main-transcript tool output |
+| `v0.0.6/phase-3-render-path.md` | cached transcript render path |
+| `v0.0.7/README.md` | status visibility and OpenCode account profiles |
+| `v0.0.7/phase-1-status-drawer.md` | compact status footer and persisted status drawer |
+| `v0.0.7/phase-2-opencode-accounts.md` | dynamic OpenCode account profiles and active selection |
 
 Each checklist row is marked `[x]` only when the gate actually passed, with
 the command and exit code recorded beside the row. Rows are never checked
@@ -43,7 +50,7 @@ human runs them.
 - OpenCode CLI embedding / local opencode server
 - Reading OpenCode's global `~/.local/share/opencode/opencode.db`
 - Auto-run of any `rm`, sticky tool permissions
-- Live tokens/sec, status-segment toggles, and todowrite (phase 4 remainder)
+- Live tokens/sec, status-segment toggles, and todowrite (phase 4 complete)
 
 TUI findings from the 2026-08-16 review live in `plans/v0.0.1/findings/`
 so they stay next to the harness they audit. New product versions still

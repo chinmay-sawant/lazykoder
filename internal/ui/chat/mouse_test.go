@@ -262,7 +262,7 @@ func TestScrollbarClickIgnoredWithoutOverflow(t *testing.T) {
 	}
 }
 
-func TestClickTogglesToolCard(t *testing.T) {
+func TestClickSelectsToolCardWithoutToggle(t *testing.T) {
 	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
 	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
 	title := "echo hi"
@@ -289,21 +289,12 @@ func TestClickTogglesToolCard(t *testing.T) {
 	if m.items[0].collapsed {
 		t.Fatal("click did not expand the tool card")
 	}
-	if m.selection.active {
-		t.Fatal("click started a text selection")
-	}
 	if m.selectedItem != 0 {
 		t.Fatalf("selectedItem = %d, want 0", m.selectedItem)
 	}
-
-	mm, _ = m.Update(tea.MouseClickMsg(tea.Mouse{X: 2, Y: y, Button: tea.MouseLeft}))
-	m = mm.(Model)
-	if !m.items[0].collapsed {
-		t.Fatal("second click did not collapse the tool card")
-	}
 }
 
-func TestClickTogglesThinkingHeader(t *testing.T) {
+func TestClickSelectsThinkingHeaderWithoutToggle(t *testing.T) {
 	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
 	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
 	m.items = append(m.items,
@@ -320,11 +311,11 @@ func TestClickTogglesThinkingHeader(t *testing.T) {
 	}
 	mm, _ := m.Update(tea.MouseClickMsg(tea.Mouse{X: 1, Y: y, Button: tea.MouseLeft}))
 	m = mm.(Model)
-	if m.items[1].collapsed {
-		t.Fatal("click on thinking header did not expand")
+	if !m.items[1].collapsed {
+		t.Fatal("click on thinking header changed collapse state")
 	}
-	if !strings.Contains(stripANSI(viewText(m)), "secret thought") {
-		t.Fatal("expanded thinking missing from view")
+	if strings.Contains(stripANSI(viewText(m)), "secret thought") {
+		t.Fatal("collapsed thinking body appeared after click")
 	}
 }
 
@@ -357,8 +348,8 @@ func TestClickChevronWithTodosHitsPaintedRow(t *testing.T) {
 	}
 	next, _ := m.Update(tea.MouseClickMsg(tea.Mouse{X: 2, Y: yThink, Button: tea.MouseLeft}))
 	m = next.(Model)
-	if m.items[idx].collapsed {
-		t.Fatalf("click on painted thinking row %d did not expand", yThink)
+	if !m.items[idx].collapsed {
+		t.Fatalf("click on painted thinking row %d changed collapse state", yThink)
 	}
 
 	yBash := lastViewLineIndex(m, "bash")
@@ -372,7 +363,7 @@ func TestClickChevronWithTodosHitsPaintedRow(t *testing.T) {
 	next, _ = m.Update(tea.MouseClickMsg(tea.Mouse{X: 2, Y: yBash, Button: tea.MouseLeft}))
 	m = next.(Model)
 	if m.items[idx].collapsed {
-		t.Fatalf("click on painted bash row %d did not expand", yBash)
+		t.Fatalf("click on painted bash row %d did not expand the tool", yBash)
 	}
 }
 
@@ -443,8 +434,8 @@ func TestReopenClickTogglesCollapsedAtBottom(t *testing.T) {
 
 	mm, _ = m.Update(tea.MouseClickMsg(tea.Mouse{X: 2, Y: yThink, Button: tea.MouseLeft}))
 	m = mm.(Model)
-	if !strings.Contains(stripANSI(viewText(m)), thought) {
-		t.Fatalf("click on reopened thinking did not expand: %q", viewText(m))
+	if strings.Contains(stripANSI(viewText(m)), thought) {
+		t.Fatalf("click on reopened thinking changed collapse state: %q", viewText(m))
 	}
 	mm, _ = m.Update(tea.MouseClickMsg(tea.Mouse{X: 2, Y: lastViewLineIndex(m, "bash"), Button: tea.MouseLeft}))
 	m = mm.(Model)
@@ -456,7 +447,7 @@ func TestReopenClickTogglesCollapsedAtBottom(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatalf("click on reopened bash did not expand: %q", viewText(m))
+		t.Fatalf("click on reopened bash did not expand the tool: %q", viewText(m))
 	}
 }
 
