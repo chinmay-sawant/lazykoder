@@ -102,6 +102,47 @@ func TestHelpMetaKeys(t *testing.T) {
 	}
 }
 
+func TestSubagentArrowNavigation(t *testing.T) {
+	m := New(Options{Workdir: t.TempDir()})
+	m.width = 80
+	m.height = 24
+	m.subagentPickerMode = true
+	m.subagentItems = []subagentRow{
+		{ID: "agent-1", Name: "agent one", Status: "completed"},
+		{ID: "agent-2", Name: "agent two", Status: "completed"},
+	}
+	m.subagentCursor = 0
+	m = m.ensureSubagentBuilt()
+
+	m, _ = m.updateSubagentPickerKey(tea.KeyPressMsg{Code: tea.KeyDown})
+	if m.subagentCursor != 1 {
+		t.Fatalf("down arrow cursor=%d, want 1", m.subagentCursor)
+	}
+	m, _ = m.updateSubagentPickerKey(tea.KeyPressMsg{Code: tea.KeyUp})
+	if m.subagentCursor != 0 {
+		t.Fatalf("up arrow cursor=%d, want 0", m.subagentCursor)
+	}
+
+	var cmd tea.Cmd
+	m, cmd = m.updateSubagentPickerKey(tea.KeyPressMsg{Code: tea.KeyRight})
+	if cmd != nil {
+		t.Fatal("right arrow returned an unexpected command")
+	}
+	if !m.subagentLogMode || m.subagentSelected.Name != "agent one" {
+		t.Fatalf("right arrow did not open selected log: mode=%v selected=%q", m.subagentLogMode, m.subagentSelected.Name)
+	}
+
+	m, _ = m.updateSubagentLogKey(tea.KeyPressMsg{Code: tea.KeyRight})
+	if !m.subagentLogMode || m.subagentSelected.Name != "agent two" || m.subagentCursor != 1 {
+		t.Fatalf("second right arrow did not open next log: mode=%v selected=%q cursor=%d", m.subagentLogMode, m.subagentSelected.Name, m.subagentCursor)
+	}
+
+	m, _ = m.updateSubagentLogKey(tea.KeyPressMsg{Code: tea.KeyLeft})
+	if m.subagentLogMode || !m.subagentPickerMode {
+		t.Fatalf("left arrow did not return to drawer: log=%v picker=%v", m.subagentLogMode, m.subagentPickerMode)
+	}
+}
+
 func TestTruncateToolOutputForView(t *testing.T) {
 	short := "one\ntwo"
 	if got, omitted := truncateToolOutputForView(short); got != short || omitted {

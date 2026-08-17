@@ -606,7 +606,7 @@ func (m Model) subagentDrawerView() string {
 			m.subagentVp.ScrollPercent(), m.subagentVp.TotalLineCount() > m.subagentVp.Height())
 	}
 	footer := hintStyle.Width(cardW).Render(
-		truncateRunes("j/k select  •  enter logs  •  d cancel live  •  esc close", cardW),
+		truncateRunes("↑/↓ select  •  → logs  •  d cancel live  •  esc close", cardW),
 	)
 	return lipgloss.NewStyle().Width(cardW).Render(
 		lipgloss.JoinVertical(lipgloss.Left, header, body, footer),
@@ -731,7 +731,7 @@ func (m Model) subagentLogScreen() string {
 	body = strings.Join(bodyLines, "\n")
 
 	footer := hintStyle.Width(w).Render(truncateRunes(
-		"j/k scroll  •  ctrl+p thinking  •  ctrl+e tools  •  enter toggle  •  esc back  •  d close",
+		"↑/↓ scroll  •  → next agent  •  ← back  •  ctrl+p thinking  •  ctrl+e tools  •  enter toggle",
 		w,
 	))
 	out := lipgloss.JoinVertical(lipgloss.Left, header, "", body, footer)
@@ -890,6 +890,16 @@ func (m Model) updateSubagentPickerKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 				return m.updateKey(key)
 			}
 			return m.expandSubagentDrawer(), nil
+		case tea.KeyRight:
+			if !empty {
+				return m.updateKey(key)
+			}
+			return m.expandSubagentDrawer(), nil
+		case tea.KeyLeft:
+			if !empty {
+				return m.updateKey(key)
+			}
+			return m.closeSubagentPicker(), nil
 		case tea.KeyDown, tea.KeyUp, 'j', 'k':
 			if !empty && (key.Code == 'j' || key.Code == 'k') {
 				return m.updateKey(key)
@@ -945,6 +955,16 @@ func (m Model) updateSubagentPickerKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 			return m.updateKey(key)
 		}
 		return m.openSelectedSubagentLog()
+	case tea.KeyRight:
+		if empty {
+			return m.openSelectedSubagentLog()
+		}
+		return m.updateKey(key)
+	case tea.KeyLeft:
+		if empty {
+			return m.closeSubagentPicker(), nil
+		}
+		return m.updateKey(key)
 	case 'q', 'Q', 'x', 'X':
 		if empty {
 			return m.closeSubagentPicker(), nil
@@ -977,13 +997,15 @@ func (m Model) updateSubagentLogKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 	}
 	switch key.Code {
 	case tea.KeyEscape, 'q', 'Q', 'x', 'X':
-		// Back to the drawer list (full-screen log closes; drawer stays).
-		m.subagentLogMode = false
-		m.subagentLogItems = nil
-		m.subagentLogSelected = -1
-		m.subagentPickerMode = true
-		m = m.reloadSubagentRows()
-		return m.resizeSubagentDrawer(), nil
+		return m.closeSubagentLogToDrawer(), nil
+	case tea.KeyLeft:
+		return m.closeSubagentLogToDrawer(), nil
+	case tea.KeyRight:
+		if m.subagentCursor < len(m.subagentItems)-1 {
+			m.subagentCursor++
+			return m.openSelectedSubagentLog()
+		}
+		return m, nil
 	case 'j', tea.KeyDown:
 		m.subagentLogVp.ScrollDown(1)
 		return m, nil
@@ -1002,6 +1024,17 @@ func (m Model) updateSubagentLogKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m.closeSubagentPicker(), nil
 	}
 	return m, nil
+}
+
+// closeSubagentLogToDrawer returns from a full-screen child log without
+// closing the sub-agent drawer, so another child can be selected immediately.
+func (m Model) closeSubagentLogToDrawer() Model {
+	m.subagentLogMode = false
+	m.subagentLogItems = nil
+	m.subagentLogSelected = -1
+	m.subagentPickerMode = true
+	m = m.reloadSubagentRows()
+	return m.resizeSubagentDrawer()
 }
 
 func (m Model) openSelectedSubagentLog() (Model, tea.Cmd) {

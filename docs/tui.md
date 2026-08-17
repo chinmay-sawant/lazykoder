@@ -131,14 +131,16 @@ for the session stay in the list after they finish.
   `task` tool runs.
 - Footer chip `subs:live/total` (or `subs:total`) stays next to the model
   stats; click it to open the drawer.
-- `j`/`k` or click a row, then **enter**: full-screen (100% terminal) log
+- `↑`/`↓` or `j`/`k` selects a row. `→` or **enter** opens its full-screen
+  (100% terminal) log
   for that child, using the same design as the main chat: `you` / `assistant`
   roles, collapsible **thinking** (expanded by default), tool cards with
   status diamonds, and the vertical work rail (`│`).
-- In the log view: `ctrl+p` expands or collapses all thinking, `ctrl+e`
+- In the log view: `↑`/`↓` scrolls, `→` opens the next agent's log, and `←`
+  returns to the drawer. `ctrl+p` expands or collapses all thinking, `ctrl+e`
   expands or collapses all tools, and `enter` toggles the selected block;
-  `esc` / `[x]` returns to the drawer; `d` closes. Header clicks only select
-  a row.
+  `esc` / `[x]` also returns to the drawer; `d` closes. Header clicks only
+  select a row.
 - `d` on a live drawer row cancels it; `esc` closes the drawer.
 
 Child sessions stay in SQLite (`kind=subagent`) so completed agents still
