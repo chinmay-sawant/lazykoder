@@ -1110,7 +1110,7 @@ func (m Model) promptHasMultipleLines() bool {
 func (m Model) chromeHeight() int {
 	h := lipgloss.Height(m.headerView()) + 1 + lipgloss.Height(m.composerBlock())
 	if panel := m.todoPanelView(); panel != "" {
-		h += 1 + lipgloss.Height(panel)
+		h += lipgloss.Height(panel)
 	}
 	if m.slashMode {
 		h += 1 + lipgloss.Height(m.slashView())

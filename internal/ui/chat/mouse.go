@@ -67,12 +67,11 @@ func (m Model) mousePress(msg tea.MouseClickMsg) (Model, tea.Cmd) {
 			m = m.clearTextSelection()
 			return m.openSubagentPicker(), nil
 		}
-		if left, top, right, bottom, ok := m.variantStatusRect(); ok && mu.X >= left && mu.X < right && mu.Y >= top && mu.Y < bottom {
+		if hit, which := m.footerChipHit(mu.X, mu.Y); hit {
 			m = m.clearTextSelection()
-			return m.openVariantPicker(), nil
-		}
-		if left, top, right, bottom, ok := m.modelStatusRect(); ok && mu.X >= left && mu.X < right && mu.Y >= top && mu.Y < bottom {
-			m = m.clearTextSelection()
+			if which == "variant" {
+				return m.openVariantPicker(), nil
+			}
 			return m.openPicker(), nil
 		}
 		if m.helpMode {
@@ -196,10 +195,12 @@ func (m Model) applyJump(target, y int) Model {
 
 func (m Model) transcriptTop() int {
 	// headerView has no trailing newline; the \n after it in chatScreen
-	// only ends that row, it does not insert a blank line.
+	// only ends that row, it does not insert a blank line. Same for the
+	// todo strip. Adding 1 here pushed every click target one row below
+	// the painted ▸ / ◆ headers (web terminals made that obvious).
 	top := lipgloss.Height(m.headerView())
 	if panel := m.todoPanelView(); panel != "" {
-		top += 1 + lipgloss.Height(panel)
+		top += lipgloss.Height(panel)
 	}
 	return top
 }

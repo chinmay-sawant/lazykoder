@@ -17,18 +17,23 @@ import (
 
 // View renders the picker card, slash menu, confirm overlay, or the chat layout.
 func (m Model) View() tea.View {
+	return m.newView(m.frame())
+}
+
+// frame is the unpainted screen string. Mouse hit-testing scans this after
+// the same Width/Height paint as newView so click rows match the terminal.
+func (m Model) frame() string {
 	if m.sessionPickerMode {
-		return m.newView(m.sessionPickerScreen())
+		return m.sessionPickerScreen()
 	}
-	// Full-screen log card only; the list is a model-style drawer in chatScreen.
 	if m.subagentLogMode {
-		return m.newView(m.subagentLogScreen())
+		return m.subagentLogScreen()
 	}
 	if m.settingsMode {
-		return m.newView(m.settingsScreen())
+		return m.settingsScreen()
 	}
 	if m.helpMode {
-		return m.newView(m.helpScreen())
+		return m.helpScreen()
 	}
 	screen := m.chatScreen()
 	overlayH := m.composerTop()
@@ -41,7 +46,17 @@ func (m Model) View() tea.View {
 	if m.filePickerMode {
 		screen = overlayOn(screen, m.width, overlayH, m.filePickerOverlay())
 	}
-	return m.newView(screen)
+	return screen
+}
+
+// paintedLines is the alt-screen cell grid (ANSI stripped per line).
+func (m Model) paintedLines() []string {
+	painted := lipgloss.NewStyle().
+		Background(theme.ColorBg()).
+		Width(max(1, m.width)).
+		Height(max(1, m.height)).
+		Render(m.frame())
+	return strings.Split(painted, "\n")
 }
 
 // newView paints a full-size solid black layer so the host terminal
@@ -530,7 +545,7 @@ func (m Model) transcriptRenderHeight() int {
 	// never gets pushed off-screen by drawers (model, sub-agents, slash).
 	fixedRows := lipgloss.Height(m.headerView()) + 1 + 1 + 1 + lipgloss.Height(m.composerBlock())
 	if panel := m.todoPanelView(); panel != "" {
-		fixedRows += 1 + lipgloss.Height(panel)
+		fixedRows += lipgloss.Height(panel)
 	}
 	if m.slashMode {
 		fixedRows += 1 + lipgloss.Height(m.slashView())
@@ -797,11 +812,29 @@ func (m Model) scrollbarRect(target int) (top, bottom, col int, ok bool) {
 }
 
 func (m Model) pickerDrawerTop() int {
+	if y, ok := m.pickerHeaderScreenY(); ok {
+		return y
+	}
 	top := m.transcriptTop() + m.transcriptRenderHeight() + 1
 	if m.slashMode {
 		top += 1 + lipgloss.Height(m.slashView())
 	}
 	return top
+}
+
+func (m Model) pickerHeaderScreenY() (int, bool) {
+	if !m.pickerMode {
+		return 0, false
+	}
+	for i, line := range m.paintedLines() {
+		plain := ansi.Strip(line)
+		if strings.Contains(plain, "models  ·") ||
+			strings.Contains(plain, "reasoning  ·") ||
+			strings.Contains(plain, "variants  ·") {
+			return i, true
+		}
+	}
+	return 0, false
 }
 
 // withScrollbar appends a scrollbar column at the right edge of a rendered
@@ -855,6 +888,40 @@ func splitPaneWidths(total int) (left, right int) {
 	return left, right
 }
 
+// footerChipHit reports which footer chip contains (x,y). If both model
+// and variant boxes overlap, the closer center wins.
+func (m Model) footerChipHit(x, y int) (hit bool, which string) {
+	ml, mt, mr, mb, mok := m.modelStatusRect()
+	vl, vt, vr, vb, vok := m.variantStatusRect()
+	in := func(l, t, r, b int) bool {
+		return x >= l && x < r && y >= t && y < b
+	}
+	inM := mok && in(ml, mt, mr, mb)
+	inV := vok && in(vl, vt, vr, vb)
+	switch {
+	case inM && inV:
+		mc := (ml + mr) / 2
+		vc := (vl + vr) / 2
+		if absInt(x-vc) < absInt(x-mc) {
+			return true, "variant"
+		}
+		return true, "model"
+	case inV:
+		return true, "variant"
+	case inM:
+		return true, "model"
+	default:
+		return false, ""
+	}
+}
+
+func absInt(n int) int {
+	if n < 0 {
+		return -n
+	}
+	return n
+}
+
 func (m Model) modelStatusRect() (left, top, right, bottom int, ok bool) {
 	return m.footerChipRect(m.modelChipLabel())
 }
@@ -867,40 +934,75 @@ func (m Model) footerChipRect(chip string) (left, top, right, bottom int, ok boo
 	if chip == "" || m.busy || m.pickerMode || m.sessionPickerMode || m.subagentPickerMode || m.settingsMode {
 		return 0, 0, 0, 0, false
 	}
-	leftW := lipgloss.Width(m.composerLeft())
-	budget := max(4, max(minPaneWidth, m.width)-2-leftW-1)
-	footer := m.fitFooterRight(budget)
-	idx := strings.Index(footer, strings.TrimSuffix(chip, " ▾"))
-	if idx < 0 {
-		idx = strings.Index(footer, chip)
-	}
-	if idx < 0 {
+	plain, y, found := m.composerFooterPlainLine()
+	if !found {
 		return 0, 0, 0, 0, false
 	}
-	top = m.composerFooterTop()
-	footerLeft := max(0, m.width-1-lipgloss.Width(footer))
-	left = footerLeft + lipgloss.Width(footer[:idx])
-	right = left + lipgloss.Width(chip)
-	if right > left {
-		return left, top, right, top + 1, true
+	needles := []string{chip}
+	if base := strings.TrimSpace(strings.TrimSuffix(chip, "▾")); base != "" && base != chip {
+		needles = append(needles, base)
+		needles = append(needles, strings.TrimSpace(base))
+	}
+	for _, n := range needles {
+		if n == "" {
+			continue
+		}
+		if start, end, hit := displaySpan(plain, n); hit {
+			// One column of slack on the left. Do not pad right into
+			// the next chip (model ▾ sits beside variant ▾).
+			return max(0, start-1), y, end, y + 2, true
+		}
 	}
 	return 0, 0, 0, 0, false
 }
 
+// composerFooterPlainLine is the painted composer footer row (enter send + chips).
+func (m Model) composerFooterPlainLine() (plain string, y int, ok bool) {
+	for i, line := range m.paintedLines() {
+		plain = ansi.Strip(line)
+		if !composerFooterLine(plain) {
+			continue
+		}
+		return plain, i, true
+	}
+	return "", 0, false
+}
+
+func composerFooterLine(plain string) bool {
+	// The rotating tip "enter sends the prompt" must not match "enter send".
+	if strings.Contains(plain, "enter send now") {
+		return true
+	}
+	if strings.Contains(plain, "enter send") && !strings.Contains(plain, "enter sends") {
+		return true
+	}
+	if strings.Contains(plain, "history:") {
+		return true
+	}
+	return strings.Contains(plain, "working") && strings.Contains(plain, "esc cancel")
+}
+
 // composerFooterTop is the screen Y of the composer footer row (model/subs chips).
 func (m Model) composerFooterTop() int {
-	top := lipgloss.Height(m.headerView()) + 1 + m.transcriptRenderHeight() + 1 + 1
+	if _, y, ok := m.composerFooterPlainLine(); ok {
+		return y
+	}
+	top := m.transcriptTop() + m.transcriptRenderHeight() + 1 + 1
 	if m.slashMode {
 		top += 1 + lipgloss.Height(m.slashView())
+	}
+	if m.pickerMode {
+		top += 1 + lipgloss.Height(m.pickerView())
+	}
+	if m.subagentPickerMode && !m.subagentLogMode {
+		top += 1 + lipgloss.Height(m.subagentDrawerView())
 	}
 	if m.err != "" {
 		top += lipgloss.Height(errStyle.Width(max(minPaneWidth, m.width)).Render(m.err)) + 1
 	}
 	if m.showLiveStatus() {
-		// liveStatusView is 1 line idle residual, 2 lines when busy (status+actions).
 		top += lipgloss.Height(m.liveStatusView())
 	}
-	// Footer sits inside the composer: top border + prompt rows.
 	top += 1 + m.promptHeight()
 	return top
 }
@@ -920,17 +1022,16 @@ func (m Model) subsStatusRect() (left, top, right, bottom int, ok bool) {
 	if !strings.Contains(footer, "subs:") {
 		return 0, 0, 0, 0, false
 	}
-	// Approximate: chip sits at the right edge of the footer block.
-	top = m.composerFooterTop()
-	footerLeft := max(0, m.width-1-lipgloss.Width(footer))
-	// Find "subs:" within the footer string (plain width approximation).
-	idx := strings.Index(footer, "subs:")
-	if idx < 0 {
+	plain, y, found := m.composerFooterPlainLine()
+	if !found {
 		return 0, 0, 0, 0, false
 	}
-	prefixW := lipgloss.Width(footer[:idx])
-	chipW := lipgloss.Width(subs)
-	left = footerLeft + prefixW
-	right = left + chipW
-	return left, top, right, top + 1, true
+	start, end, hit := displaySpan(plain, subs)
+	if !hit {
+		start, end, hit = displaySpan(plain, "subs:")
+	}
+	if !hit {
+		return 0, 0, 0, 0, false
+	}
+	return start, y, end, y + 1, true
 }

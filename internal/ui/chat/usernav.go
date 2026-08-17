@@ -337,11 +337,22 @@ func (m Model) applyUserNavRail(screen string) string {
 		return screen
 	}
 	lines := strings.Split(screen, "\n")
-	for len(lines) < top+h {
-		lines = append(lines, "")
+	if top < 0 {
+		top = 0
 	}
-	block := strings.Join(lines[top:top+h], "\n")
-	painted := m.overlayUserNavRail(block, m.transcriptContentWidth(), h)
+	if top >= len(lines) {
+		return screen
+	}
+	// Do not invent rows below the painted top section. Padding here
+	// pushed ticks and a fake scrollbar column into the live-status
+	// / composer block after Enter.
+	end := min(len(lines), top+h)
+	span := end - top
+	if span < 1 {
+		return screen
+	}
+	block := strings.Join(lines[top:end], "\n")
+	painted := m.overlayUserNavRail(block, m.transcriptContentWidth(), span)
 	part := strings.Split(painted, "\n")
 	copy(lines[top:], part)
 	return strings.Join(lines, "\n")
