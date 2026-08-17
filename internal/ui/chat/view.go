@@ -99,6 +99,9 @@ func (m Model) chatScreen() string {
 	// Pin the composer to the bottom of the terminal: pad between alert row
 	// and the lower chrome (drawers / prompt) when content is short.
 	topS := top.String()
+	if m.hasUserNav() && len(m.items) > 0 {
+		topS = m.applyUserNavRail(topS)
+	}
 	botS := bottom.String()
 	topH := lipgloss.Height(topS)
 	botH := lipgloss.Height(botS)
@@ -579,10 +582,10 @@ func (m Model) transcriptView() string {
 		view = m.highlightTranscriptSelection(view, vp.YOffset())
 	}
 	contentW := vp.Width()
-	// User-nav rail replaces the transcript scrollbar: ticks are the
-	// jump targets, so a second right-edge track is not needed.
+	// User-nav rail is painted in chatScreen over a stable span so an
+	// open todo list does not move the ticks. Still skip the scrollbar.
 	if m.hasUserNav() {
-		return m.overlayUserNavRail(view, contentW, h)
+		return view
 	}
 	overflow := vp.TotalLineCount() > h
 	return withScrollbar(view, contentW, h, vp.ScrollPercent(), overflow)

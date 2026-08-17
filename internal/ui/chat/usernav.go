@@ -109,12 +109,27 @@ func (m Model) userTurnMarks() []userTurnMark {
 	if len(marks) == 0 {
 		return nil
 	}
-	vh := m.transcriptRenderHeight()
+	vh := m.userNavStableHeight()
 	if vh < 1 {
 		vh = 1
 	}
 	placeUserNavMarks(marks, vh)
 	return marks
+}
+
+// userNavStableHeight is the transcript height with the todo list collapsed.
+// Expanding the checklist must not respread the rail ticks.
+func (m Model) userNavStableHeight() int {
+	m.todosExpanded = false
+	return m.transcriptRenderHeight()
+}
+
+// userNavRailScreenTop is the first screen row of the rail: the transcript
+// top while the todo list is collapsed. Extra checklist rows sit inside
+// this span so ticks stay on the same screen rows.
+func (m Model) userNavRailScreenTop() int {
+	m.todosExpanded = false
+	return m.transcriptTop()
 }
 
 // placeUserNavMarks spreads ticks evenly down the rail. Positions depend
@@ -269,8 +284,8 @@ func (m Model) userNavIndexAtScreen(x, y int) (int, bool) {
 	if len(marks) == 0 {
 		return -1, false
 	}
-	top := m.transcriptTop()
-	h := m.transcriptRenderHeight()
+	top := m.userNavRailScreenTop()
+	h := m.userNavStableHeight()
 	if y < top || y >= top+h {
 		return -1, false
 	}
@@ -307,6 +322,29 @@ func userNavHitIndex(marks []userTurnMark, rel int) (int, bool) {
 
 func (m Model) userNavRailColumn() int {
 	return max(0, m.width-1)
+}
+
+// applyUserNavRail paints ticks onto a full-width screen starting at
+// userNavRailScreenTop. Used from chatScreen so an open todo list does
+// not shrink the rail or move the dots.
+func (m Model) applyUserNavRail(screen string) string {
+	if !m.hasUserNav() || len(m.items) == 0 {
+		return screen
+	}
+	top := m.userNavRailScreenTop()
+	h := m.userNavStableHeight()
+	if h < 1 {
+		return screen
+	}
+	lines := strings.Split(screen, "\n")
+	for len(lines) < top+h {
+		lines = append(lines, "")
+	}
+	block := strings.Join(lines[top:top+h], "\n")
+	painted := m.overlayUserNavRail(block, m.transcriptContentWidth(), h)
+	part := strings.Split(painted, "\n")
+	copy(lines[top:], part)
+	return strings.Join(lines, "\n")
 }
 
 // jumpToUserTurn scrolls the transcript so the given user item is at the top

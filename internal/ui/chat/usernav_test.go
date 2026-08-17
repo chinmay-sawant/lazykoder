@@ -7,6 +7,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/chinmay-sawant/lazykoder/internal/db"
 )
 
 func fixtureTurns(m Model, n int, bodyLines int) Model {
@@ -128,6 +130,59 @@ func TestUserNavEvenSpacingStaticOnExpand(t *testing.T) {
 		if after[i].ScreenRow != rows[i] {
 			t.Fatalf("mark %d moved on expand: %d -> %d (rows were %v)", i, rows[i], after[i].ScreenRow, rows)
 		}
+	}
+}
+
+func TestUserNavMarksStableWhenTodosToggle(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 36})
+	m = mm.(Model)
+	m = fixtureTurns(m, 3, 6)
+	m.todos = []db.Todo{
+		{Content: "inspect layout", Status: db.TodoInProgress},
+		{Content: "fix input box", Status: db.TodoPending},
+		{Content: "run checks", Status: db.TodoPending},
+	}
+	before := m.userTurnMarks()
+	if len(before) != 3 {
+		t.Fatalf("marks=%d, want 3", len(before))
+	}
+	rows := make([]int, len(before))
+	tops := make([]int, len(before))
+	railTop := m.userNavRailScreenTop()
+	for i, mk := range before {
+		rows[i] = mk.ScreenRow
+		tops[i] = railTop + mk.ScreenRow
+	}
+	collapsedH := m.transcriptRenderHeight()
+
+	m = m.toggleTodos()
+	if !m.todosExpanded {
+		t.Fatal("todos did not expand")
+	}
+	if m.transcriptRenderHeight() >= collapsedH {
+		t.Fatalf("expanded transcript should shrink: collapsed=%d expanded=%d", collapsedH, m.transcriptRenderHeight())
+	}
+	after := m.userTurnMarks()
+	if len(after) != len(before) {
+		t.Fatalf("mark count %d -> %d", len(before), len(after))
+	}
+	if m.userNavRailScreenTop() != railTop {
+		t.Fatalf("rail top moved %d -> %d", railTop, m.userNavRailScreenTop())
+	}
+	for i := range after {
+		if after[i].ScreenRow != rows[i] {
+			t.Fatalf("mark %d ScreenRow moved on todo open: %d -> %d", i, rows[i], after[i].ScreenRow)
+		}
+		got := m.userNavRailScreenTop() + after[i].ScreenRow
+		if got != tops[i] {
+			t.Fatalf("mark %d screen Y moved on todo open: %d -> %d", i, tops[i], got)
+		}
+	}
+
+	v := stripANSI(viewText(m))
+	if !strings.Contains(v, userNavMarkIdle) && !strings.Contains(v, userNavMarkActive) && !strings.Contains(v, userNavMarkHover) {
+		t.Fatalf("rail missing after todo expand:\n%s", v)
 	}
 }
 
