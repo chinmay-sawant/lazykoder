@@ -42,6 +42,12 @@ func isPromptNewline(key tea.KeyPressMsg) bool {
 
 func (m Model) updateKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 	m.copyNotice = ""
+	// Keep composer mouse selection only for ctrl+c / ctrl+a; any other key clears it.
+	keepPromptSel := key.Mod.Contains(tea.ModCtrl) &&
+		(key.Code == 'c' || key.Code == 'C' || key.Code == 'a' || key.Code == 'A')
+	if !keepPromptSel {
+		m = m.clearPromptSelection()
+	}
 	if key.Code != 'c' && key.Code != 'C' {
 		m = m.clearTextSelection()
 	}
@@ -104,6 +110,11 @@ func (m Model) updateKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 			return m, nil
 		case 'c', 'C':
 			m.quitConfirm = false
+			// Prefer an active mouse/range selection, then select-all / whole draft.
+			if text, ok := m.selectedPromptText(); ok {
+				m.copyNotice = "Text copied"
+				return m, tea.Batch(tea.SetClipboard(text), clearCopyNotice())
+			}
 			if m.prompt.Value() == "" {
 				return m, nil
 			}
@@ -180,6 +191,10 @@ func (m Model) updateKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.prompt, cmd = m.prompt.Update(key)
 		return m.syncPromptSlash(), cmd
 	case 'c', 'C':
+		if text, ok := m.selectedPromptText(); ok {
+			m.copyNotice = "Text copied"
+			return m, tea.Batch(tea.SetClipboard(text), clearCopyNotice())
+		}
 		if text, ok := m.selectedText(); ok {
 			return m, tea.SetClipboard(text)
 		}

@@ -253,14 +253,17 @@ type Model struct {
 
 	// Sub-agent picker (list) + log viewer for child sessions.
 	subagentPickerMode bool
-	subagentLogMode    bool
-	subagentItems      []subagentRow
-	subagentCursor     int
-	subagentHover      int
-	subagentVp         viewport.Model
-	subagentLogVp      viewport.Model
-	subagentBuilt      bool
-	subagentSelected   subagentRow
+	// subagentDrawerCompact shows a one-line summary instead of the full list
+	// (used after todowrite updates so checklist + agents both stay visible).
+	subagentDrawerCompact bool
+	subagentLogMode       bool
+	subagentItems         []subagentRow
+	subagentCursor        int
+	subagentHover         int
+	subagentVp            viewport.Model
+	subagentLogVp         viewport.Model
+	subagentBuilt         bool
+	subagentSelected      subagentRow
 	// subagentLogItems is the child transcript rendered with main chat styles
 	// (thinking, tools, work rails). Reasoning starts expanded.
 	subagentLogItems    []transcriptItem
@@ -271,6 +274,7 @@ type Model struct {
 	slashItems      []slashCmd
 	slashFromPaste  bool
 	selection       textSelection
+	promptSel       promptSelection
 	copyNotice      string
 	promptSelectAll bool
 	tipsIndex       int
@@ -613,7 +617,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.transcript.SetWidth(m.transcriptContentWidth())
-		m.prompt.SetWidth(max(minPaneWidth, msg.Width))
+		// Keep textarea width identical to the bordered composer content so
+		// soft-wrap and mouse hit-testing agree with what is painted.
+		m.prompt.SetWidth(m.promptContentWidth())
 		m.prompt.SetHeight(m.promptHeight())
 		m.transcript.SetHeight(max(minPaneHeight, m.transcriptRenderHeight()))
 		m.syncTranscript()
@@ -748,6 +754,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m.refreshSessionHover(), nil
 		}
+		// Composer drag-select takes priority over transcript selection.
+		if m.promptSel.dragging {
+			return m.updatePromptSelection(msg.Mouse()), nil
+		}
 		// Keep transcript selection / scrollbar drag working while the drawer
 		// is open; only update drawer hover when the pointer is on it.
 		if m.selection.dragging {
@@ -787,6 +797,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case tea.MouseReleaseMsg:
+		if m.promptSel.dragging {
+			return m.endPromptSelectionDrag()
+		}
 		m.selection.dragging = false
 		m.dragOn = false
 		text, ok := m.selectedText()
@@ -1018,7 +1031,9 @@ func newPromptArea(width int) textarea.Model {
 	ta.DynamicHeight = true
 	ta.MinHeight = promptMinRows
 	ta.MaxHeight = promptMaxRows
-	ta.SetWidth(max(minPaneWidth, width))
+	// Match bordered composer content width (not full terminal width).
+	innerW := max(minPaneWidth, width-2)
+	ta.SetWidth(max(minPaneWidth, innerW-2))
 	ta.SetHeight(promptMinRows)
 	ta.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("shift+enter"))
 	ta.KeyMap.WordBackward = key.NewBinding(key.WithKeys("alt+left", "ctrl+left", "alt+b"))
@@ -1062,22 +1077,8 @@ func (m Model) promptHeight() int {
 }
 
 func (m Model) visualPromptLines() int {
-	w := m.prompt.Width()
-	if w < 1 {
-		w = max(minPaneWidth, m.width-4)
-	}
-	if w < 1 {
-		w = 40
-	}
-	n := 0
-	for _, line := range strings.Split(m.prompt.Value(), "\n") {
-		lw := lipgloss.Width(line)
-		if lw == 0 {
-			n++
-			continue
-		}
-		n += (lw + w - 1) / w
-	}
+	// Same hard-wrap as promptBodyPaint / mouse hit-testing.
+	n := len(m.promptVisualLines())
 	if n < 1 {
 		return 1
 	}

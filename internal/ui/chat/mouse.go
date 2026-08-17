@@ -22,6 +22,14 @@ func (m Model) jumpBarRow() int {
 func (m Model) mousePress(msg tea.MouseClickMsg) (Model, tea.Cmd) {
 	mu := msg.Mouse()
 	m.copyNotice = ""
+	// Composer click-to-caret / drag-select (before transcript hits).
+	if next, cmd, hit := m.mousePressPrompt(mu); hit {
+		return next, cmd
+	}
+	// Click outside the prompt clears an active composer selection.
+	if m.promptSel.active || m.promptSel.dragging {
+		m = m.clearPromptSelection()
+	}
 	if m.settingsMode {
 		if next, cmd, hit := m.settingsHit(mu.X, mu.Y, mu.Button); hit {
 			return next, cmd
@@ -57,9 +65,24 @@ func (m Model) mousePress(msg tea.MouseClickMsg) (Model, tea.Cmd) {
 		return m, nil
 	}
 	if mu.Button == tea.MouseLeft && m.subagentPickerMode && !m.subagentLogMode {
+		// Title: full list → compact summary; compact → close.
+		if m.subagentHeaderAt(mu.Y) {
+			if m.subagentDrawerCompact {
+				return m.closeSubagentPicker(), nil
+			}
+			return m.collapseSubagentDrawerToSummary(), nil
+		}
+		// Compact body/footer expands back to the full list.
+		if m.subagentDrawerCompact && m.pointerInSubagentDrawer(mu.Y) {
+			return m.expandSubagentDrawer(), nil
+		}
 		if idx, ok := m.subagentIndexAtScreenY(mu.Y); ok {
 			m.subagentCursor = idx
 			return m.openSelectedSubagentLog()
+		}
+		// Footer / padding of the drawer: do not fall through to other hits.
+		if m.pointerInSubagentDrawer(mu.Y) {
+			return m, nil
 		}
 	}
 	if !m.pickerMode && !m.slashMode && !m.subagentPickerMode {

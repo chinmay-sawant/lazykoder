@@ -480,20 +480,103 @@ func TestCloseDrawerStaysClosedUntilNewSpawn(t *testing.T) {
 		t.Fatal("drawer re-opened when no new job ids")
 	}
 
-	// A brand-new child reloads rows but does not steal the transcript.
+	// A brand-new child re-opens the full drawer so live agents are visible.
 	if _, err := st.CreateSession(context.Background(), db.Session{
 		Directory: workdir, Title: "child-b", ParentSessionID: &pid, Kind: db.SessionKindSubagent,
 	}); err != nil {
 		t.Fatalf("child-b: %v", err)
 	}
 	m = m.openSubagentDrawerIfNew()
-	if m.subagentPickerMode {
-		t.Fatal("drawer should stay closed on spawn; use /agents or the subs chip")
+	if !m.subagentPickerMode {
+		t.Fatal("drawer should open on a new spawn")
+	}
+	if m.subagentDrawerCompact {
+		t.Fatal("new spawn should open the full list")
 	}
 	if len(m.subagentItems) != 2 {
 		t.Fatalf("rows = %d, want 2", len(m.subagentItems))
 	}
 	if got := m.subsStatusLabel(); !strings.Contains(got, "subs:") {
 		t.Fatalf("subs chip missing after spawn: %q", got)
+	}
+}
+
+func TestSubagentHeaderClickCollapsesDrawer(t *testing.T) {
+	st := newTestStore(t)
+	workdir := t.TempDir()
+	parent, err := st.CreateSession(context.Background(), db.Session{Directory: workdir, Title: "main"})
+	if err != nil {
+		t.Fatalf("parent: %v", err)
+	}
+	pid := parent.ID
+	if _, err := st.CreateSession(context.Background(), db.Session{
+		Directory: workdir, Title: "agent_alpha", ParentSessionID: &pid, Kind: db.SessionKindSubagent,
+	}); err != nil {
+		t.Fatalf("child: %v", err)
+	}
+	m := New(Options{Store: st, Workdir: workdir, Session: &parent})
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 36})
+	m = mm.(Model)
+	m = m.openSubagentPicker()
+	if !m.subagentPickerMode {
+		t.Fatal("drawer should open")
+	}
+	headerY, ok := m.subagentHeaderScreenY()
+	if !ok {
+		t.Fatal("header row not found in painted view")
+	}
+	// Header click collapses full list to compact summary (does not open a log).
+	mm, _ = m.Update(tea.MouseClickMsg(tea.Mouse{X: 4, Y: headerY, Button: tea.MouseLeft}))
+	m = mm.(Model)
+	if m.subagentLogMode {
+		t.Fatal("header click opened a sub-agent log")
+	}
+	if !m.subagentPickerMode || !m.subagentDrawerCompact {
+		t.Fatal("header click should collapse to the compact summary drawer")
+	}
+	// Second header click closes the summary strip.
+	headerY, ok = m.subagentHeaderScreenY()
+	if !ok {
+		t.Fatal("compact header row not found")
+	}
+	mm, _ = m.Update(tea.MouseClickMsg(tea.Mouse{X: 4, Y: headerY, Button: tea.MouseLeft}))
+	m = mm.(Model)
+	if m.subagentPickerMode {
+		t.Fatal("second header click should close the drawer")
+	}
+}
+
+func TestSubagentDrawerOpensOnNewSpawn(t *testing.T) {
+	st := newTestStore(t)
+	workdir := t.TempDir()
+	parent, err := st.CreateSession(context.Background(), db.Session{Directory: workdir, Title: "main"})
+	if err != nil {
+		t.Fatalf("parent: %v", err)
+	}
+	pid := parent.ID
+	m := New(Options{Store: st, Workdir: workdir, Session: &parent})
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 36})
+	m = mm.(Model)
+	// First reload with no children: closed.
+	m = m.openSubagentDrawerIfNew()
+	if m.subagentPickerMode {
+		t.Fatal("empty spawn should not open drawer")
+	}
+	// A new child session appears: drawer should open full.
+	if _, err := st.CreateSession(context.Background(), db.Session{
+		Directory: workdir, Title: "worker-1", ParentSessionID: &pid, Kind: db.SessionKindSubagent,
+	}); err != nil {
+		t.Fatalf("child: %v", err)
+	}
+	m = m.openSubagentDrawerIfNew()
+	if !m.subagentPickerMode {
+		t.Fatal("new spawn should open the sub-agent drawer")
+	}
+	if m.subagentDrawerCompact {
+		t.Fatal("new spawn should open the full list, not compact")
+	}
+	v := stripANSI(viewText(m))
+	if !strings.Contains(v, "sub-agents") || !strings.Contains(v, "worker-1") {
+		t.Fatalf("drawer missing after spawn: %q", v)
 	}
 }

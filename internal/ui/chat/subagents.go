@@ -41,7 +41,11 @@ const (
 // openSubagentPicker opens the model-style drawer above the prompt and
 // reloads rows for the current parent session.
 func (m Model) openSubagentPicker() Model {
+	// Remember whether the transcript was following latest output so shrinking
+	// the viewport for the drawer does not leave the background stuck mid-scroll.
+	follow := m.transcript.AtBottom()
 	m.subagentPickerMode = true
+	m.subagentDrawerCompact = false
 	m.subagentLogMode = false
 	m.subagentHover = -1
 	m.slashMode = false
@@ -58,17 +62,68 @@ func (m Model) openSubagentPicker() Model {
 	if m.subagentCursor >= len(m.subagentItems) {
 		m.subagentCursor = max(0, len(m.subagentItems)-1)
 	}
-	return m.resizeSubagentDrawer()
+	m = m.resizeSubagentDrawer()
+	m.syncTranscript()
+	if follow {
+		m.transcript.GotoBottom()
+	}
+	return m
+}
+
+// collapseSubagentDrawerToSummary keeps the drawer open as a one-line summary
+// (counts only). Used after todowrite so the checklist and agents both stay on
+// screen without a tall list. No-op when there are no sub-agent rows.
+func (m Model) collapseSubagentDrawerToSummary() Model {
+	m = m.ensureSubagentBuilt()
+	m = m.reloadSubagentRows()
+	if len(m.subagentItems) == 0 {
+		return m.closeSubagentPicker()
+	}
+	follow := m.transcript.AtBottom()
+	m.subagentPickerMode = true
+	m.subagentDrawerCompact = true
+	m.subagentLogMode = false
+	m.subagentHover = -1
+	m = m.resizeSubagentDrawer()
+	m.syncTranscript()
+	if follow {
+		m.transcript.GotoBottom()
+	}
+	return m
+}
+
+// expandSubagentDrawer restores the full list from compact summary mode.
+func (m Model) expandSubagentDrawer() Model {
+	if !m.subagentPickerMode {
+		return m.openSubagentPicker()
+	}
+	follow := m.transcript.AtBottom()
+	m.subagentDrawerCompact = false
+	m.subagentLogMode = false
+	m = m.reloadSubagentRows()
+	m = m.resizeSubagentDrawer()
+	m.syncTranscript()
+	if follow {
+		m.transcript.GotoBottom()
+	}
+	return m
 }
 
 // closeSubagentPicker closes the drawer and the full-screen log card.
 func (m Model) closeSubagentPicker() Model {
+	follow := m.transcript.AtBottom()
 	m.subagentPickerMode = false
+	m.subagentDrawerCompact = false
 	m.subagentLogMode = false
 	m.subagentHover = -1
 	m.subagentLogItems = nil
 	m.subagentLogSelected = -1
 	m.subagentSelected = subagentRow{}
+	// Reclaim drawer rows into the transcript and keep following the bottom.
+	m.syncTranscript()
+	if follow {
+		m.transcript.GotoBottom()
+	}
 	return m
 }
 
@@ -99,14 +154,40 @@ func (m Model) syncSubagentDrawer() Model {
 	return m
 }
 
-// openSubagentDrawerIfNew reloads rows and opens the drawer only when at
-// least one job id was not already listed (true spawn). Safe to call on
-// every task* tool event; task_wait / status updates do not re-open.
+// openSubagentDrawerIfNew reloads rows and opens the full drawer when at
+// least one job id was not already listed (true spawn). Status/wait ticks
+// only refresh rows; they do not re-expand a user-collapsed compact strip.
 func (m Model) openSubagentDrawerIfNew() Model {
+	prev := make(map[string]bool, len(m.subagentItems))
+	for _, r := range m.subagentItems {
+		prev[r.ID] = true
+	}
 	m = m.ensureSubagentBuilt()
-	// Reload only. Opening the drawer mid-turn steals transcript rows;
-	// the footer subs: chip flashes live count instead.
-	return m.reloadSubagentRows()
+	m = m.reloadSubagentRows()
+	newJob := false
+	for _, r := range m.subagentItems {
+		if !prev[r.ID] {
+			newJob = true
+			break
+		}
+	}
+	if !newJob {
+		if m.subagentPickerMode {
+			return m.resizeSubagentDrawer()
+		}
+		return m
+	}
+	// New spawn: show the full list so live agents are visible again.
+	follow := m.transcript.AtBottom()
+	m.subagentPickerMode = true
+	m.subagentDrawerCompact = false
+	m.subagentLogMode = false
+	m = m.resizeSubagentDrawer()
+	m.syncTranscript()
+	if follow {
+		m.transcript.GotoBottom()
+	}
+	return m
 }
 
 func (m Model) reloadSubagentRows() Model {
@@ -386,6 +467,9 @@ func (m Model) hasLiveSubagents() bool {
 // subagentDrawerVPHeight caps the list so header + drawer + composer always
 // fit in the terminal (same idea as pickerVPHeight for /model).
 func (m Model) subagentDrawerVPHeight() int {
+	if m.subagentDrawerCompact {
+		return 0
+	}
 	// header, blank after header, alert row, drawer chrome (header+footer),
 	// gap before prompt, full composer, and a floor for the transcript.
 	reserved := lipgloss.Height(m.headerView()) + 1 + 1 + pickerDrawerChrome + 1 +
@@ -410,12 +494,21 @@ func (m Model) subagentDrawerVPHeight() int {
 }
 
 func (m Model) resizeSubagentDrawer() Model {
+	follow := m.transcript.AtBottom()
 	cardW := m.pickerDrawerWidth()
 	vpH := m.subagentDrawerVPHeight()
 	m.subagentVp.SetWidth(max(pickerVpMinWidth, cardW-1))
 	m.subagentVp.SetHeight(vpH)
-	m.subagentVp.SetContent(m.subagentDrawerContent(cardW - 1))
-	m.ensureSubagentCursorVisible()
+	if !m.subagentDrawerCompact {
+		m.subagentVp.SetContent(m.subagentDrawerContent(cardW - 1))
+		m.ensureSubagentCursorVisible()
+	}
+	// Drawer height feeds transcriptRenderHeight; re-sync so the background
+	// viewport keeps following when the user was already at the bottom.
+	m.syncTranscript()
+	if follow {
+		m.transcript.GotoBottom()
+	}
 	return m
 }
 
@@ -465,15 +558,36 @@ func (m Model) ensureSubagentCursorVisible() {
 }
 
 // subagentDrawerView is the model-picker-style list above the prompt.
+// Compact mode is a short summary strip (header + footer only).
 func (m Model) subagentDrawerView() string {
 	cardW := m.pickerDrawerWidth()
-	live, total := 0, len(m.subagentItems)
-	for _, r := range m.subagentItems {
-		if r.Live {
-			live++
-		}
-	}
+	live, ok, failed, total := m.subagentDrawerCounts()
 	header := hintStyle.Render("sub-agents  ·  ")
+	if m.subagentDrawerCompact {
+		header += lipgloss.NewStyle().Foreground(theme.ColorText()).Render(fmt.Sprintf("%d", total))
+		if live > 0 {
+			header += hintStyle.Render("  ·  ")
+			header += lipgloss.NewStyle().Foreground(theme.ColorAccent()).Render(fmt.Sprintf("%d live", live))
+		}
+		if ok > 0 {
+			header += hintStyle.Render("  ·  ")
+			header += lipgloss.NewStyle().Foreground(theme.ColorGood()).Render(fmt.Sprintf("%d ok", ok))
+		}
+		if failed > 0 {
+			header += hintStyle.Render("  ·  ")
+			header += lipgloss.NewStyle().Foreground(theme.ColorDanger()).Render(fmt.Sprintf("%d failed", failed))
+		}
+		if lipgloss.Width(header) > cardW {
+			header = truncateRunes(header, cardW)
+		}
+		footer := hintStyle.Width(cardW).Render(
+			truncateRunes("enter expand  •  click title close  •  esc close", cardW),
+		)
+		return lipgloss.NewStyle().Width(cardW).Render(
+			lipgloss.JoinVertical(lipgloss.Left, header, footer),
+		)
+	}
+
 	if live > 0 {
 		header += lipgloss.NewStyle().Foreground(theme.ColorAccent()).Render(fmt.Sprintf("%d live", live))
 		header += hintStyle.Render(fmt.Sprintf("  ·  %d total", total))
@@ -495,6 +609,25 @@ func (m Model) subagentDrawerView() string {
 	return lipgloss.NewStyle().Width(cardW).Render(
 		lipgloss.JoinVertical(lipgloss.Left, header, body, footer),
 	)
+}
+
+// subagentDrawerCounts returns live / ok / failed / total for drawer chrome.
+func (m Model) subagentDrawerCounts() (live, ok, failed, total int) {
+	total = len(m.subagentItems)
+	for _, r := range m.subagentItems {
+		st := strings.ToLower(strings.TrimSpace(r.Status))
+		switch {
+		case r.Live:
+			live++
+		case isFailedSubStatus(r.Status):
+			failed++
+		case st == "completed" || st == "success" || st == "done" || isTerminalSubStatus(r.Status):
+			ok++
+		default:
+			live++
+		}
+	}
+	return live, ok, failed, total
 }
 
 func (m Model) subagentDrawerContent(width int) string {
@@ -745,9 +878,31 @@ func (m Model) updateSubagentPickerKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 	// Drawer stays open while the composer stays fully interactive: typing,
 	// paste, send, etc. Only dedicated navigation keys are handled here.
 	empty := strings.TrimSpace(m.prompt.Value()) == ""
+	if m.subagentDrawerCompact {
+		switch key.Code {
+		case tea.KeyEscape, 'q', 'Q', 'x', 'X':
+			if empty || key.Code == tea.KeyEscape {
+				return m.closeSubagentPicker(), nil
+			}
+			return m.updateKey(key)
+		case tea.KeyEnter:
+			if !empty {
+				return m.updateKey(key)
+			}
+			return m.expandSubagentDrawer(), nil
+		case tea.KeyDown, tea.KeyUp, 'j', 'k':
+			if !empty && (key.Code == 'j' || key.Code == 'k') {
+				return m.updateKey(key)
+			}
+			return m.expandSubagentDrawer(), nil
+		default:
+			return m.updateKey(key)
+		}
+	}
 	switch key.Code {
 	case tea.KeyEscape:
-		return m.closeSubagentPicker(), nil
+		// Esc collapses to the summary strip first; second esc closes.
+		return m.collapseSubagentDrawerToSummary(), nil
 	case tea.KeyDown:
 		if m.subagentCursor < len(m.subagentItems)-1 {
 			m.subagentCursor++
@@ -1056,15 +1211,40 @@ func (m Model) cancelSelectedSubagent() (Model, tea.Cmd) {
 }
 
 // subagentDrawerTop is the first screen row of the sub-agent drawer (header).
+// Prefer the painted "sub-agents" line so bottom-pinned layout (pad above the
+// composer) still maps clicks correctly.
 func (m Model) subagentDrawerTop() int {
-	top := m.transcriptTop() + m.transcriptRenderHeight() + 1 // alert row
-	if m.slashMode {
-		top += 1 + lipgloss.Height(m.slashView())
+	if y, ok := m.subagentHeaderScreenY(); ok {
+		return y
 	}
-	if m.pickerMode {
-		top += 1 + lipgloss.Height(m.pickerView())
+	// Fallback: bottom chrome height from the terminal edge.
+	h := lipgloss.Height(m.subagentDrawerView())
+	bot := lipgloss.Height(m.composerBlock())
+	if m.err != "" {
+		bot += 1 + lipgloss.Height(errStyle.Width(max(minPaneWidth, m.width)).Render(m.err))
 	}
-	return top
+	return max(0, m.height-bot-h)
+}
+
+// subagentHeaderScreenY finds the painted drawer title row.
+func (m Model) subagentHeaderScreenY() (int, bool) {
+	if !m.subagentPickerMode || m.subagentLogMode {
+		return 0, false
+	}
+	for i, line := range m.paintedLines() {
+		plain := ansi.Strip(line)
+		if strings.Contains(plain, "sub-agents") {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+// subagentHeaderAt reports whether screen row y is the drawer title line
+// ("sub-agents · …"). Full list: collapse to summary. Compact: close drawer.
+func (m Model) subagentHeaderAt(y int) bool {
+	top, ok := m.subagentHeaderScreenY()
+	return ok && y == top
 }
 
 // pointerInSubagentDrawer reports whether screen row y sits on the drawer
@@ -1079,10 +1259,14 @@ func (m Model) pointerInSubagentDrawer(y int) bool {
 }
 
 // subagentIndexAtScreenY maps a click Y to a drawer row (chat layout).
-// Only the visible list band counts so clicks on the transcript/composer
+// Only the visible list band counts so clicks on the header/footer/transcript
 // never open a sub-agent by accident.
 func (m Model) subagentIndexAtScreenY(y int) (int, bool) {
 	if !m.subagentPickerMode || m.subagentLogMode || len(m.subagentItems) == 0 {
+		return 0, false
+	}
+	// Never treat the title row as a list hit (collapse is handled separately).
+	if m.subagentHeaderAt(y) {
 		return 0, false
 	}
 	// Drawer header is one line, then the list viewport.

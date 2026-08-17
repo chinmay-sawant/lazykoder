@@ -99,11 +99,13 @@ func TestCompact80x24KeepsTranscript(t *testing.T) {
 }
 
 func TestSubagentDrawerDoesNotAutoOpen(t *testing.T) {
+	// Status-only reloads (same ids) must not force the drawer open.
 	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
 	m.subagentItems = []subagentRow{{ID: "a", Name: "one", Status: "completed"}}
 	m = m.openSubagentDrawerIfNew()
+	// Without a store-backed new job, reload clears items and stays closed.
 	if m.subagentPickerMode {
-		t.Fatal("drawer auto-opened")
+		t.Fatal("status-only reload should not open the drawer")
 	}
 }
 

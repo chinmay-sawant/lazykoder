@@ -221,7 +221,10 @@ func (m Model) liveStatusView() string {
 // Scrolling up keeps the view pinned until the user clicks the icon, so new
 // output never yanks the view to the bottom.
 func (m Model) jumpBarVisible() bool {
-	if m.pickerMode || m.slashMode || m.confirmMode || m.askMode || m.helpMode || m.settingsMode || m.filePickerMode || m.sessionPickerMode || m.subagentPickerMode {
+	// Keep the jump-to-latest affordance available while the sub-agent drawer
+	// is open so a stuck mid-scroll background can still be recovered. Full-
+	// screen overlays still hide it.
+	if m.pickerMode || m.slashMode || m.confirmMode || m.askMode || m.helpMode || m.settingsMode || m.filePickerMode || m.sessionPickerMode {
 		return false
 	}
 	return !m.transcript.AtBottom()
@@ -297,22 +300,25 @@ func (m Model) composerBlock() string {
 }
 
 func (m Model) promptLine() string {
-	innerW := max(minPaneWidth, m.width-2)
-	p := m.prompt
+	contentW := m.promptContentWidth()
+	// Keep live prompt width identical to paint/hit-test wrap width.
+	m.prompt.SetWidth(contentW)
 	h := m.promptHeight()
-	p.SetHeight(h)
-	p.SetWidth(max(minPaneWidth, innerW-2))
-	if m.promptSelectAll {
-		st := p.Styles()
-		st.Focused.Text = selectionStyle
-		st.Focused.CursorLine = selectionStyle
-		p.SetStyles(st)
+	m.prompt.SetHeight(h)
+	// Always paint with hard-wrap body so mouse columns match the pixels
+	// (bubbles soft-wrap View was skewing clicks to the right on lower rows).
+	text := m.promptBodyPaint(contentW, h)
+	if len(m.promptVisualLines()) > h {
+		// Scrollbar uses the same scroll offset as promptBodyPaint.
+		visN := len(m.promptVisualLines())
+		yOff := m.promptScrollOffset(visN, h)
+		percent := 0.0
+		if visN > h {
+			percent = float64(yOff) / float64(visN-h)
+		}
+		text = withScrollbar(text, contentW, h, percent, true)
 	}
-	text := p.View()
-	if m.visualPromptLines() > h {
-		text = withScrollbar(text, p.Width(), h, p.ScrollPercent(), true)
-	}
-	body := lipgloss.JoinVertical(lipgloss.Left, text, m.composerFooter(innerW-2))
+	body := lipgloss.JoinVertical(lipgloss.Left, text, m.composerFooter(contentW))
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(theme.ColorBorder()).
