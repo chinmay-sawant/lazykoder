@@ -1722,17 +1722,103 @@ func TestUserPromptBigBracketAndReplyUsesRail(t *testing.T) {
 	}
 }
 
-func TestTokensDoNotResetOnSmallerUsage(t *testing.T) {
+func TestTokensFollowLatestRequestSize(t *testing.T) {
 	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
 	high := int64(8000)
-	low := int64(12)
+	low := int64(2100)
 	m.applyPart(db.Part{Type: "step-finish", TokensTotal: &high})
 	if m.tokensUsed != 8000 {
 		t.Fatalf("tokensUsed = %d, want 8000", m.tokensUsed)
 	}
 	m.applyPart(db.Part{Type: "step-finish", TokensTotal: &low})
-	if m.tokensUsed != 8000 {
-		t.Fatalf("tokensUsed reset to %d, want to keep 8000", m.tokensUsed)
+	if m.tokensUsed != 2100 {
+		t.Fatalf("tokensUsed = %d, want latest request 2100", m.tokensUsed)
+	}
+	empty := int64(0)
+	m.applyPart(db.Part{Type: "step-finish", TokensTotal: &empty})
+	if m.tokensUsed != 2100 {
+		t.Fatalf("empty usage wiped meter: %d", m.tokensUsed)
+	}
+}
+
+func TestCompactEventResetsTokensUsed(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	high := int64(8000)
+	m.applyPart(db.Part{Type: "step-finish", TokensTotal: &high})
+	m.cacheHit = 68000
+	m.cacheMiss = 790
+	env := agent.EncodeCompactText(agent.CompactEnvelope{
+		Summary:     "handoff",
+		FromWindow:  1_000_000,
+		ToWindow:    256_000,
+		Reason:      agent.CompactReasonShrink,
+		TokensAfter: 1200,
+	})
+	m = m.applyEvent(agent.Event{
+		Kind:       agent.EventCompacted,
+		TokensUsed: 1200,
+		Part:       db.Part{ID: "p_c", Type: agent.CompactPartType, Text: &env},
+	})
+	if m.tokensUsed != 1200 {
+		t.Fatalf("tokensUsed = %d, want 1200 after compact", m.tokensUsed)
+	}
+	if m.cacheHit != 0 || m.cacheMiss != 0 {
+		t.Fatalf("cache after compact event = %d/%d, want 0/0", m.cacheHit, m.cacheMiss)
+	}
+	m.bumpTokenFloor()
+	if m.tokensUsed != 1200 {
+		t.Fatalf("bumpTokenFloor restored peak: %d", m.tokensUsed)
+	}
+	v := strings.Join(func() []string {
+		var texts []string
+		for _, it := range m.items {
+			texts = append(texts, it.text)
+		}
+		return texts
+	}(), "\n")
+	if !strings.Contains(v, "context compacted (1000k -> 256k)") {
+		t.Fatalf("missing compact notice: %q", v)
+	}
+}
+
+func TestReplayAfterCompactUsesCompactFill(t *testing.T) {
+	st := newTestStore(t)
+	sess, err := st.CreateSession(context.Background(), db.Session{Title: "t", Directory: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	am, err := st.InsertMessage(ctx, db.Message{SessionID: sess.ID, Role: "assistant"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	peak := int64(144635)
+	if _, err := st.InsertPart(ctx, db.Part{MessageID: am.ID, Type: "step-finish", TokensInput: &peak, TokensTotal: &peak}); err != nil {
+		t.Fatal(err)
+	}
+	cm, err := st.InsertMessage(ctx, db.Message{SessionID: sess.ID, Role: "assistant", Agent: agent.CompactAgentName})
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := agent.EncodeCompactText(agent.CompactEnvelope{
+		Summary:     "handoff",
+		TokensAfter: 20880,
+		Reason:      agent.CompactReasonManual,
+	})
+	if _, err := st.InsertPart(ctx, db.Part{MessageID: cm.ID, Type: agent.CompactPartType, Text: &env}); err != nil {
+		t.Fatal(err)
+	}
+	m := New(Options{Store: st, Client: deadClient(), Workdir: t.TempDir(), Session: &sess})
+	if m.tokensUsed != 20880 {
+		t.Fatalf("tokensUsed = %d, want compact fill 20880 not peak 144635", m.tokensUsed)
+	}
+	if m.cacheHit != 0 || m.cacheMiss != 0 {
+		t.Fatalf("cache after compact = %d/%d, want 0/0", m.cacheHit, m.cacheMiss)
+	}
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	m = mm.(Model)
+	if got := m.statusTokensValue(); got != "20k" {
+		t.Fatalf("tokens meter = %q, want 20k (compact fill), not the 144k peak", got)
 	}
 }
 
@@ -1777,6 +1863,95 @@ func TestApplyUsageEstimatesWhenStoredCostIsZero(t *testing.T) {
 	m.applyPart(db.Part{Type: "step-finish", TokensInput: &in, TokensOutput: &out, TokensTotal: ptrInt64(2_000_000), Cost: &zero})
 	if m.sessionCost < 0.4 || m.sessionCost > 0.45 {
 		t.Fatalf("sessionCost = %v, want list-price estimate ~0.42", m.sessionCost)
+	}
+}
+
+func TestSessionCostUsesMessageModelNotLive(t *testing.T) {
+	st := newTestStore(t)
+	sess, err := st.CreateSession(context.Background(), db.Session{Title: "t", Directory: t.TempDir(), Model: "cheap"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	am, err := st.InsertMessage(ctx, db.Message{SessionID: sess.ID, Role: "assistant", ModelID: "pricey"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	in, out := int64(1_000_000), int64(0)
+	if _, err := st.InsertPart(ctx, db.Part{MessageID: am.ID, Type: "step-finish", TokensInput: &in, TokensOutput: &out, TokensTotal: &in}); err != nil {
+		t.Fatal(err)
+	}
+	m := New(Options{Store: st, Client: deadClient(), Workdir: t.TempDir(), Session: &sess})
+	m.model = "cheap"
+	m.modelInfos = []modelscache.Info{
+		{ID: "cheap", InputPerM: 0.10, OutputPerM: 0.10},
+		{ID: "pricey", InputPerM: 3.00, OutputPerM: 15.00},
+	}
+	m.recomputeSessionCost()
+	// 1M input on pricey = $3.00, not $0.10 from the live cheap model.
+	if m.sessionCost < 2.9 || m.sessionCost > 3.1 {
+		t.Fatalf("sessionCost = %v, want ~3.00 from pricey step", m.sessionCost)
+	}
+}
+
+func TestChildSessionCostAndCacheRollUp(t *testing.T) {
+	st := newTestStore(t)
+	parent, err := st.CreateSession(context.Background(), db.Session{Title: "p", Directory: t.TempDir(), Model: "parent-model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	pid := parent.ID
+	child, err := st.CreateSession(ctx, db.Session{
+		Title: "explore", Directory: t.TempDir(), Model: "child-model",
+		ParentSessionID: &pid, Kind: db.SessionKindSubagent,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	am, err := st.InsertMessage(ctx, db.Message{SessionID: child.ID, Role: "assistant", ModelID: "child-model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	in, hit, out := int64(1_000_000), int64(800_000), int64(0)
+	if _, err := st.InsertPart(ctx, db.Part{
+		MessageID: am.ID, Type: "step-finish",
+		TokensInput: &in, TokensOutput: &out, TokensTotal: &in, TokensCacheRead: &hit,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	m := New(Options{Store: st, Client: deadClient(), Workdir: t.TempDir(), Session: &parent})
+	m.modelInfos = []modelscache.Info{
+		{ID: "parent-model", InputPerM: 0.14, OutputPerM: 0.28, CacheReadPerM: 0.014},
+		{ID: "child-model", InputPerM: 1.00, OutputPerM: 2.00, CacheReadPerM: 0.10},
+	}
+	m = m.reloadSubagentRows()
+	if len(m.subagentItems) != 1 {
+		t.Fatalf("rows = %d", len(m.subagentItems))
+	}
+	row := m.subagentItems[0]
+	// miss 200k * $1/M + hit 800k * $0.10/M = 0.20 + 0.08 = 0.28
+	if row.Cost < 0.27 || row.Cost > 0.29 {
+		t.Fatalf("child cost = %v, want ~0.28", row.Cost)
+	}
+	if row.CacheHit != 800_000 || row.CacheMiss != 200_000 {
+		t.Fatalf("child cache = %d/%d", row.CacheHit, row.CacheMiss)
+	}
+	_, subs, total := m.costTotals()
+	if subs < 0.27 || subs > 0.29 || total < 0.27 || total > 0.29 {
+		t.Fatalf("rolled cost parent/subs/total = %v %v %v", m.sessionCost, subs, total)
+	}
+	ch, cm := m.cacheTotals()
+	if ch != 800_000 || cm != 200_000 {
+		t.Fatalf("rolled cache = %d/%d", ch, cm)
+	}
+	got := m.statusSegmentValue("cost")
+	if !strings.Contains(got, "subs") || !strings.Contains(got, "$0.28") && !strings.Contains(got, "$0.280") {
+		t.Fatalf("status cost = %q", got)
+	}
+	right := m.subagentRowRight(row, 200)
+	if !strings.Contains(right, "$0.28") && !strings.Contains(right, "$0.280") {
+		t.Fatalf("drawer right missing child cost: %q", right)
 	}
 }
 

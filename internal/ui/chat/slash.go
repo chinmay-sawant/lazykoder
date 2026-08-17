@@ -23,7 +23,7 @@ type slashPaletteGroup struct {
 
 // slashPaletteGroups is the painted order. Headings are not selectable.
 var slashPaletteGroups = []slashPaletteGroup{
-	{title: "Session", names: []string{"/new", "/resume", "/continue"}},
+	{title: "Session", names: []string{"/new", "/resume", "/continue", "/compact"}},
 	{title: "Model", names: []string{"/model", "/variant", "/refresh"}},
 	{title: "Project", names: []string{"/agents", "/settings", "/usage"}},
 	{title: "Help", names: []string{"/help"}},
@@ -155,6 +155,7 @@ func (m Model) updateSlashKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 	case tea.KeyEnter:
 		if m.slashCursor >= 0 && m.slashCursor < len(m.slashItems) {
 			name := m.slashItems[m.slashCursor].name
+			extra := slashArg(m.prompt.Value(), name)
 			m.slashMode = false
 			m.slashCursor = 0
 			m.slashFromPaste = false
@@ -163,7 +164,7 @@ func (m Model) updateSlashKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 			}
 			m.prompt.SetValue("")
 			m.promptUndo = nil
-			return m.runSlash(name)
+			return m.runSlashArg(name, extra)
 		}
 		return m, nil
 	case tea.KeyBackspace:
@@ -193,6 +194,10 @@ func (m Model) updateSlashKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 
 // runSlash executes a chosen slash command.
 func (m Model) runSlash(name string) (Model, tea.Cmd) {
+	return m.runSlashArg(name, "")
+}
+
+func (m Model) runSlashArg(name, extra string) (Model, tea.Cmd) {
 	switch name {
 	case "/new":
 		return m.loadSession(nil), nil
@@ -214,12 +219,22 @@ func (m Model) runSlash(name string) (Model, tea.Cmd) {
 		return m.openSubagentPicker(), nil
 	case "/continue":
 		return m.runContinue()
+	case "/compact":
+		return m.runCompact(extra)
 	case "/help", "/keys":
 		m.helpMode = true
 		m.usageMode = false
 		m.usageLoading = false
 	}
 	return m, nil
+}
+
+func slashArg(prompt, name string) string {
+	trimmed := strings.TrimSpace(prompt)
+	if !strings.HasPrefix(trimmed, name) {
+		return ""
+	}
+	return strings.TrimSpace(strings.TrimPrefix(trimmed, name))
 }
 
 // syncSlash recomputes the slash menu from the prompt text. The menu opens
@@ -232,6 +247,7 @@ func (m Model) syncSlash(value string) Model {
 		m.slashMode = false
 		m.slashCursor = 0
 		m.slashFromPaste = false
+		m.syncTranscript()
 		return m
 	}
 	if query, ok := modelSearchQuery(value); ok {
@@ -263,6 +279,7 @@ func (m Model) syncSlash(value string) Model {
 		m.slashCursor = max(0, len(m.slashItems)-1)
 	}
 	m.slashMode = true
+	m.syncTranscript()
 	return m
 }
 

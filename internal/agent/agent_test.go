@@ -39,13 +39,16 @@ type wireMessage struct {
 }
 
 type fakeProvider struct {
-	mu        sync.Mutex
-	responses []string
-	requests  [][]wireMessage
-	models    []string
-	variants  []string
-	paths     []string
-	srv       *httptest.Server
+	mu           sync.Mutex
+	responses    []string
+	requests     [][]wireMessage
+	models       []string
+	variants     []string
+	paths        []string
+	hadTools     []bool
+	overflowLeft int
+	overflowDone int
+	srv          *httptest.Server
 }
 
 func newFakeProvider(t *testing.T, responses ...string) *fakeProvider {
@@ -58,9 +61,10 @@ func newFakeProvider(t *testing.T, responses ...string) *fakeProvider {
 			return
 		}
 		var req struct {
-			Model           string        `json:"model"`
-			ReasoningEffort string        `json:"reasoning_effort"`
-			Messages        []wireMessage `json:"messages"`
+			Model           string            `json:"model"`
+			ReasoningEffort string            `json:"reasoning_effort"`
+			Messages        []wireMessage     `json:"messages"`
+			Tools           []json.RawMessage `json:"tools"`
 		}
 		if err := json.Unmarshal(raw, &req); err != nil {
 			t.Errorf("decode request: %v", err)
@@ -72,9 +76,20 @@ func newFakeProvider(t *testing.T, responses ...string) *fakeProvider {
 		f.models = append(f.models, req.Model)
 		f.variants = append(f.variants, req.ReasoningEffort)
 		f.paths = append(f.paths, r.URL.Path)
+		f.hadTools = append(f.hadTools, len(req.Tools) > 0)
+		if f.overflowLeft > 0 {
+			f.overflowLeft--
+			f.overflowDone++
+			f.mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"message":"context_length_exceeded"}}`))
+			return
+		}
+		respIdx := idx - f.overflowDone
 		resp := f.responses[len(f.responses)-1]
-		if idx < len(f.responses) {
-			resp = f.responses[idx]
+		if respIdx >= 0 && respIdx < len(f.responses) {
+			resp = f.responses[respIdx]
 		}
 		f.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
@@ -122,6 +137,15 @@ func (f *fakeProvider) requestCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.requests)
+}
+
+func (f *fakeProvider) requestHadTools(idx int) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if idx < 0 || idx >= len(f.hadTools) {
+		return false
+	}
+	return f.hadTools[idx]
 }
 
 type fakeToolCall struct {

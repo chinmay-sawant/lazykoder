@@ -109,6 +109,7 @@ func (r AgentRunner) Run(ctx context.Context, job Job) (Result, error) {
 		ToolNames:        job.Tools,
 		AgentName:        job.Name,
 		DisableStreaming: true,
+		CompactAuto:      true,
 	})
 	// Nudge the child to emit a final text answer inside its step budget.
 	// Without this, multi-tool explores often burn every step on tools and

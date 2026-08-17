@@ -26,6 +26,8 @@ the readable reference; keep the two in sync when adding or editing a tip.
 - `/settings` opens project defaults (model, agents, safety)
 - `/agents` opens the sub-agent drawer and logs
 - `/continue` resumes after a step limit (or sends continue)
+- `/compact` summarizes older context now
+- auto-compact fires at 80% of the model window
 - `/refresh` reloads the model list
 - `/help` or `?` shows every shortcut
 

@@ -75,7 +75,8 @@ The client is OpenAI-compatible:
 - The API key is never logged, never persisted and never rendered.
 
 `GET /models` is fetched at startup (non-blocking, 10s timeout) to show the
-model count and to feed the interactive picker (`m` in the chat view).
+model count and to feed the interactive picker (`/model` or the footer
+model chip).
 
 ## Agent loop
 
@@ -83,16 +84,27 @@ One user turn runs in `internal/agent.Send` with a hard step bound (default
 16) so a runaway model cannot spam confirm prompts:
 
 1. Persist the user message + text part (create or resume a session).
-2. Rebuild provider history from the store (messages, parts, tool calls).
-3. Call the provider with the advertised tool set (base tools + task tools
-   when a `SubagentHost` is wired).
-4. Write parts: `step-start`, `reasoning` (when present), `text` (when
-   present), `tool` + `tool_calls` rows, `step-finish` (when usage is
-   present).
-5. For each tool call, classify and execute (see safety + tools docs).
+2. Rebuild provider history from the store. If a compaction checkpoint
+   exists, history starts at that summary plus the kept tail. Older tool
+   bodies are replaced with a short placeholder in the request only.
+3. Preflight compact when the estimate exceeds `compaction.percent` of
+   the live model's window (`used > window * percent / 100`; default
+   80, configurable in `/settings`), or when the user just shrank the
+   model onto a smaller window that is already over that percent. The
+   summarizer uses `internal/prompts/compact.md`, tools off. A
+   1M-to-256k switch summarizes with the outgoing model when the
+   incoming window cannot hold the history. The kept tail is 15,000
+   tokens (`compaction.keep_tokens`).
+4. Call the provider with the advertised tool set (base tools + task tools
+   when a `SubagentHost` is wired). One provider overflow retries after a
+   compact; a second overflow is returned as an error.
+5. Write parts: `step-start`, `reasoning` (when present), `text` (when
+   present), `tool` + `tool_calls` rows, `compaction` (checkpoint),
+   `step-finish` (when usage is present).
+6. For each tool call, classify and execute (see safety + tools docs).
    Task-family tools in one step run concurrently under the subagent
    semaphore; other tools stay sequential.
-6. Tool results go back to the model for the next step; loop until
+7. Tool results go back to the model for the next step; loop until
    `finish_reason` is not `tool-calls`.
 
 Everything the loop needs for a resumed session lives in the store; there is

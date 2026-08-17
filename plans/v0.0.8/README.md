@@ -3,7 +3,7 @@
 > **Parent:** token window already shown in footer/`/status`
 > (`modelscache.ContextOf` + `tokensUsed`); agent history in
 > `internal/agent.Agent.buildHistory`
-> **Status:** planned 2026-08-17. Design only. No implementation yet.
+> **Status:** complete 2026-08-17. All five phases implemented and gated.
 > **Branch:** `feature/auto-compaction`
 > **Estimated effort:** 4-6 days across five phases
 > **Priority:** P1
@@ -124,7 +124,7 @@ need     = estimate > limit - max(outputReserve, buffer)
 Defaults:
 
 - `auto = true`
-- `buffer = 20_000`
+- `percent = 80` (used > 80% of the live window)
 - `keep.tokens = 15_000`
 - `outputReserve = 4_096` for the summarizer
 
@@ -258,7 +258,7 @@ Add to `.lazykoder/settings.json` (no new dependency):
 {
   "compaction": {
     "auto": true,
-    "buffer": 20000,
+    "percent": 80,
     "keep_tokens": 15000
   }
 }

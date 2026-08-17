@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/chinmay-sawant/lazykoder/internal/agent"
+	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
 	"github.com/chinmay-sawant/lazykoder/internal/policy"
 	"github.com/chinmay-sawant/lazykoder/internal/subagent"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/question"
@@ -172,6 +173,9 @@ func (m Model) updateKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 		if strings.TrimSpace(text) == "" {
 			return m, nil
 		}
+		if name, extra, ok := parseCompactSubmit(text); ok {
+			return m.runSlashArg(name, extra)
+		}
 		return m.submit(text)
 	case '?':
 		if m.prompt.Value() == "" {
@@ -331,6 +335,52 @@ func (m Model) submit(text string) (Model, tea.Cmd) {
 	m.pulseOn = true
 	m.activity = "thinking"
 	m.turnStarted = time.Now()
+	m.pendingCompactReason = ""
+	m.compactHint = ""
+	return m, tea.Batch(sendCmd, m.watchEvents(seq), pulseTick())
+}
+
+func (m Model) runCompact(extra string) (Model, tea.Cmd) {
+	if m.busy {
+		return m, nil
+	}
+	if m.session == nil || m.store == nil {
+		m.err = "nothing to compact"
+		return m, nil
+	}
+	m.prompt.SetValue("")
+	m.busy = true
+	m.compacting = true
+	m.err = ""
+	m.stepLimitHit = false
+	m.copyNotice = ""
+	m.promptSelectAll = false
+	m.pendingUser = ""
+	m.promptUndo = nil
+	m.slashFromPaste = false
+	m.turnItemFrom = len(m.items)
+	m.turnGenTokens = 0
+	m.tpsSamples = nil
+	m.stepMetrics = false
+	m.syncTranscript()
+	m.turnSeq++
+	seq := m.turnSeq
+	ctx, cancel := context.WithCancel(context.Background())
+	m.turnCancel = cancel
+	m.turnCtx = ctx
+	m.eventCh = make(chan agent.Event, eventChanBuffer)
+	m.errCh = make(chan error, 1)
+	ag := agent.New(m.store, m.client, m.workdir, m.agentOptions())
+	eventCh, errCh := m.eventCh, m.errCh
+	sendCmd := func() tea.Msg {
+		go func() { errCh <- ag.Compact(ctx, eventCh, agent.CompactReasonManual, extra) }()
+		return nil
+	}
+	m.pulse = 0
+	m.pulseOn = true
+	m.activity = "compacting"
+	m.turnStarted = time.Now()
+	m.compactHint = ""
 	return m, tea.Batch(sendCmd, m.watchEvents(seq), pulseTick())
 }
 
@@ -462,7 +512,16 @@ func (m Model) forceSend(text string) (Model, tea.Cmd) {
 }
 
 // agentOptions builds Options for the parent agent, including the subagent Host.
+func parseCompactSubmit(text string) (name, extra string, ok bool) {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "/compact" || strings.HasPrefix(trimmed, "/compact ") {
+		return "/compact", strings.TrimSpace(strings.TrimPrefix(trimmed, "/compact")), true
+	}
+	return "", "", false
+}
+
 func (m Model) agentOptions() agent.Options {
+	cfg := m.projectSettings.EffectiveCompaction()
 	opts := agent.Options{
 		Session:              m.session,
 		MaxSteps:             m.maxSteps,
@@ -473,6 +532,15 @@ func (m Model) agentOptions() agent.Options {
 		Ask:                  m.askHook,
 		BashAllowlist:        m.projectSettings.EffectiveAgents().BashAllowlist,
 		BashAllowlistEnabled: m.projectSettings.EffectiveAgents().BashAllowlistEnabled,
+		ContextWindow:        int64(modelscache.ContextOf(m.modelInfos, m.modelLabel())),
+		TokensUsed:           m.tokensUsed,
+		OutgoingModel:        m.prevModel,
+		OutgoingWindow:       m.prevWindow,
+		OutgoingEndpoint:     modelscache.EndpointOf(m.modelInfos, m.prevModel),
+		CompactAuto:          cfg.Auto,
+		CompactPercent:       cfg.Percent,
+		KeepTokens:           cfg.KeepTokens,
+		CompactReason:        m.pendingCompactReason,
 	}
 	if m.subMgr == nil || !m.projectSettings.EffectiveAgents().Enabled {
 		return opts

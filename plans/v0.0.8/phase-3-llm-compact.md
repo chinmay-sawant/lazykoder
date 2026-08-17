@@ -1,7 +1,7 @@
 # v0.0.8 / Phase 3 - LLM compact turn
 
 > **Parent:** `plans/v0.0.8/README.md`
-> **Status:** planned
+> **Status:** complete 2026-08-17
 > **Estimated effort:** 1-2 days
 > **Priority:** P0
 > **Gate:** when preflight says the live window is too small, the agent
@@ -10,45 +10,41 @@
 
 ## Overview
 
-This is the first provider call that is not a normal chat turn. It must
-not advertise tools, must pick the summarizer via `PickSummarizer`, and
-must leave the human transcript intact.
+This is the first provider call that is not a normal chat turn.
 
 ## Phase 3: LLM compact
 
 ### 3.1 Summarizer call
 
-- [ ] Preflight in `runSteps` uses `NeedsCompact` against
-      `ContextOf(live model)` (passed in from the TUI / options).
-- [ ] Summarizer request: `compact.md` + serialized head + previous
-      summary if any; tools disabled; ~4096 output cap if the client
-      can express it.
-- [ ] Persist `agent = "compaction"` plus `parts.type = "compaction"`
+- [x] Preflight in `runSteps` / `maybeCompact` uses `NeedsCompact`
+      against `ContextOf(live model)` (passed in from Options).
+- [x] Summarizer request: `compact.md` + serialized head + previous
+      summary if any; tools disabled; `MaxTokens` 4096.
+- [x] Persist `agent = "compaction"` plus `parts.type = "compaction"`
       with summary text and the JSON envelope (`tail_start_message_id`,
       `from_model`, `to_model`, `reason`).
-- [ ] Emit TUI events (`EventCompacting`, `EventCompacted`).
+- [x] Emit TUI events (`EventCompacting`, `EventCompacted`).
 
 ### 3.2 Replay and overflow
 
-- [ ] Auto path replays the last real user text (or a synthetic
-      continue pointed at that request) so the next model turn is not
-      aimed at the summary.
-- [ ] Manual compact (wired in phase 4) stops after the checkpoint.
-- [ ] Provider errors that mean overflow (`context_length_exceeded`,
-      "maximum context", "prompt is too long") trigger **one**
-      compact+retry. A second overflow is returned as an error.
-- [ ] If the summarizer request cannot fit even after prune/chunking,
+- [x] Auto path keeps the last real user turn in the tail so the next
+      model turn is not aimed at the summary.
+- [x] Manual compact (`Agent.Compact`) stops after the checkpoint.
+      `TestManualCompactStopsAfterCheckpoint`.
+- [x] Provider overflow errors trigger **one** compact+retry.
+      `TestOverflowRetriesOnce`. `CompactAuto: false` still retries.
+- [x] If the summarizer request cannot fit even after prune/chunking,
       do not send the overflowing user turn. Return a readable error.
 
 ### 3.3 Validation gate
 
-- [ ] Agent tests with a fake client: under-budget send is unchanged;
-      over-budget send issues a tools-off compact call then a normal
-      call from the checkpoint; overflow error retries once.
-- [ ] Shrink fixture: 400k estimate, incoming 256k, outgoing 1M uses
-      outgoing for the compact call and incoming for the follow-up.
-- [ ] `go test ./internal/agent -count=1` passes.
-- [ ] `go build ./...` passes.
+- [x] `TestSendUnderBudgetSkipsCompact`: under-budget send is unchanged.
+- [x] `TestSendOverBudgetCompactsThenChats`: tools-off compact then
+      normal call from the checkpoint.
+- [x] `TestCompactShrinkUsesOutgoingModel`: 400k estimate, incoming
+      256k, outgoing 1M uses outgoing for compact and incoming after.
+- [x] `go test ./internal/agent -count=1` passes. exit 0
+- [x] `go build ./...` passes. exit 0
 
 ## Dependencies
 

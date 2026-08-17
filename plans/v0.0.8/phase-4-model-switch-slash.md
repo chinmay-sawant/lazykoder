@@ -1,7 +1,7 @@
 # v0.0.8 / Phase 4 - Model-switch hook and /compact
 
 > **Parent:** `plans/v0.0.8/README.md`
-> **Status:** planned
+> **Status:** complete 2026-08-17
 > **Estimated effort:** 1 day
 > **Priority:** P0
 > **Gate:** shrinking the live model sets a pending-compact hint; the
@@ -17,44 +17,47 @@ send**, not on picker click.
 
 ### 4.1 Picker shrink flag
 
-- [ ] `selectPickerItem` compares `tokensUsed` to
+- [x] `selectPickerItem` compares `tokensUsed` to
       `ContextOf(new model) - buffer`.
-- [ ] Overflow sets `pendingCompactReason = "model-shrink"` and a
+- [x] Overflow sets `pendingCompactReason = "model-shrink"` and a
       composer hint `next send will compact (window X -> Y)`.
-- [ ] Larger or unknown window clears the flag.
-- [ ] `m.session.Model` is updated in memory when the picker persists
-      (today only SQLite is written).
-- [ ] A busy-turn switch stays cosmetic; the in-flight agent is not
-      rebuilt. The flag is consumed on the next user turn.
+      `TestModelShrinkSetsCompactHint`.
+- [x] Larger or unknown window clears the flag.
+      `TestLargerWindowClearsCompactHint`,
+      `TestUnknownWindowSkipsShrinkHint`.
+- [x] `m.session.Model` is updated in memory (`syncSessionModel`).
+- [x] A busy-turn switch stays cosmetic; the in-flight agent is not
+      rebuilt. The flag is consumed on the next user turn (`submit`
+      copies it into Options then clears the hint).
 
 ### 4.2 Slash and status
 
-- [ ] `/compact` runs Layer 0+1 now, even under budget. Trailing text
+- [x] `/compact` runs Layer 0+1 now, even under budget. Trailing text
       is appended as compact instructions.
-- [ ] Help text lists `/compact`.
-- [ ] While a compact call is in flight, `promptStatusValue` shows
-      `compacting`.
-- [ ] After success, the transcript can show a divider / notice on the
+      `TestCompactSubmitParsesNotes`, `TestManualCompactStopsAfterCheckpoint`.
+- [x] Help text lists `/compact`. `TestHelpListsCompact`.
+- [x] While a compact call is in flight, `promptStatusValue` shows
+      `compacting`. `TestPromptStatusShowsCompacting`.
+- [x] After success, the transcript shows a divider / notice on the
       compaction part. Full human history remains painted.
+      `TestCompactEventResetsTokensUsed`.
 
 ### 4.3 Settings
 
-- [ ] `.lazykoder/settings.json` gains:
-
-      ```json
-      "compaction": { "auto": true, "buffer": 20000, "keep_tokens": 15000 }
-      ```
-
-- [ ] Defaults apply when the block is missing.
-- [ ] `auto` gates preflight only. `/compact` and the single overflow
+- [x] `.lazykoder/settings.json` gains `compaction.auto` / `buffer` /
+      `keep_tokens`.
+- [x] Defaults apply when the block is missing.
+- [x] `auto` gates preflight only. `/compact` and the single overflow
       retry remain available when `auto` is false.
-- [ ] Settings tests cover load/save/default.
+- [x] Settings tests cover load/save/default.
+      `TestCompactionLoadSaveAndMissingBlock`, `TestDefault`.
 
 ### 4.4 Validation gate
 
-- [ ] `go test ./internal/ui/chat ./internal/settings ./internal/agent -count=1`
+- [x] `go test ./internal/ui/chat ./internal/settings ./internal/agent -count=1`
       covers picker shrink hint, `/compact` slash, settings defaults.
-- [ ] `go build ./...` passes.
+      exit 0
+- [x] `go build ./...` passes. exit 0
 
 ## Dependencies
 

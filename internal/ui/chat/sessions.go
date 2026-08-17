@@ -347,6 +347,11 @@ func (m Model) loadSession(sess *db.Session) Model {
 	m.slashFromPaste = false
 	m.err = ""
 	m.tokensUsed = 0
+	m.compacting = false
+	m.compactHint = ""
+	m.pendingCompactReason = ""
+	m.prevModel = ""
+	m.prevWindow = 0
 	m.sessionCost = 0
 	m.tokensPerSec = 0
 	m.tpsEstimated = false

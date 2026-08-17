@@ -369,7 +369,7 @@ func (m Model) jumpToUserTurn(markIdx int) (Model, tea.Cmd) {
 		return m, nil
 	}
 	m.transcript.SetWidth(m.transcriptContentWidth())
-	m.transcript.SetHeight(max(minPaneHeight, m.transcriptRenderHeight()))
+	m.transcript.SetHeight(max(1, m.transcriptRenderHeight()))
 	m.userNavHover = markIdx
 	m.transcript.SetYOffset(marks[markIdx].ContentY)
 	m.selectedItem = marks[markIdx].ItemIdx

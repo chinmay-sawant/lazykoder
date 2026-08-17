@@ -211,6 +211,8 @@ type ChatRequest struct {
 	ReasoningEffort string
 	Messages        []Message
 	Tools           []ToolSpec // nil/empty = no tools advertised; the tools key is omitted
+	// MaxTokens caps completion tokens when the provider honors it.
+	MaxTokens int
 }
 
 // Usage reports token counts and cost from the API.
@@ -240,6 +242,7 @@ type wireRequest struct {
 	Tools           []wireToolSpec     `json:"tools,omitempty"`
 	Stream          bool               `json:"stream,omitempty"`
 	StreamOptions   *wireStreamOptions `json:"stream_options,omitempty"`
+	MaxTokens       int                `json:"max_tokens,omitempty"`
 }
 
 type wireStreamOptions struct {
@@ -378,7 +381,12 @@ func (c *Client) postChat(ctx context.Context, req ChatRequest, stream bool) (*h
 	if req.Model != "" {
 		model = req.Model
 	}
-	payload := wireRequest{Model: model, ReasoningEffort: req.ReasoningEffort, Messages: req.Messages}
+	payload := wireRequest{
+		Model:           model,
+		ReasoningEffort: req.ReasoningEffort,
+		Messages:        req.Messages,
+		MaxTokens:       req.MaxTokens,
+	}
 	if stream {
 		payload.Stream = true
 		payload.StreamOptions = &wireStreamOptions{IncludeUsage: true}

@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/chinmay-sawant/lazykoder/internal/agent"
 	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
@@ -263,11 +264,15 @@ func (m Model) selectPickerItem(idx int) (Model, tea.Cmd) {
 		m = m.finishPickerSelection()
 		return m, m.persistVariant()
 	}
+	prev := m.model
+	prevWindow := int64(modelscache.ContextOf(m.modelInfos, prev))
 	m.model = m.pickerItems[idx]
 	if !modelscache.HasVariant(m.modelInfos, m.model, m.variant) {
 		m.variant = ""
 	}
+	m.syncSessionModel()
 	m.syncSessionVariant()
+	m = m.refreshCompactHint(prev, prevWindow)
 	m = m.finishPickerSelection()
 	return m, m.persistSelection()
 }
@@ -462,6 +467,36 @@ func (m Model) persistSelection() tea.Cmd {
 		}
 		return nil
 	}
+}
+
+func (m *Model) syncSessionModel() {
+	if m.session == nil {
+		return
+	}
+	m.session.Model = m.model
+}
+
+func (m Model) refreshCompactHint(prev string, prevWindow int64) Model {
+	window := int64(modelscache.ContextOf(m.modelInfos, m.modelLabel()))
+	pct := m.projectSettings.EffectiveCompaction().Percent
+	if agent.NeedsCompact(m.tokensUsed, window, pct) {
+		m.pendingCompactReason = agent.CompactReasonShrink
+		m.prevModel = prev
+		m.prevWindow = prevWindow
+		m.compactHint = fmt.Sprintf(
+			"next send will compact (window %s -> %s)",
+			formatTokens(prevWindow),
+			formatTokens(window),
+		)
+		return m
+	}
+	m.pendingCompactReason = ""
+	m.compactHint = ""
+	if window <= 0 || (prevWindow > 0 && window >= prevWindow) {
+		m.prevModel = ""
+		m.prevWindow = 0
+	}
+	return m
 }
 
 func (m *Model) syncSessionVariant() {

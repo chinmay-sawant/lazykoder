@@ -75,12 +75,17 @@ func (m Model) statusSegmentValue(name string) string {
 	case "tokens":
 		return m.statusTokensValue()
 	case "cache":
-		if m.cacheHit > 0 || m.cacheMiss > 0 {
-			return formatCache(m.cacheHit, m.cacheMiss)
+		hit, miss := m.cacheTotals()
+		if hit > 0 || miss > 0 {
+			return formatCache(hit, miss)
 		}
 	case "cost":
-		if m.tokensUsed > 0 || m.cacheHit > 0 || m.cacheMiss > 0 || m.sessionCost > 0 {
-			return formatCost(m.sessionCost)
+		_, subs, total := m.costTotals()
+		if total > 0 || m.tokensUsed > 0 {
+			if subs > 0 {
+				return formatCost(total) + "  ·  subs " + formatCost(subs)
+			}
+			return formatCost(total)
 		}
 	case "tps":
 		if value := m.tpsDisplayLabel(); value != "" {
@@ -123,6 +128,8 @@ func (m Model) promptStatusValue() string {
 	switch {
 	case m.err != "":
 		return "error"
+	case m.compacting:
+		return "compacting"
 	case m.busy:
 		return "working"
 	default:

@@ -24,6 +24,8 @@ const (
 	SlotSettings        = "/settings opens project defaults (model, agents, safety)"
 	AgentsDrawer        = "/agents opens the sub-agent drawer and logs"
 	ContinueSession     = "/continue resumes after a step limit"
+	CompactNow          = "/compact summarizes older context now"
+	AutoCompactLimit    = "auto-compact fires at 80% of the model window"
 	RefreshModels       = "/refresh reloads the model list"
 	HelpOverlay         = "/help or ? shows every shortcut"
 	MentionFile         = "type @ to mention a project file"
@@ -57,6 +59,8 @@ var All = []string{
 	SlotSettings,
 	AgentsDrawer,
 	ContinueSession,
+	CompactNow,
+	AutoCompactLimit,
 	RefreshModels,
 	HelpOverlay,
 	MentionFile,

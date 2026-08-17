@@ -40,6 +40,10 @@ pickers are centered cards.
 	  hit is cached input tokens (`cache_read` /
 	  `prompt_cache_hit`); miss is uncached input (`prompt - hit`, or the
 	  full prompt when the API reports input and cache separately). Each
+	  count is summed since the last compact (or session start). A compact
+	  resets hit and miss to 0 because those old prefixes are no longer
+	  in the live request. Over many turns the sums can exceed the model
+	  window; that is expected (it is not a single-request fill). Each
 	  count carries its share of hit+miss. tps uses provider-reported output
 	  tokens divided by the provider step duration when usage is available.
 	  During streaming, a `~` value is a provisional estimate from recent
@@ -56,10 +60,43 @@ pickers are centered cards.
   has no write price) and an `endpoint` (the chat-completions URL to
   call). Free OpenCode models come from the Zen models list on
   `/refresh` and keep the Zen endpoint so send does not hit the Go
-  API. Reopening a session restores used tokens from
-  stored step-finish usage, or estimates them from the transcript.
-  Session token totals never drop when a later step reports smaller
-  usage. `/refresh` always rewrites that cache. Live reasoning and
+  API. Reopening a session restores the **current model fill** from the
+  latest step-finish (input tokens when present) or, after a compact,
+  from the checkpoint's stored `tokens_after` (summary + kept tail).
+  The meter is not a lifetime peak: a later smaller request, or a
+  compact, updates the number you see. Cost is priced with the model
+  that ran each step (from `messages.model_id` and
+  `.lazykoder/models.json` list prices, including cache read/write).
+  Sub-agent child sessions keep their own step-finish usage; `/agents`
+  shows each child's cost and cache hit/miss, and the status cost line
+  adds those children as `subs $X`. Cache hit/miss on the status bar
+  is parent-since-compact plus every child. Auto-compact runs
+  when used tokens exceed **80% of the live model's context window**
+  (`used > window * percent / 100`). That percent is
+  `compaction.percent` in `.lazykoder/settings.json` and the
+  **compact at** row in `/settings` (default 80, range 5-99, steps of
+  5). Turn the feature off with **auto-compact**. `/compact` and one
+  overflow retry still work when auto is off. The recent tail kept
+  beside the summary is 15,000 tokens (`compaction.keep_tokens`).
+
+  Examples at the default 80%:
+
+  | Model window | Compact when used exceeds |
+  | --- | ---: |
+  | 1,000,000 (DeepSeek / luna) | 800,000 |
+  | 256,000 | 204,800 |
+  | 200,000 (free Zen) | 160,000 |
+
+  A session at 145k on a 1.05M model is about 14% full, so it will not
+  auto-compact. Set **compact at** to 50% if you want that 1M model to
+  compact at 500k. Switching to a
+  smaller-window model while the session is already over that window
+  shows `next send will compact (window X -> Y)` above the composer.
+  The next send (or `/compact`) writes a checkpoint and continues.
+  `/compact` can also run under budget; optional notes after the
+  command steer the summary. While a compact call is in flight the
+  status prompt segment says `compacting`. `/refresh` always rewrites
+  that cache. Live reasoning and
   assistant text are painted as SSE deltas arrive. A non-streaming JSON
   response is treated as one complete chunk.
 - Session list (`/resume` or `ctrl+s`) groups runs as `just now`,
@@ -72,7 +109,7 @@ pickers are centered cards.
 - Empty session: a short hint in the transcript, not a blank pane.
 - `/help` or `?` (empty prompt) opens a centered key card (two columns
   at 100+ width) listing send, slash commands including `/settings`,
-  `/usage`, and `/continue`, copy/quit, and undo. `esc`, `?`, or `[x]`
+  `/usage`, `/continue`, and `/compact`, copy/quit, and undo. `esc`, `?`, or `[x]`
   closes it.
 - `/usage` opens a centered OpenCode Go usage card. It fetches the rolling,
   weekly, and monthly plan windows, showing percentage used, rate-limit
