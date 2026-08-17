@@ -38,6 +38,13 @@ func (m Model) mousePress(msg tea.MouseClickMsg) (Model, tea.Cmd) {
 		m.transcript.GotoBottom()
 		return m, nil
 	}
+	// Medium-style user-turn rail: jump to that "you" message.
+	if mu.Button == tea.MouseLeft {
+		if idx, ok := m.userNavIndexAtScreen(mu.X, mu.Y); ok {
+			m = m.clearTextSelection()
+			return m.jumpToUserTurn(idx), nil
+		}
+	}
 	if mu.Button == tea.MouseLeft && m.sessionPickerMode {
 		if idx, ok := m.sessionIndexAtScreenY(mu.Y); ok {
 			sess := m.sessionItems[idx]

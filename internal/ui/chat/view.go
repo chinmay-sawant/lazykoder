@@ -63,37 +63,50 @@ func (m Model) newView(content string) tea.View {
 }
 
 func (m Model) chatScreen() string {
-	var b strings.Builder
-	b.WriteString(m.headerView())
-	b.WriteString("\n")
+	var top strings.Builder
+	top.WriteString(m.headerView())
+	top.WriteString("\n")
 	// Tracker strip: checklist under brand/title, above the transcript.
 	if panel := m.todoPanelView(); panel != "" {
-		b.WriteString(panel)
-		b.WriteString("\n")
+		top.WriteString(panel)
+		top.WriteString("\n")
 	}
-	b.WriteString(m.transcriptView())
-	b.WriteString("\n")
-	b.WriteString(m.alertRow())
-	b.WriteString("\n")
+	top.WriteString(m.transcriptView())
+	top.WriteString("\n")
+	top.WriteString(m.alertRow())
+
+	var bottom strings.Builder
 	if m.slashMode {
-		b.WriteString(m.slashView())
-		b.WriteString("\n")
+		bottom.WriteString("\n")
+		bottom.WriteString(m.slashView())
 	}
 	if m.pickerMode {
-		b.WriteString(m.pickerView())
-		b.WriteString("\n")
+		bottom.WriteString("\n")
+		bottom.WriteString(m.pickerView())
 	}
 	// Sub-agent drawer sits above the prompt like the /model list.
 	if m.subagentPickerMode && !m.subagentLogMode {
-		b.WriteString(m.subagentDrawerView())
-		b.WriteString("\n")
+		bottom.WriteString("\n")
+		bottom.WriteString(m.subagentDrawerView())
 	}
 	if m.err != "" {
-		b.WriteString(errStyle.Width(max(minPaneWidth, m.width)).Render(m.err))
-		b.WriteString("\n")
+		bottom.WriteString("\n")
+		bottom.WriteString(errStyle.Width(max(minPaneWidth, m.width)).Render(m.err))
 	}
-	b.WriteString(m.composerBlock())
-	return b.String()
+	bottom.WriteString("\n")
+	bottom.WriteString(m.composerBlock())
+
+	// Pin the composer to the bottom of the terminal: pad between alert row
+	// and the lower chrome (drawers / prompt) when content is short.
+	topS := top.String()
+	botS := bottom.String()
+	topH := lipgloss.Height(topS)
+	botH := lipgloss.Height(botS)
+	pad := max(0, m.height-topH-botH)
+	if pad == 0 {
+		return topS + botS
+	}
+	return topS + strings.Repeat("\n", pad) + botS
 }
 
 func overlayOn(base string, width, height int, card string) string {
@@ -528,7 +541,7 @@ func (m Model) paintedTranscript() viewport.Model {
 	h := m.transcriptRenderHeight()
 	atBottom := m.transcript.AtBottom()
 	vp := m.transcript
-	vp.SetWidth(max(minPaneWidth, m.width-1))
+	vp.SetWidth(m.transcriptContentWidth())
 	vp.SetHeight(h)
 	if atBottom {
 		vp.GotoBottom()
@@ -536,23 +549,32 @@ func (m Model) paintedTranscript() viewport.Model {
 	return vp
 }
 
-// transcriptView renders the transcript viewport with a right-edge scrollbar.
+// transcriptView renders the transcript viewport. When user-turn ticks exist
+// they occupy the far-right column; otherwise a scrollbar is used on overflow.
 func (m Model) transcriptView() string {
 	h := m.transcriptRenderHeight()
+	w := max(minPaneWidth, m.width)
 	if len(m.items) == 0 {
 		empty := strings.Join([]string{
 			lipgloss.NewStyle().Foreground(theme.ColorText()).Bold(true).Render("new run"),
 			hintStyle.Render("ask anything about this project"),
 			hintStyle.Render("/ commands   @ files   ctrl+s history"),
 		}, "\n")
-		return lipgloss.NewStyle().Width(max(minPaneWidth, m.width)).Height(h).Render(empty)
+		return lipgloss.NewStyle().Width(w).Height(h).Render(empty)
 	}
 	vp := m.paintedTranscript()
 	view := vp.View()
 	if m.selection.active && m.selection.hasRange() {
 		view = m.highlightTranscriptSelection(view, vp.YOffset())
 	}
-	return withScrollbar(view, vp.Width(), h, vp.ScrollPercent(), vp.TotalLineCount() > h)
+	contentW := vp.Width()
+	// User-nav rail replaces the transcript scrollbar: ticks are the
+	// jump targets, so a second right-edge track is not needed.
+	if m.hasUserNav() {
+		return m.overlayUserNavRail(view, contentW, h)
+	}
+	overflow := vp.TotalLineCount() > h
+	return withScrollbar(view, contentW, h, vp.ScrollPercent(), overflow)
 }
 
 func (m Model) helpOverlay() string {
@@ -666,7 +688,7 @@ func (m Model) askOverlay() string {
 // 1 = picker). ok is false when no scrollbar is shown.
 func (m Model) scrollbarRect(target int) (top, bottom, col int, ok bool) {
 	if target == 0 {
-		if m.pickerMode {
+		if m.pickerMode || m.hasUserNav() {
 			return 0, 0, 0, false
 		}
 		h := m.transcriptRenderHeight()

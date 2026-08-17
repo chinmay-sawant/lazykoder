@@ -221,6 +221,9 @@ type Model struct {
 	// todos is the session checklist from todowrite (shown under the header).
 	todos []db.Todo
 
+	// userNavHover is the Medium-style right-rail mark under the pointer (-1 = none).
+	userNavHover int
+
 	pulse     int
 	pulseOn   bool
 	railInset int
@@ -395,6 +398,7 @@ func New(opts Options) Model {
 		selectedItem:        -1,
 		historyCursor:       -1,
 		pendingHistoryIndex: -1,
+		userNavHover:        -1,
 		cachePath:           opts.CachePath,
 		transcript:          viewport.New(viewport.WithWidth(defaultWidth-1), viewport.WithHeight(defaultHeight-chromeLines)),
 		prompt:              newPromptArea(defaultWidth),
@@ -592,7 +596,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.transcript.SetWidth(max(minPaneWidth, msg.Width-1))
+		m.transcript.SetWidth(m.transcriptContentWidth())
 		m.prompt.SetWidth(max(minPaneWidth, msg.Width))
 		m.prompt.SetHeight(m.promptHeight())
 		m.transcript.SetHeight(max(minPaneHeight, m.transcriptRenderHeight()))
@@ -715,6 +719,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		vp, _ := m.transcript.Update(msg)
 		m.transcript = vp
+		// Drop rail hover so the label bubble follows the active section.
+		m.userNavHover = -1
 		return m, nil
 	case tea.MouseClickMsg:
 		return m.mousePress(msg)
@@ -745,6 +751,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.subagentHover != prev {
 				return m.resizeSubagentDrawer(), nil
 			}
+			return m, nil
+		}
+		// User-turn rail hover (Medium-style preview + tooltip).
+		mu := msg.Mouse()
+		prevNav := m.userNavHover
+		m.userNavHover = -1
+		if idx, ok := m.userNavIndexAtScreen(mu.X, mu.Y); ok {
+			m.userNavHover = idx
+		}
+		// Always return the model so the tooltip/mark style repaints while
+		// the pointer moves across the rail (including leave -> clear).
+		if m.userNavHover != prevNav || m.userNavHover >= 0 {
 			return m, nil
 		}
 		return m, nil

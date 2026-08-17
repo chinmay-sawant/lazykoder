@@ -260,7 +260,8 @@ func estimateTokens(items []transcriptItem) int64 {
 }
 
 func (m *Model) syncTranscript() {
-	m.transcript.SetWidth(max(minPaneWidth, m.width-1))
+	// Leave columns for scrollbar (+ user-nav rail when present).
+	m.transcript.SetWidth(m.transcriptContentWidth())
 	m.transcript.SetHeight(max(minPaneHeight, m.transcriptRenderHeight()))
 	atBottom := m.transcript.AtBottom()
 	yOffset := m.transcript.YOffset()

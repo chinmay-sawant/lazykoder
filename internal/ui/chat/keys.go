@@ -205,6 +205,7 @@ func (m Model) updateKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 			return m, nil
 		}
 		m.transcript.ScrollUp(1)
+		m.userNavHover = -1
 		return m, nil
 	case tea.KeyDown:
 		if m.promptCanMoveDown() {
@@ -216,12 +217,15 @@ func (m Model) updateKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 			return m.navigateHistory(1), nil
 		}
 		m.transcript.ScrollDown(1)
+		m.userNavHover = -1
 		return m, nil
 	case tea.KeyPgUp:
 		m.transcript.PageUp()
+		m.userNavHover = -1
 		return m, nil
 	case tea.KeyPgDown:
 		m.transcript.PageDown()
+		m.userNavHover = -1
 		return m, nil
 	case tea.KeyHome:
 		if m.prompt.Value() != "" {
@@ -230,6 +234,7 @@ func (m Model) updateKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 			return m, cmd
 		}
 		m.transcript.GotoTop()
+		m.userNavHover = -1
 		return m, nil
 	case tea.KeyEnd:
 		if m.prompt.Value() != "" {
@@ -238,6 +243,7 @@ func (m Model) updateKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 			return m, cmd
 		}
 		m.transcript.GotoBottom()
+		m.userNavHover = -1
 		return m, nil
 	}
 	m.historyCursor = -1
