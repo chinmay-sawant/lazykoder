@@ -18,7 +18,7 @@ const (
 	DefaultTimeout = 600 * time.Second
 	// DefaultChildMaxSteps is the child agent step budget.
 	// Keep in sync with settings.DefaultChildMaxSteps.
-	DefaultChildMaxSteps = 32
+	DefaultChildMaxSteps = 1000
 	// DefaultRole is used when Spec.Role is empty.
 	DefaultRole = RoleExplore
 	// BashConfirmParent asks the parent UI to confirm child bash.
@@ -71,6 +71,10 @@ func (c Config) Normalize() Config {
 		c.MaxQueued = DefaultMaxQueued
 	}
 	if c.MaxDepth < 1 {
+		c.MaxDepth = DefaultMaxDepth
+	}
+	// Product nesting is depth 1 until a nested Host ships; clamp extras.
+	if c.MaxDepth > DefaultMaxDepth {
 		c.MaxDepth = DefaultMaxDepth
 	}
 	if c.Timeout <= 0 {

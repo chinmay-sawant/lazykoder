@@ -222,9 +222,7 @@ func (m Model) runSlashArg(name, extra string) (Model, tea.Cmd) {
 	case "/compact":
 		return m.runCompact(extra)
 	case "/help", "/keys":
-		m.helpMode = true
-		m.usageMode = false
-		m.usageLoading = false
+		m = m.setFocus(focusHelp)
 	}
 	return m, nil
 }

@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/chinmay-sawant/lazykoder/internal/agent"
 	"github.com/chinmay-sawant/lazykoder/internal/db"
 	"github.com/chinmay-sawant/lazykoder/internal/settings"
 )
@@ -348,12 +349,12 @@ func TestSettingsCompactPercentAdjustAndPersist(t *testing.T) {
 		SettingsPath: path,
 	})
 	m = m.openSettings()
-	if m.projectSettings.Compaction.Percent != settings.DefaultCompactPercent {
+	if m.projectSettings.Compaction.Percent != agent.DefaultCompactPercent {
 		t.Fatalf("default percent = %d", m.projectSettings.Compaction.Percent)
 	}
 	m.settingsCursor = settingsRowCompactPercent
 	m = upd(m, tea.KeyPressMsg{Code: tea.KeyLeft})
-	if m.projectSettings.Compaction.Percent != settings.DefaultCompactPercent-settingsCompactPercentStep {
+	if m.projectSettings.Compaction.Percent != agent.DefaultCompactPercent-settingsCompactPercentStep {
 		t.Fatalf("percent after left = %d", m.projectSettings.Compaction.Percent)
 	}
 	m.settingsCursor = settingsRowCompactAuto
@@ -368,7 +369,7 @@ func TestSettingsCompactPercentAdjustAndPersist(t *testing.T) {
 	if loaded.Compaction.Auto {
 		t.Fatal("persisted auto still on")
 	}
-	if loaded.Compaction.Percent != settings.DefaultCompactPercent-settingsCompactPercentStep {
+	if loaded.Compaction.Percent != agent.DefaultCompactPercent-settingsCompactPercentStep {
 		t.Fatalf("persisted percent = %d", loaded.Compaction.Percent)
 	}
 }

@@ -85,6 +85,17 @@ func (m *Manager) SetRunner(r Runner) {
 	m.runner = r
 }
 
+// Boot attaches store/runtime and optionally replaces the runner, then recovers
+// open durable jobs. Pass a nil runner when NewManager already set one.
+func (m *Manager) Boot(ctx context.Context, store *db.Store, rt Runtime, runner Runner) error {
+	if runner != nil {
+		m.SetRunner(runner)
+	}
+	m.SetStore(store)
+	m.SetRuntime(rt)
+	return m.Recover(ctx)
+}
+
 // MaxConcurrent returns the configured slot count.
 func (m *Manager) MaxConcurrent() int {
 	return m.cfg.MaxConcurrent
@@ -298,7 +309,7 @@ func rowWithStatus(row db.SubagentJob, status, summary, errText string) db.Subag
 	row.Summary = summary
 	row.Error = errText
 	row.TimeUpdated = now
-	if isTerminalStatus(status) {
+	if IsTerminalStatus(status) {
 		row.TimeFinished = now
 	}
 	return row
@@ -334,6 +345,8 @@ func (m *Manager) buildJob(id, parentSessionID, parentPartID, name, role string,
 		Variant:         firstNonEmpty(spec.Variant, cfg.Variant, rt.Variant),
 		MaxSteps:        maxSteps,
 		Timeout:         timeout,
+		Depth:           1, // Manager only builds direct children of the chat parent
+		MaxDepth:        cfg.MaxDepth,
 		Tools:           toolsForRole(role),
 		Confirm:         confirm,
 		Ask:             nil, // children never get the question tool
@@ -430,7 +443,7 @@ func (m *Manager) acquireWriter(ctx context.Context) error {
 func (m *Manager) finish(h *handle, res Result) {
 	now := time.Now().UnixMilli()
 	h.mu.Lock()
-	if isTerminalStatus(h.snap.Status) {
+	if IsTerminalStatus(h.snap.Status) {
 		h.mu.Unlock()
 		return
 	}
@@ -547,7 +560,7 @@ func (m *Manager) Cancel(id string) (Snapshot, error) {
 	// Durable-only terminal or unknown job.
 	if store != nil {
 		if row, err := store.GetSubagentJob(context.Background(), id); err == nil {
-			if isTerminalStatus(row.Status) {
+			if IsTerminalStatus(row.Status) {
 				return snapshotFromRow(row), nil
 			}
 			// Mark cancelled in store when not live (crashed mid-flight, never recovered).
@@ -586,7 +599,7 @@ func (m *Manager) Wait(ctx context.Context, id string) (Result, error) {
 	}
 	if store != nil {
 		if row, err := store.GetSubagentJob(context.Background(), id); err == nil {
-			if isTerminalStatus(row.Status) {
+			if IsTerminalStatus(row.Status) {
 				return resultFromRow(row), nil
 			}
 			// Open job not in memory yet: wait briefly for Recover/race, else error.
@@ -675,7 +688,7 @@ func (m *Manager) CancelAll(parentSessionID string) int {
 	var hs []*handle
 	for _, h := range m.handles {
 		h.mu.Lock()
-		match := h.snap.ParentSessionID == parentSessionID && !isTerminalStatus(h.snap.Status)
+		match := h.snap.ParentSessionID == parentSessionID && !IsTerminalStatus(h.snap.Status)
 		h.mu.Unlock()
 		if match {
 			hs = append(hs, h)
@@ -698,7 +711,7 @@ func (m *Manager) Shutdown() {
 	var hs []*handle
 	for _, h := range m.handles {
 		h.mu.Lock()
-		if !isTerminalStatus(h.snap.Status) {
+		if !IsTerminalStatus(h.snap.Status) {
 			hs = append(hs, h)
 		}
 		h.mu.Unlock()
@@ -725,7 +738,7 @@ func (m *Manager) nonTerminalLocked() int {
 	n := 0
 	for _, h := range m.handles {
 		h.mu.Lock()
-		if !isTerminalStatus(h.snap.Status) {
+		if !IsTerminalStatus(h.snap.Status) {
 			n++
 		}
 		h.mu.Unlock()
@@ -861,7 +874,9 @@ func resultFromSnapshot(s Snapshot) Result {
 	}
 }
 
-func isTerminalStatus(s string) bool {
+// IsTerminalStatus reports whether status is a finished Manager job state.
+// Live drawer rows are the complement (!IsTerminalStatus).
+func IsTerminalStatus(s string) bool {
 	switch Status(s) {
 	case StatusCompleted, StatusFailed, StatusCancelled, StatusTimedOut:
 		return true

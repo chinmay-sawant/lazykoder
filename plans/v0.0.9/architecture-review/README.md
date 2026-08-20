@@ -1,13 +1,13 @@
 # v0.0.9 architecture review - deepen hot modules
 
 > **Parent:** `plans/v0.0.9/` (fresh launch / quit banner track is separate)
-> **Status:** review complete; implementation not started
-> **Branch:** plan only (pick a `chore/` or `refactor/` branch when executing)
+> **Status:** phases 1-6 implemented and gated 2026-08-21 (C8/C9 deferred)
+> **Branch:** `chore/009-improve-architecture`
 > **Estimated effort:** 5-8 days across six phases
 > **Priority:** P2 (navigability and test locality; no user-facing feature)
 > **Skill:** `skills/phase-wise-checklist/SKILLS.md` + improve-codebase-architecture
-> **Gate:** each phase's checklist rows and named `go test` / `make test` lines pass;
-> HTML report candidates stay aligned with code; knowledge-base page updated
+> **Gate:** `go test ./...` and `make lint` passed 2026-08-21; checklist rows
+> marked only after those gates; C8 layout snapshot and C9 Event seam stay deferred
 
 This folder is the live ledger for architecture deepening after the 2026-08-20
 scan (5 explore agents over `ui/chat`, `agent`, `subagent`, `db`/provider, and

@@ -55,14 +55,7 @@ func usageBar(percent int, width int, limited bool) string {
 // openUsageModal opens the usage card. The caller decides whether to fetch:
 // /usage always refreshes; settings only fetches when not yet loaded.
 func (m Model) openUsageModal() Model {
-	m.usageMode = true
-	m.slashMode = false
-	m.slashCursor = 0
-	m.pickerMode = false
-	m.helpMode = false
-	m.settingsMode = false
-	m.filePickerMode = false
-	m.sessionPickerMode = false
+	m = m.setFocus(focusUsage)
 	m.prompt.SetValue("")
 	m.promptUndo = nil
 	return m
@@ -70,9 +63,7 @@ func (m Model) openUsageModal() Model {
 
 // closeUsageModal closes the usage card.
 func (m Model) closeUsageModal() Model {
-	m.usageMode = false
-	m.usageLoading = false
-	return m
+	return m.clearFocus(focusUsage)
 }
 
 // fetchUsage returns a tea.Cmd that loads plan usage from the API.

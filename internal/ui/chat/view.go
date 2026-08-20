@@ -58,19 +58,18 @@ func (m Model) View() tea.View {
 // frame is the unpainted screen string. Mouse hit-testing scans this after
 // the same Width/Height paint as newView so click rows match the terminal.
 func (m Model) frame() string {
-	if m.sessionPickerMode {
+	// Full-screen cards keep the historical paint order (sessions before log
+	// before settings...). Overlays stack on chat; key routing uses currentFocus.
+	switch {
+	case m.sessionPickerMode:
 		return m.sessionPickerScreen()
-	}
-	if m.subagentLogMode {
+	case m.subagentLogMode:
 		return m.subagentLogScreen()
-	}
-	if m.settingsMode {
+	case m.settingsMode:
 		return m.settingsScreen()
-	}
-	if m.usageMode {
+	case m.usageMode:
 		return m.usageScreen()
-	}
-	if m.helpMode {
+	case m.helpMode:
 		return m.helpScreen()
 	}
 	screen := m.chatScreen()

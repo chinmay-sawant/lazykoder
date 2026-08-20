@@ -18,7 +18,6 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/agent"
 	"github.com/chinmay-sawant/lazykoder/internal/db"
 	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
-	"github.com/chinmay-sawant/lazykoder/internal/policy"
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 	"github.com/chinmay-sawant/lazykoder/internal/settings"
 	"github.com/chinmay-sawant/lazykoder/internal/subagent"
@@ -60,8 +59,6 @@ const (
 	// pickerVpDefaultW/H seed the picker viewport before the first resize.
 	pickerVpDefaultW = 58
 	pickerVpDefaultH = 10
-	// eventChanBuffer is the capacity of the per-turn event channel.
-	eventChanBuffer = 64
 	// promptUndoLimit bounds the in-memory prompt edit history.
 	promptUndoLimit = 32
 	// copyNoticeDuration controls how long the clipboard confirmation stays visible.
@@ -381,25 +378,6 @@ type modelsMsg struct {
 	notice    string
 }
 
-type confirmRequest struct {
-	dec     policy.Decision
-	subject string
-	resp    chan bool
-}
-
-type confirmRequestMsg struct {
-	req confirmRequest
-}
-
-type askRequest struct {
-	q    question.Question
-	resp chan int
-}
-
-type askRequestMsg struct {
-	req askRequest
-}
-
 type eventMsg struct {
 	seq int
 	ev  agent.Event
@@ -451,21 +429,8 @@ func New(opts Options) Model {
 		prompt:              newPromptArea(defaultWidth),
 		renderCache:         &renderCache{},
 	}
-	m.subMgr = subagent.NewManager(subagent.ConfigFromSettings(cfg), subagent.AgentRunner{
-		Store:  opts.Store,
-		Client: opts.Client,
-	})
-	m.subMgr.SetStore(opts.Store)
-	// Workdir is known at construction; model/confirm are refreshed per turn.
-	m.subMgr.SetRuntime(subagent.Runtime{
-		Workdir: opts.Workdir,
-		Model:   cfg.EffectiveModel(),
-		Variant: cfg.EffectiveVariant(),
-	})
-	// Recover open jobs from a previous process crash/exit.
-	if opts.Store != nil {
-		_ = m.subMgr.Recover(context.Background())
-	}
+	// Manager boot + recover; model/confirm refreshed per turn via wireSubMgrRuntime.
+	m = m.attachSubMgr(cfg, opts.Store != nil)
 	if m.cachePath != "" {
 		if infos, _, err := modelscache.Load(m.cachePath, time.Now(), 0); err == nil && len(infos) > 0 {
 			m.modelInfos = infos
@@ -579,13 +544,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			qualifier = "rm -rf"
 		}
 		m.confirm = confirm.New(msg.req.subject, qualifier)
-		m.confirmMode = true
+		m = m.setFocus(focusConfirm)
 		return m, m.confirmWatch()
 	case askRequestMsg:
 		m.pendingAsk = &msg.req
 		m.askQuestion = msg.req.q
 		m.askCursor = 0
-		m.askMode = true
+		m = m.setFocus(focusAsk)
 		return m, m.askWatch()
 	case eventMsg:
 		if msg.seq != m.turnSeq {
@@ -743,37 +708,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Mod.Contains(tea.ModCtrl) && msg.Code == 's' && !m.confirmMode && !m.pickerMode && !m.sessionPickerMode && !m.subagentPickerMode && !m.busy {
 			return m.openSessionPicker(), nil
 		}
-		if m.confirmMode {
+		switch m.currentFocus() {
+		case focusConfirm:
 			return m.updateConfirmKey(msg)
-		}
-		if m.askMode {
+		case focusAsk:
 			return m.updateAskKey(msg)
-		}
-		if m.helpMode {
+		case focusHelp:
 			return m.updateHelpKey(msg)
-		}
-		if m.usageMode {
+		case focusUsage:
 			return m.updateUsageKey(msg)
-		}
-		if m.settingsMode {
+		case focusSettings:
 			return m.updateSettingsKey(msg)
-		}
-		if m.statusMode {
+		case focusStatus:
 			return m.updateStatusKey(msg)
-		}
-		if m.filePickerMode {
+		case focusFilePicker:
 			return m.updateFilePickerKey(msg)
-		}
-		if m.pickerMode {
+		case focusPicker:
 			return m.updatePickerKey(msg)
-		}
-		if m.sessionPickerMode {
+		case focusSessions:
 			return m.updateSessionPickerKey(msg)
-		}
-		if m.subagentPickerMode {
+		case focusSubagents, focusSubagentLog:
 			return m.updateSubagentPickerKey(msg)
-		}
-		if m.slashMode {
+		case focusSlash:
 			return m.updateSlashKey(msg)
 		}
 		return m.updateKey(msg)
@@ -986,8 +942,8 @@ func (m Model) finishTurn(err error) Model {
 	m.pendingUser = ""
 	m.pending = nil
 	m.pendingAsk = nil
-	m.confirmMode = false
-	m.askMode = false
+	m = m.clearFocus(focusConfirm)
+	m = m.clearFocus(focusAsk)
 	m.eventCh = nil
 	m.errCh = nil
 	m.activity = ""
@@ -1330,25 +1286,7 @@ func (m Model) updateAskKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 func (m Model) updateHelpKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 	switch key.Code {
 	case tea.KeyEscape, 'q', 'Q', '?':
-		m.helpMode = false
+		m = m.clearFocus(focusHelp)
 	}
 	return m, nil
-}
-
-func (m Model) resolveAskIndex(idx int) Model {
-	if idx < 0 {
-		// Deny-equivalent: do not invent an answer when the user cancels.
-		// Esc cancels; a returned error denies the tool. Use -1 and let
-		// askHook map cancel to error.
-		idx = 0
-	}
-	if m.pendingAsk != nil {
-		select {
-		case m.pendingAsk.resp <- idx:
-		default:
-		}
-	}
-	m.pendingAsk = nil
-	m.askMode = false
-	return m
 }

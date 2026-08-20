@@ -288,9 +288,7 @@ func (m Model) finishPickerSelection() Model {
 
 func (m Model) closePicker() Model {
 	reopenSettings := m.settingsPickDefault
-	m.pickerMode = false
-	m.pickerFiltering = false
-	m.pickerFromPrompt = false
+	m = m.clearFocus(focusPicker)
 	m.pickerKind = pickerKindModel
 	m.dragOn = false
 	m.settingsPickDefault = false
@@ -381,7 +379,7 @@ func (m Model) openKindPicker(kind string) Model {
 	} else {
 		m.pickerVp.EnsureVisible(m.pickerCursor, 0, 1)
 	}
-	m.pickerMode = true
+	m = m.setFocus(focusPicker)
 	return m
 }
 

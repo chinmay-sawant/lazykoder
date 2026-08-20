@@ -29,16 +29,20 @@ func TestTaskSpecOmitsTimeoutFields(t *testing.T) {
 	t.Fatal("task tool not found in Host.Specs")
 }
 
-// captureRunner records the Job.Timeout the manager applied.
+// captureRunner records Job fields the manager applied.
 type captureRunner struct {
-	mu      sync.Mutex
-	timeout time.Duration
-	release chan struct{}
+	mu       sync.Mutex
+	timeout  time.Duration
+	depth    int
+	maxDepth int
+	release  chan struct{}
 }
 
 func (r *captureRunner) Run(ctx context.Context, job Job) (Result, error) {
 	r.mu.Lock()
 	r.timeout = job.Timeout
+	r.depth = job.Depth
+	r.maxDepth = job.MaxDepth
 	r.mu.Unlock()
 	select {
 	case <-r.release:
@@ -136,6 +140,35 @@ func TestInternalSpecTimeoutStillHonored(t *testing.T) {
 	r.mu.Unlock()
 	if got != want {
 		t.Fatalf("Job.Timeout = %v, want internal Spec.Timeout %v", got, want)
+	}
+}
+
+func TestBuildJobSetsDepthGate(t *testing.T) {
+	r := &captureRunner{release: make(chan struct{})}
+	close(r.release)
+	cfg := NewConfig()
+	cfg.MaxDepth = 1
+	m := NewManager(cfg, r)
+	m.SetRuntime(Runtime{Workdir: t.TempDir()})
+	snap, err := m.Spawn(context.Background(), "ses_p", "prt_1", Spec{
+		Prompt: "depth check", Name: "d", Background: true,
+	})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		st, ok := m.Status(snap.ID)
+		if ok && IsTerminalStatus(st.Status) {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	r.mu.Lock()
+	depth, maxDepth := r.depth, r.maxDepth
+	r.mu.Unlock()
+	if depth != 1 || maxDepth != 1 {
+		t.Fatalf("Job depth/max = %d/%d, want 1/1", depth, maxDepth)
 	}
 }
 

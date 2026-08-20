@@ -9,6 +9,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/chinmay-sawant/lazykoder/internal/db"
+	"github.com/chinmay-sawant/lazykoder/internal/subagent"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
 
@@ -255,15 +256,12 @@ func (m Model) todoAgentSummary() string {
 	}
 	ok, failed, live := 0, 0, 0
 	for _, r := range rows {
-		st := strings.ToLower(strings.TrimSpace(r.Status))
 		switch {
 		case r.Live:
 			live++
 		case isFailedSubStatus(r.Status):
 			failed++
-		case st == "completed" || st == "success" || st == "done":
-			ok++
-		case isTerminalSubStatus(r.Status):
+		case subagent.IsTerminalStatus(r.Status):
 			ok++
 		default:
 			// Still queued/running without Live set, or unknown in-flight.

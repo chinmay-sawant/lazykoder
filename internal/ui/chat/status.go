@@ -209,25 +209,15 @@ func (m Model) statusChipLabel() string {
 }
 
 func (m Model) openStatusDrawer() Model {
-	m.statusMode = true
+	m = m.setFocus(focusStatus)
 	m.statusCursor = 0
-	m.slashMode = false
-	m.slashCursor = 0
-	m.pickerMode = false
-	m.sessionPickerMode = false
-	m.usageMode = false
-	m.usageLoading = false
-	m.settingsMode = false
-	m.subagentPickerMode = false
-	m.subagentLogMode = false
 	return m
 }
 
 func (m Model) updateStatusKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 	switch key.Code {
 	case tea.KeyEscape, tea.KeyLeft, 'q', 'Q', 's', 'S':
-		m.statusMode = false
-		return m, nil
+		return m.clearFocus(focusStatus), nil
 	case tea.KeyUp:
 		if m.statusCursor > 0 {
 			m.statusCursor--

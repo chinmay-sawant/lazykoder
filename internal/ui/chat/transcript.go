@@ -37,9 +37,6 @@ const (
 	toolBodyHeadLines = 70
 	toolBodyTailLines = maxToolBodyLines - toolBodyHeadLines - 1
 
-	// estimateCharsPerToken is the rough chars-per-token divisor for the
-	// transcript estimate line.
-	estimateCharsPerToken = 4
 	// transcriptLinearPad is the 2-col inset applied to a transcript line.
 	transcriptLinearPad = 2
 	// diffStatParts is the max "+, -" segments in a diff stat.
@@ -76,71 +73,23 @@ const (
 )
 
 func (m *Model) replay(sessionID string) {
-	ctx := context.Background()
-	msgs, err := m.store.ListMessages(ctx, sessionID)
+	res, err := projectSession(m.store, sessionID, projectOpts{
+		CollapseReasoning:   true,
+		SeedInputHistory:    true,
+		IncludeCompactNotes: true,
+		CollectUsage:        true,
+	})
 	if err != nil {
 		m.err = "chat: " + err.Error()
 		return
 	}
-	tcs, err := m.store.ListToolCalls(ctx, sessionID)
-	if err != nil {
-		m.err = "chat: " + err.Error()
-		return
+	m.items = append(m.items, res.items...)
+	m.inputHistory = append(m.inputHistory, res.history...)
+	for _, u := range res.usage {
+		m.applyUsage(u.part, u.modelID)
 	}
-	toolCalls := make(map[string]db.ToolCall, len(tcs))
-	for _, tc := range tcs {
-		toolCalls[tc.PartID] = tc
-	}
-	for _, msg := range msgs {
-		if !msg.Visible {
-			continue
-		}
-		parts, err := m.store.ListParts(ctx, msg.ID)
-		if err != nil {
-			m.err = "chat: " + err.Error()
-			return
-		}
-		for _, p := range parts {
-			switch p.Type {
-			case "text":
-				if p.Text != nil {
-					if msg.Role == "user" {
-						m.inputHistory = append(m.inputHistory, inputHistoryItem{messageID: msg.ID, text: *p.Text})
-						m.items = append(m.items, transcriptItem{kind: itemUser, text: *p.Text, when: itemTime(msg.TimeCreated, p.TimeCreated), part: p})
-					} else {
-						m.items = append(m.items, transcriptItem{kind: itemAssistant, text: *p.Text, when: itemTime(msg.TimeCreated, p.TimeCreated), part: p})
-					}
-				}
-			case "reasoning":
-				if p.Text != nil {
-					m.items = append(m.items, transcriptItem{kind: itemReasoning, text: *p.Text, collapsed: true, when: itemTime(msg.TimeCreated, p.TimeCreated), part: p})
-				}
-			case "tool":
-				tool := db.ToolCall{PartID: p.ID}
-				if stored, ok := toolCalls[p.ID]; ok {
-					tool = stored
-				} else {
-					tool.Tool = "tool"
-					if p.ToolName != nil {
-						tool.Tool = *p.ToolName
-					}
-					if p.ToolStatus != nil {
-						tool.Status = *p.ToolStatus
-					}
-				}
-				when := itemTime(msg.TimeCreated, p.TimeCreated)
-				if tool.TimeStart != nil {
-					when = *tool.TimeStart
-				}
-				// Edit cards stay open so the diff is always visible.
-				collapsed := tool.Tool != "edit"
-				m.items = append(m.items, transcriptItem{kind: itemTool, collapsed: collapsed, when: when, tool: tool, part: p})
-			case "step-finish":
-				m.applyUsage(p, msg.ModelID)
-			case agent.CompactPartType:
-				m.applyCompactNotice(p)
-			}
-		}
+	for _, p := range res.compactMeter {
+		m.applyCompactMeter(p)
 	}
 	m.bumpTokenFloor()
 	m.syncTranscript()
@@ -373,18 +322,17 @@ func cacheMissTokens(input, hit int64) int64 {
 	return 0
 }
 
+// estimateTokens sums agent.EstimateTokens over transcript text (and tool
+// outputs) so the fill meter matches Compaction's chars/4 helper.
 func estimateTokens(items []transcriptItem) int64 {
-	var n int
+	var n int64
 	for _, it := range items {
-		n += len([]rune(it.text))
+		n += agent.EstimateTokens(it.text)
 		if it.kind == itemTool && it.tool.Output != nil {
-			n += len([]rune(*it.tool.Output))
+			n += agent.EstimateTokens(*it.tool.Output)
 		}
 	}
-	if n == 0 {
-		return 0
-	}
-	return int64(n / estimateCharsPerToken)
+	return n
 }
 
 func (m *Model) syncTranscript() {
@@ -704,7 +652,8 @@ func (m *Model) applyPart(p db.Part) {
 	m.syncTranscript()
 }
 
-func (m *Model) applyCompactNotice(p db.Part) {
+// applyCompactMeter updates fill/cache from a compaction part without painting.
+func (m *Model) applyCompactMeter(p db.Part) {
 	if p.Text == nil {
 		return
 	}
@@ -715,25 +664,20 @@ func (m *Model) applyCompactNotice(p db.Part) {
 	// Cache stats are since the last checkpoint, not the whole session.
 	m.cacheHit = 0
 	m.cacheMiss = 0
-	text := "context compacted"
-	if env.FromWindow > 0 && env.ToWindow > 0 && env.FromWindow != env.ToWindow {
-		text = fmt.Sprintf("context compacted (%s -> %s)", formatTokens(env.FromWindow), formatTokens(env.ToWindow))
-	} else if env.FromModel != "" && env.ToModel != "" && env.FromModel != env.ToModel {
-		text = fmt.Sprintf("context compacted (%s -> %s)", env.FromModel, env.ToModel)
-	}
+}
+
+func (m *Model) applyCompactNotice(p db.Part) {
+	m.applyCompactMeter(p)
+	it := compactNoticeItem(p)
 	for i := range m.items {
 		if m.items[i].part.ID != "" && m.items[i].part.ID == p.ID {
-			m.items[i].text = text
+			m.items[i].text = it.text
 			m.items[i].part = p
 			return
 		}
 	}
-	m.items = append(m.items, transcriptItem{
-		kind: itemNote,
-		text: text,
-		when: itemTime(0, p.TimeCreated),
-		part: p,
-	})
+	it.when = itemTime(0, p.TimeCreated)
+	m.items = append(m.items, it)
 }
 
 func (m *Model) upsertExisting(p db.Part, text string) bool {

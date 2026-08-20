@@ -47,7 +47,7 @@ func TestDefault(t *testing.T) {
 	if a.AllowParallelWriters {
 		t.Fatal("AllowParallelWriters want false")
 	}
-	if !s.Compaction.Auto || s.Compaction.Percent != DefaultCompactPercent || s.Compaction.KeepTokens != DefaultKeepTokens {
+	if !s.Compaction.Auto || s.Compaction.Percent != 80 || s.Compaction.KeepTokens != 15_000 {
 		t.Fatalf("compaction defaults %+v", s.Compaction)
 	}
 }
@@ -67,7 +67,7 @@ func TestLoadMissingReturnsDefault(t *testing.T) {
 	if !s.Agents.Enabled || s.Agents.MaxConcurrent != DefaultMaxConcurrent {
 		t.Fatalf("agents %+v", s.Agents)
 	}
-	if !s.Compaction.Auto || s.Compaction.Percent != DefaultCompactPercent {
+	if !s.Compaction.Auto || s.Compaction.Percent != 80 {
 		t.Fatalf("compaction %+v", s.Compaction)
 	}
 }
@@ -102,7 +102,7 @@ func TestSaveLoadRoundTripWithAgents(t *testing.T) {
 			Enabled:              true,
 			MaxConcurrent:        6,
 			MaxQueued:            50,
-			MaxDepth:             2,
+			MaxDepth:             1,
 			DefaultTimeoutSec:    120,
 			ChildMaxSteps:        20,
 			ModelOverride:        "fast-model",
@@ -154,7 +154,7 @@ func TestCompactionLoadSaveAndMissingBlock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got.Compaction.Auto || got.Compaction.Percent != DefaultCompactPercent || got.Compaction.KeepTokens != DefaultKeepTokens {
+	if !got.Compaction.Auto || got.Compaction.Percent != 80 || got.Compaction.KeepTokens != 15_000 {
 		t.Fatalf("missing block should default: %+v", got.Compaction)
 	}
 	if got.Compaction.ThresholdTokens(1_000_000) != 800_000 {
@@ -213,6 +213,20 @@ func TestClampMaxConcurrent(t *testing.T) {
 	}
 	if got.Agents.MaxQueued < got.Agents.MaxConcurrent {
 		t.Fatalf("MaxQueued = %d, want >= %d", got.Agents.MaxQueued, got.Agents.MaxConcurrent)
+	}
+}
+
+func TestClampMaxDepthToProductLimit(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte(`{"agents":{"enabled":true,"max_depth":3}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Agents.MaxDepth != MaxMaxDepth || MaxMaxDepth != 1 {
+		t.Fatalf("MaxDepth = %d MaxMaxDepth = %d, want both 1", got.Agents.MaxDepth, MaxMaxDepth)
 	}
 }
 

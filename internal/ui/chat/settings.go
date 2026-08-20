@@ -1,7 +1,6 @@
 package chat
 
 import (
-	"context"
 	"fmt"
 	"strings"
 
@@ -12,7 +11,6 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 	"github.com/chinmay-sawant/lazykoder/internal/settings"
-	"github.com/chinmay-sawant/lazykoder/internal/subagent"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
 
@@ -82,25 +80,17 @@ const (
 // loading when the plan usage has not been loaded yet; the caller kicks off
 // the fetch via maybeFetchUsage.
 func (m Model) openSettings() Model {
-	m.settingsMode = true
+	m = m.setFocus(focusSettings)
 	m.settingsCursor = settingsRowModel
 	m.settingsEdit = false
 	m.settingsEditValue = ""
-	m.slashMode = false
-	m.slashCursor = 0
-	m.pickerMode = false
-	m.helpMode = false
-	m.usageMode = false
-	m.usageLoading = false
-	m.filePickerMode = false
-	m.sessionPickerMode = false
 	m.prompt.SetValue("")
 	m.promptUndo = nil
 	return m
 }
 
 func (m Model) closeSettings() Model {
-	m.settingsMode = false
+	m = m.clearFocus(focusSettings)
 	m.settingsCursor = 0
 	m.settingsPickDefault = false
 	m.settingsEdit = false
@@ -883,28 +873,6 @@ func (m Model) setAgentsWriters(on bool) Model {
 	m.projectSettings.Agents.AllowParallelWriters = on
 	m = m.rebuildSubMgr()
 	m = m.persistSettings()
-	return m
-}
-
-func (m Model) rebuildSubMgr() Model {
-	if m.store == nil || m.client == nil {
-		return m
-	}
-	if m.subMgr != nil {
-		m.subMgr.Shutdown()
-	}
-	m.subMgr = subagent.NewManager(subagent.ConfigFromSettings(m.projectSettings), subagent.AgentRunner{
-		Store:  m.store,
-		Client: m.client,
-	})
-	m.subMgr.SetStore(m.store)
-	m.subMgr.SetRuntime(subagent.Runtime{
-		Workdir: m.workdir,
-		Model:   m.projectSettings.EffectiveModel(),
-		Variant: m.projectSettings.EffectiveVariant(),
-	})
-	// Recover open durable jobs so task_list/wait stay consistent after settings rebuild.
-	_ = m.subMgr.Recover(context.Background())
 	return m
 }
 

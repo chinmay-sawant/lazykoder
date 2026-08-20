@@ -96,7 +96,11 @@ type Job struct {
 	Variant  string
 	MaxSteps int
 	Timeout  time.Duration
-	// Tools is the child tool allowlist (no task tools at depth 1).
+	// Depth is the nesting level of this job (1 = direct child of the chat parent).
+	Depth int
+	// MaxDepth is copied from Config; Host stays nil when Depth >= MaxDepth.
+	MaxDepth int
+	// Tools is the child tool allowlist (no task tools when Host is nil).
 	Tools   []string
 	Confirm func(dec policy.Decision, subject string) (bool, error)
 	// Ask may be nil when the parent has no question UI.

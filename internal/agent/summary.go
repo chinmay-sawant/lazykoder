@@ -14,20 +14,17 @@ func LastAssistantText(ctx context.Context, store *db.Store, sessionID string) (
 	if store == nil || sessionID == "" {
 		return "", nil
 	}
-	msgs, err := store.ListMessages(ctx, sessionID)
+	graph, err := store.LoadSessionGraph(ctx, sessionID)
 	if err != nil {
-		return "", fmt.Errorf("agent: list messages: %w", err)
+		return "", fmt.Errorf("agent: load session graph: %w", err)
 	}
-	for i := len(msgs) - 1; i >= 0; i-- {
-		if msgs[i].Role != "assistant" {
+	for i := len(graph.Entries) - 1; i >= 0; i-- {
+		e := graph.Entries[i]
+		if e.Message.Role != "assistant" {
 			continue
 		}
-		parts, err := store.ListParts(ctx, msgs[i].ID)
-		if err != nil {
-			return "", fmt.Errorf("agent: list parts: %w", err)
-		}
 		var b strings.Builder
-		for _, p := range parts {
+		for _, p := range e.Parts {
 			if p.Type == "text" && p.Text != nil {
 				b.WriteString(*p.Text)
 			}

@@ -38,7 +38,7 @@ func (m Model) openSessionPicker() Model {
 		m.sessionItems = nil
 		m.sessionCursor = 0
 		m.sessionHover = -1
-		m.sessionPickerMode = true
+		m = m.setFocus(focusSessions)
 		return m.refreshSessionPicker()
 	}
 	sessions, err := m.store.ListSessionsByDir(context.Background(), m.workdir)
@@ -60,12 +60,12 @@ func (m Model) openSessionPicker() Model {
 		m.sessionVp.FillHeight = true
 		m.sessionBuilt = true
 	}
-	m.sessionPickerMode = true
+	m = m.setFocus(focusSessions)
 	return m.resizeSessionPicker().refreshSessionPicker()
 }
 
 func (m Model) closeSessionPicker() Model {
-	m.sessionPickerMode = false
+	m = m.clearFocus(focusSessions)
 	m.sessionHover = -1
 	return m
 }

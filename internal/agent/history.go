@@ -64,27 +64,15 @@ func (a *Agent) loadHistory(ctx context.Context) ([]opencode.Message, error) {
 }
 
 func (a *Agent) sessionEntries(ctx context.Context) ([]histEntry, map[string]db.ToolCall, error) {
-	msgs, err := a.store.ListMessages(ctx, a.sessionID())
+	graph, err := a.store.LoadSessionGraph(ctx, a.sessionID())
 	if err != nil {
-		return nil, nil, fmt.Errorf("agent: list messages: %w", err)
+		return nil, nil, fmt.Errorf("agent: load session graph: %w", err)
 	}
-	tcs, err := a.store.ListToolCalls(ctx, a.sessionID())
-	if err != nil {
-		return nil, nil, fmt.Errorf("agent: list tool calls: %w", err)
+	entries := make([]histEntry, 0, len(graph.Entries))
+	for _, e := range graph.Entries {
+		entries = append(entries, histEntry{msg: e.Message, parts: e.Parts})
 	}
-	byPart := make(map[string]db.ToolCall, len(tcs))
-	for _, tc := range tcs {
-		byPart[tc.PartID] = tc
-	}
-	entries := make([]histEntry, 0, len(msgs))
-	for _, msg := range msgs {
-		parts, err := a.store.ListParts(ctx, msg.ID)
-		if err != nil {
-			return nil, nil, fmt.Errorf("agent: list parts: %w", err)
-		}
-		entries = append(entries, histEntry{msg: msg, parts: parts})
-	}
-	return entries, byPart, nil
+	return entries, graph.ToolCallsByPart, nil
 }
 
 func (a *Agent) entryMessages(entry histEntry, byPart map[string]db.ToolCall) []opencode.Message {

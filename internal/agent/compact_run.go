@@ -33,14 +33,7 @@ func (a *Agent) Compact(ctx context.Context, events chan<- Event, reason, extra 
 	return nil
 }
 
-func (a *Agent) maybeCompact(ctx context.Context, events chan<- Event, history []opencode.Message, force bool) error {
-	if force {
-		reason := a.opts.CompactReason
-		if reason == "" {
-			reason = CompactReasonManual
-		}
-		return a.runCompact(ctx, events, reason, a.opts.CompactInstructions)
-	}
+func (a *Agent) maybeCompact(ctx context.Context, events chan<- Event, history []opencode.Message) error {
 	reason := a.opts.CompactReason
 	gated := a.opts.CompactAuto || reason == CompactReasonShrink
 	if !gated {
@@ -139,7 +132,6 @@ func (a *Agent) runCompact(ctx context.Context, events chan<- Event, reason, ext
 	}
 	part.Text = &text
 	a.opts.TokensUsed = used
-	a.opts.ForceCompact = false
 	a.opts.CompactReason = ""
 	a.emit(events, Event{
 		Kind:       EventCompacted,
@@ -299,7 +291,11 @@ func previousSummary(entries []histEntry) string {
 }
 
 func serializeEntries(a *Agent, entries []histEntry, byPart map[string]db.ToolCall) string {
-	pruned := PruneToolOutputs(flattenEntries(a, entries, byPart), DefaultKeepTokens)
+	keep := a.opts.KeepTokens
+	if keep <= 0 {
+		keep = DefaultKeepTokens
+	}
+	pruned := PruneToolOutputs(flattenEntries(a, entries, byPart), keep)
 	var b strings.Builder
 	for _, msg := range pruned {
 		switch msg.Role {

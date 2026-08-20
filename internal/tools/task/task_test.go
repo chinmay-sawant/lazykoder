@@ -175,20 +175,29 @@ func TestParseTaskArgsInvalidJSON(t *testing.T) {
 }
 
 func TestParseListArgs(t *testing.T) {
-	a, err := ParseListArgs([]byte(`{"status":" running "}`))
-	if err != nil {
-		t.Fatalf("ParseListArgs() error = %v", err)
+	if _, err := ParseListArgs([]byte(`{"status":"running"}`)); err != nil {
+		t.Fatalf("ParseListArgs() error = %v (unknown fields ignored)", err)
 	}
-	if a.Status != "running" {
-		t.Errorf("Status = %q, want running", a.Status)
-	}
-	a, err = ParseListArgs(nil)
-	if err != nil {
+	if _, err := ParseListArgs(nil); err != nil {
 		t.Fatalf("ParseListArgs(nil) error = %v", err)
 	}
-	if a.Status != "" {
-		t.Errorf("Status = %q, want empty", a.Status)
+}
+
+func TestSpecsListHasNoStatusFilter(t *testing.T) {
+	for _, s := range Specs() {
+		if s.Name != ToolTaskList {
+			continue
+		}
+		props, ok := s.Parameters["properties"].(map[string]any)
+		if !ok {
+			t.Fatal("task_list properties missing")
+		}
+		if _, ok := props["status"]; ok {
+			t.Fatal("task_list schema still advertises unused status filter")
+		}
+		return
 	}
+	t.Fatal("task_list tool not found")
 }
 
 func TestParseStatusArgs(t *testing.T) {
@@ -210,7 +219,8 @@ func TestParseWaitArgs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseWaitArgs() error = %v", err)
 	}
-	if a.ID != "t1" || a.TimeoutSec != 30 {
+	// timeout_sec is ignored (not a WaitArgs field); Host uses settings timeout.
+	if a.ID != "t1" {
 		t.Errorf("ParseWaitArgs() = %+v", a)
 	}
 	a, err = ParseWaitArgs([]byte(`{}`))
@@ -220,6 +230,23 @@ func TestParseWaitArgs(t *testing.T) {
 	if a.ID != "" {
 		t.Errorf("ID = %q, want empty (wait all)", a.ID)
 	}
+}
+
+func TestSpecsWaitHasNoTimeoutSec(t *testing.T) {
+	for _, s := range Specs() {
+		if s.Name != ToolTaskWait {
+			continue
+		}
+		props, ok := s.Parameters["properties"].(map[string]any)
+		if !ok {
+			t.Fatal("task_wait properties missing")
+		}
+		if _, ok := props["timeout_sec"]; ok {
+			t.Fatal("task_wait schema still advertises unused timeout_sec")
+		}
+		return
+	}
+	t.Fatal("task_wait tool not found")
 }
 
 func TestParseCancelArgs(t *testing.T) {
@@ -237,9 +264,12 @@ func TestParseCancelArgs(t *testing.T) {
 	if !a.CancelAll {
 		t.Error("CancelAll = false, want true")
 	}
-	_, err = ParseCancelArgs([]byte(`{}`))
-	if err == nil || !strings.Contains(err.Error(), "id") {
-		t.Fatalf("ParseCancelArgs() error = %v, want id or cancel_all", err)
+	a, err = ParseCancelArgs([]byte(`{}`))
+	if err != nil {
+		t.Fatalf("ParseCancelArgs({}) error = %v (empty means cancel all)", err)
+	}
+	if a.ID != "" || a.CancelAll {
+		t.Errorf("ParseCancelArgs({}) = %+v, want empty id and CancelAll false", a)
 	}
 }
 

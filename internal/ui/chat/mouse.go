@@ -26,7 +26,7 @@ func (m Model) mousePress(msg tea.MouseClickMsg) (Model, tea.Cmd) {
 	m.copyNotice = ""
 	// Questions are modal: only an option row may consume a click, and all
 	// other clicks stay inside the dialog instead of hitting the chat below.
-	if m.askMode {
+	if m.currentFocus() == focusAsk {
 		if mu.Button == tea.MouseLeft {
 			if idx, ok := m.askIndexAtScreen(mu.X, mu.Y); ok {
 				return m.resolveAskIndex(idx), nil
@@ -37,7 +37,8 @@ func (m Model) mousePress(msg tea.MouseClickMsg) (Model, tea.Cmd) {
 	// Model / variant chips live on the composer footer. Handle them before
 	// the prompt and sub-agent drawer so those never swallow chip clicks
 	// (including while the sub-agent strip is open).
-	if mu.Button == tea.MouseLeft && !m.pickerMode && !m.usageMode && !m.settingsMode && !m.sessionPickerMode && !m.subagentLogMode && !m.statusMode {
+	focus := m.currentFocus()
+	if mu.Button == tea.MouseLeft && focus != focusPicker && focus != focusUsage && focus != focusSettings && focus != focusSessions && focus != focusSubagentLog && focus != focusStatus {
 		if hit, which := m.footerChipHit(mu.X, mu.Y); hit {
 			m = m.clearTextSelection()
 			m = m.clearPromptSelection()

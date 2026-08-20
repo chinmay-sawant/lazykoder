@@ -43,18 +43,19 @@ const (
 	DefaultMaxQueued = 40
 	// DefaultMaxDepth is the default sub-agent nesting depth.
 	DefaultMaxDepth = 1
-	// MaxMaxDepth caps sub-agent nesting depth.
-	MaxMaxDepth = 3
+	// MaxMaxDepth caps sub-agent nesting depth. Product depth is 1 until
+	// nested Host ships; do not advertise editable depth above 1.
+	MaxMaxDepth = 1
 	// maxMaxQueued caps the sub-agent queue size.
 	maxMaxQueued = 100
-	// DefaultCompactPercent is when auto-compact fires (percent of window).
-	DefaultCompactPercent = 80
 	// MinCompactPercent is the lowest selectable auto-compact threshold.
 	MinCompactPercent = 5
 	// MaxCompactPercent is the highest selectable auto-compact threshold.
 	MaxCompactPercent = 99
-	// DefaultKeepTokens is the recent tail kept beside a summary.
-	DefaultKeepTokens = 15_000
+	// defaultCompactPercent / defaultKeepTokens mirror agent.DefaultCompact*
+	// (agent owns the named runtime constants; settings only persists knobs).
+	defaultCompactPercent = 80
+	defaultKeepTokens     = 15_000
 	// settingsDirMode is used when creating parent dirs for settings.json.
 	settingsDirMode = 0o755
 	// settingsFileMode is the on-disk mode for settings.json.
@@ -145,8 +146,8 @@ func Default() Settings {
 		},
 		Compaction: Compaction{
 			Auto:       true,
-			Percent:    DefaultCompactPercent,
-			KeepTokens: DefaultKeepTokens,
+			Percent:    defaultCompactPercent,
+			KeepTokens: defaultKeepTokens,
 		},
 	}
 }
@@ -261,7 +262,7 @@ func (s Settings) normalized() Settings {
 
 func (c Compaction) normalized() Compaction {
 	if c.Percent <= 0 {
-		c.Percent = DefaultCompactPercent
+		c.Percent = defaultCompactPercent
 	}
 	if c.Percent < MinCompactPercent {
 		c.Percent = MinCompactPercent
@@ -270,7 +271,7 @@ func (c Compaction) normalized() Compaction {
 		c.Percent = MaxCompactPercent
 	}
 	if c.KeepTokens < 0 {
-		c.KeepTokens = DefaultKeepTokens
+		c.KeepTokens = defaultKeepTokens
 	}
 	return c
 }
@@ -367,10 +368,10 @@ func NormalizeAfterLoad(s Settings, raw []byte) Settings {
 			s.Compaction.Auto = true
 		}
 		if !jsonHasKey(raw, "compaction", "percent") {
-			s.Compaction.Percent = DefaultCompactPercent
+			s.Compaction.Percent = defaultCompactPercent
 		}
 		if !jsonHasKey(raw, "compaction", "keep_tokens") {
-			s.Compaction.KeepTokens = DefaultKeepTokens
+			s.Compaction.KeepTokens = defaultKeepTokens
 		}
 	}
 	return s.normalized()

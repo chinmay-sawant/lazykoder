@@ -13,6 +13,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/chinmay-sawant/lazykoder/internal/agent"
+	"github.com/chinmay-sawant/lazykoder/internal/subagent"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
 
@@ -50,12 +51,12 @@ func (m Model) openFilePicker() Model {
 		m.filePickerAt = len(m.prompt.Value())
 	}
 	m.filePickerItems = m.listAtPickItems("")
-	m.filePickerMode = true
+	m = m.setFocus(focusFilePicker)
 	return m
 }
 
 func (m Model) closeFilePicker() Model {
-	m.filePickerMode = false
+	m = m.clearFocus(focusFilePicker)
 	m.filePickerItems = nil
 	m.filePickerFilter = ""
 	return m
@@ -194,7 +195,7 @@ func atPickerItemRow(it atPickItem, selected bool, width int, sel, dim lipgloss.
 			rightStyle = liveSt
 		} else if isFailedSubStatus(st) {
 			rightStyle = badSt
-		} else if isTerminalSubStatus(st) {
+		} else if subagent.IsTerminalStatus(st) {
 			rightStyle = goodSt
 		}
 	}

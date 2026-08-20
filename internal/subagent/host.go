@@ -7,10 +7,12 @@ import (
 	"strings"
 
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
+	"github.com/chinmay-sawant/lazykoder/internal/tools/task"
 )
 
 // Host is the parent-side control plane for task tools.
 // It does not import internal/agent; chat/agent wire Mgr and ParentSessionID.
+// Specs and arg parsing live in internal/tools/task; Host executes them.
 type Host struct {
 	Mgr             *Manager
 	ParentSessionID string
@@ -21,117 +23,14 @@ func NewHost(mgr *Manager) *Host {
 	return &Host{Mgr: mgr}
 }
 
-// Specs returns the parent task tool advertisements.
+// Specs returns the parent task tool advertisements (owned by tools/task).
 func (h *Host) Specs() []opencode.ToolSpec {
-	return []opencode.ToolSpec{
-		{
-			Name: "task",
-			Description: "Spawn a sub-agent on a focused prompt. Prefer background=true for parallel work, then task_wait. " +
-				"Raise max_steps for multi-file explores (default is higher than parent chat but still finite). " +
-				"Ask the child to finish with a short written report before the step budget ends.",
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"prompt": map[string]any{
-						"type":        "string",
-						"description": "Full instructions for the sub-agent (include: write a final summary before stopping)",
-					},
-					"description": map[string]any{
-						"type":        "string",
-						"description": "Short label shown in the UI",
-					},
-					"name": map[string]any{
-						"type":        "string",
-						"description": "Optional stable name for the job",
-					},
-					"role": map[string]any{
-						"type":        "string",
-						"description": "explore | plan | general (default explore)",
-						"enum":        []string{RoleExplore, RolePlan, RoleGeneral},
-					},
-					"model": map[string]any{
-						"type":        "string",
-						"description": "Optional model override",
-					},
-					"variant": map[string]any{
-						"type":        "string",
-						"description": "Optional reasoning variant",
-					},
-					"max_steps": map[string]any{
-						"type":        "integer",
-						"description": "Child tool-round budget (0 = config default, typically 32). Use 48-64 for large audits.",
-					},
-					"background": map[string]any{
-						"type":        "boolean",
-						"description": "If true, return immediately while the job runs (recommended for parallel agents)",
-					},
-					// Wall-clock lifetime is not model-controlled: Host always
-					// uses Config.Timeout from settings (default_timeout_sec).
-					// Spec.Timeout remains for tests and internal Spawn only.
-				},
-				"required": []string{"prompt"},
-			},
-		},
-		{
-			Name: "task_list",
-			Description: "List sub-agent jobs for the current parent session " +
-				"(includes completed jobs from SQLite after restart).",
-			Parameters: map[string]any{
-				"type":       "object",
-				"properties": map[string]any{},
-			},
-		},
-		{
-			Name: "task_status",
-			Description: "Get status for one sub-agent by id " +
-				"(works for finished jobs persisted in SQLite).",
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"id": map[string]any{"type": "string", "description": "Job id (sub_...)"},
-				},
-				"required": []string{"id"},
-			},
-		},
-		{
-			Name: "task_wait",
-			Description: "Wait for one sub-agent (id) or all jobs for this parent session. " +
-				"Returns durable summaries from SQLite when jobs already finished " +
-				"(including after a crash/restart). Always call this after background task spawns.",
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"id": map[string]any{
-						"type":        "string",
-						"description": "Job id; omit or empty to wait for all",
-					},
-				},
-			},
-		},
-		{
-			Name:        "task_cancel",
-			Description: "Cancel one sub-agent (id) or all non-terminal jobs for this parent session.",
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"id": map[string]any{
-						"type":        "string",
-						"description": "Job id; omit or empty to cancel all",
-					},
-				},
-			},
-		},
-	}
+	return task.Specs()
 }
 
 // IsTaskTool reports whether name is a parent task control-plane tool.
 func IsTaskTool(name string) bool {
-	switch name {
-	case "task", "task_list", "task_status", "task_wait", "task_cancel":
-		return true
-	default:
-		return false
-	}
+	return task.IsTaskTool(name)
 }
 
 // Execute dispatches a task tool. status is completed, denied, or error.
@@ -148,15 +47,15 @@ func (h *Host) Execute(ctx context.Context, parentSessionID, name, argsJSON, par
 		h.ParentSessionID = parentSessionID
 	}
 	switch name {
-	case "task":
+	case task.ToolTask:
 		return h.execTask(ctx, argsJSON, partID)
-	case "task_list":
+	case task.ToolTaskList:
 		return h.execList()
-	case "task_status":
+	case task.ToolTaskStatus:
 		return h.execStatus(argsJSON)
-	case "task_wait":
+	case task.ToolTaskWait:
 		return h.execWait(ctx, argsJSON)
-	case "task_cancel":
+	case task.ToolTaskCancel:
 		return h.execCancel(argsJSON)
 	default:
 		msg := "unknown tool: " + name
@@ -164,30 +63,10 @@ func (h *Host) Execute(ctx context.Context, parentSessionID, name, argsJSON, par
 	}
 }
 
-type taskArgs struct {
-	Prompt      string `json:"prompt"`
-	Description string `json:"description"`
-	Name        string `json:"name"`
-	Role        string `json:"role"`
-	Model       string `json:"model"`
-	Variant     string `json:"variant"`
-	MaxSteps    int    `json:"max_steps"`
-	Background  bool   `json:"background"`
-	// timeout_ms / timeout_sec from the model are intentionally ignored.
-	// encoding/json drops unknown fields; do not re-add timeout fields here.
-}
-
-type idArgs struct {
-	ID string `json:"id"`
-}
-
 func (h *Host) execTask(ctx context.Context, argsJSON, partID string) (string, string, string, error) {
-	var args taskArgs
-	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-		return toolError("invalid task arguments: " + err.Error())
-	}
-	if strings.TrimSpace(args.Prompt) == "" {
-		return toolError("task: prompt is required")
+	args, err := task.ParseTaskArgs([]byte(argsJSON))
+	if err != nil {
+		return toolError(err.Error())
 	}
 	// Lifetime is settings-owned (Config.Timeout / default_timeout_sec).
 	// Leaving Spec.Timeout at 0 makes Manager.Spawn apply the config default.
@@ -217,12 +96,9 @@ func (h *Host) execList() (string, string, string, error) {
 }
 
 func (h *Host) execStatus(argsJSON string) (string, string, string, error) {
-	var args idArgs
-	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-		return toolError("invalid task_status arguments: " + err.Error())
-	}
-	if strings.TrimSpace(args.ID) == "" {
-		return toolError("task_status: id is required")
+	args, err := task.ParseStatusArgs([]byte(argsJSON))
+	if err != nil {
+		return toolError(err.Error())
 	}
 	snap, ok := h.Mgr.Status(args.ID)
 	if !ok {
@@ -232,11 +108,9 @@ func (h *Host) execStatus(argsJSON string) (string, string, string, error) {
 }
 
 func (h *Host) execWait(ctx context.Context, argsJSON string) (string, string, string, error) {
-	var args idArgs
-	if strings.TrimSpace(argsJSON) != "" && argsJSON != "{}" {
-		if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-			return toolError("invalid task_wait arguments: " + err.Error())
-		}
+	args, err := task.ParseWaitArgs([]byte(argsJSON))
+	if err != nil {
+		return toolError(err.Error())
 	}
 	if strings.TrimSpace(args.ID) != "" {
 		res, err := h.Mgr.Wait(ctx, args.ID)
@@ -256,21 +130,19 @@ func (h *Host) execWait(ctx context.Context, argsJSON string) (string, string, s
 }
 
 func (h *Host) execCancel(argsJSON string) (string, string, string, error) {
-	var args idArgs
-	if strings.TrimSpace(argsJSON) != "" && argsJSON != "{}" {
-		if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-			return toolError("invalid task_cancel arguments: " + err.Error())
-		}
+	args, err := task.ParseCancelArgs([]byte(argsJSON))
+	if err != nil {
+		return toolError(err.Error())
 	}
-	if strings.TrimSpace(args.ID) != "" {
-		snap, err := h.Mgr.Cancel(args.ID)
-		if err != nil {
-			return toolError(err.Error())
-		}
-		return toolJSON(snap, "completed")
+	if args.CancelAll || strings.TrimSpace(args.ID) == "" {
+		n := h.Mgr.CancelAll(h.ParentSessionID)
+		return toolJSON(map[string]any{"cancelled": n}, "completed")
 	}
-	n := h.Mgr.CancelAll(h.ParentSessionID)
-	return toolJSON(map[string]any{"cancelled": n}, "completed")
+	snap, err := h.Mgr.Cancel(args.ID)
+	if err != nil {
+		return toolError(err.Error())
+	}
+	return toolJSON(snap, "completed")
 }
 
 func toolJSON(v any, status string) (string, string, string, error) {
