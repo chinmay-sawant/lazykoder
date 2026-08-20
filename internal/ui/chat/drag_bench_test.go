@@ -30,7 +30,7 @@ func BenchmarkDragMotion(b *testing.B) {
 			press, _ := m.Update(tea.MouseClickMsg(tea.Mouse{X: 0, Y: top, Button: tea.MouseLeft}))
 			m = press.(Model)
 			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
+			for i := 0; b.Loop(); i++ {
 				y := top + (i % 10)
 				motion, _ := m.Update(tea.MouseMotionMsg(tea.Mouse{X: 0, Y: y, Button: tea.MouseLeft}))
 				m = motion.(Model)
@@ -45,7 +45,7 @@ func BenchmarkDragView(b *testing.B) {
 	press, _ := m.Update(tea.MouseClickMsg(tea.Mouse{X: 0, Y: top, Button: tea.MouseLeft}))
 	m = press.(Model)
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for i := 0; b.Loop(); i++ {
 		motion, _ := m.Update(tea.MouseMotionMsg(tea.Mouse{X: 0, Y: top + (i % 10), Button: tea.MouseLeft}))
 		m = motion.(Model)
 		_ = m.View()

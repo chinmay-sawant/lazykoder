@@ -31,8 +31,6 @@ import (
 const confirmQueueSize = 32
 
 const (
-	idleHint      = "enter to send  •  q to quit"
-	busyHint      = "sending..."
 	defaultWidth  = 80
 	defaultHeight = 24
 	cardWidthPct  = 80
@@ -47,9 +45,6 @@ const (
 	// below these sizes, and overlay panes keep a minimum width.
 	minPaneWidth  = 20
 	minPaneHeight = 3
-	minLeftPane   = 4
-	maxLeftPane   = 24
-	minRightPane  = 8
 	pickerMaxRows = 16
 
 	// centerDiv splits the leftover space for centering the overlay card.

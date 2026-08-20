@@ -87,7 +87,9 @@ func (m Model) slashView() string {
 			body.WriteString("\n")
 			if compact && len(groupItems) == 1 {
 				cmd := groupItems[0]
-				body.WriteString(groupSt.Render(g.title) + "  " + slashCommandRow(cmd, cmd.name == selName, compact, cardW, nameW, sel, nameSt, descSt))
+				body.WriteString(groupSt.Render(g.title))
+				body.WriteString("  ")
+				body.WriteString(slashCommandRow(cmd, cmd.name == selName, compact, cardW, nameW, sel, nameSt, descSt))
 				continue
 			}
 			body.WriteString(groupSt.Render(g.title))

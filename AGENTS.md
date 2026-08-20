@@ -15,6 +15,18 @@ directory. Small repo, small team: **one agent at a time, no subagent waves
 until the codebase grows**.
 Module: `github.com/chinmay-sawant/lazykoder`. GitHub repo: `https://github.com/chinmay-sawant/lazykoder`. Default branch: `master`.
 
+## Todo protocol - response-only (mandatory)
+
+Every agent must manage todos live in the API response, not on disk. This is the first action on any task, before any reads, edits, or other tool calls.
+
+1. **Create todos in the response via API before any work.** On receiving any task (feature, fix, docs, question with multi-step work), immediately call the todo API (`todowrite` or equivalent response-todos tool) to publish the plan as todos. Do not start work until the todo list is visible in the API response.
+2. **Show current todos in every response.** Each assistant turn must render the current todo list with status markers (`pending`, `in_progress`, `completed`, `cancelled`) and clearly highlight which item is `in_progress`. The todo list is the live progress bar for the user.
+3. **Do not store todos on disk.** Do not create `TODO.md`, `todos.json`, `plans/todos.md`, or any other file to track todos. Do not use git-tracked or gitignored files for todos. Todos live only in the API response state.
+4. **Keep response todos updated as you go.** When you start an item, mark it `in_progress` via the API. When you finish it, mark it `completed` before moving to the next. If scope changes, update the list immediately via the API.
+5. **Completion requires todos to show done.** A task is done only when all todos show `completed` in the response and you have sent a final summary message stating what shipped.
+
+If the todo API is unavailable, state that in the response and list todos inline as a fallback - still do not write a file.
+
 ## Golden rules (from the gowkhtmltopdf audit)
 
 1. **No git commands without explicit permission.** Never run `git add`,

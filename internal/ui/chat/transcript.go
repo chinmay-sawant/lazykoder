@@ -66,7 +66,6 @@ const (
 	thinkingLabel    = "thinking"
 	maxToolTitle     = 72
 	workBracket      = "["
-	workBracketClose = "]"
 	workRail         = "│"
 	workRailCols     = 2
 	streamCursor     = "▌"

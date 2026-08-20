@@ -819,7 +819,9 @@ func (m Model) helpOverlay() string {
 				right = format(rows[i+mid], colW)
 			}
 			pad := max(1, innerW-lipgloss.Width(left)-lipgloss.Width(right))
-			body.WriteString(left + strings.Repeat(" ", pad) + right)
+			body.WriteString(left)
+			body.WriteString(strings.Repeat(" ", pad))
+			body.WriteString(right)
 		}
 	} else {
 		for i, row := range rows {
@@ -1127,7 +1129,8 @@ func withScrollbar(v string, width, height int, percent float64, overflow bool) 
 			b.WriteString("\n")
 		}
 		if w := width - lipgloss.Width(line); w > 0 {
-			b.WriteString(line + strings.Repeat(" ", w))
+			b.WriteString(line)
+			b.WriteString(strings.Repeat(" ", w))
 		} else {
 			b.WriteString(line)
 		}
