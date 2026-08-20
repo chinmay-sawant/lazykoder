@@ -63,6 +63,9 @@ const (
 	promptUndoLimit = 32
 	// copyNoticeDuration controls how long the clipboard confirmation stays visible.
 	copyNoticeDuration = 2 * time.Second
+	// projectInstructionsDuration controls how long the AGENTS.md notice stays
+	// on the alert row before the rotating tips take over.
+	projectInstructionsDuration = 5 * time.Second
 	// jumpDownArrow is the faint centered icon on the alert row above the
 	// input box that returns the transcript to the latest output.
 	jumpDownArrow = "▼"
@@ -353,6 +356,8 @@ type textSelection struct {
 
 type copyNoticeMsg struct{}
 
+type projectInstructionsMsg struct{}
+
 type tpsSample struct {
 	at     time.Time
 	tokens int64
@@ -462,7 +467,11 @@ func New(opts Options) Model {
 
 // Init starts the fetch and watcher commands.
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(m.confirmWatch(), m.askWatch(), m.fetchModels, tipsTick())
+	cmds := []tea.Cmd{m.confirmWatch(), m.askWatch(), m.fetchModels, tipsTick()}
+	if m.projectInstructionsNotice != "" {
+		cmds = append(cmds, clearProjectInstructionsNotice())
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m Model) fetchModels() tea.Msg {
@@ -624,6 +633,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case copyNoticeMsg:
 		m.copyNotice = ""
+		return m, nil
+	case projectInstructionsMsg:
+		m.projectInstructionsNotice = ""
 		return m, nil
 	case userNavTipExpireMsg:
 		if msg.gen != m.userNavTipGen {
@@ -1099,6 +1111,10 @@ func pulseTick() tea.Cmd {
 // tipsTick advances the idle tip rotation every tips.Rotation.
 func tipsTick() tea.Cmd {
 	return tea.Tick(tips.Rotation, func(time.Time) tea.Msg { return tipsTickMsg{} })
+}
+
+func clearProjectInstructionsNotice() tea.Cmd {
+	return tea.Tick(projectInstructionsDuration, func(time.Time) tea.Msg { return projectInstructionsMsg{} })
 }
 
 func (m Model) pulseT() float64 {
