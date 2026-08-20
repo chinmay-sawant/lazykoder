@@ -3,8 +3,10 @@
 Every launch opens a blank session instead of auto-resuming the latest run.
 Past sessions stay in SQLite and load via `/resume` or `ctrl+s`. Confirmed
 quit prints the lazykoder wordmark plus `lk <session_id>` and a resume hint
-after the alt screen exits. `AGENTS.md` now requires local knowledge-base
-updates with plan work, KB-then-code answers, and `/unslop` on prose.
+after the alt screen exits. Workdir `AGENTS.md` is prepended as a system
+message on each chat model call (wire-only), with a TUI notice when loaded.
+Repo `AGENTS.md` also requires local knowledge-base updates, KB-then-code
+answers, and `/unslop` on prose.
 
 ## Motivation / context
 
@@ -27,9 +29,16 @@ updates with plan work, KB-then-code answers, and `/unslop` on prose.
 - Recover from unexpected tool panics so one bad call cannot crash the process
 - Fill empty tool call IDs before sending chat requests
 
-### Agent conventions
+### In-app AGENTS.md context
 
-- `AGENTS.md`: keep gitignored `knowledge-base/` current with plan work
+- Load workdir `AGENTS.md` (fallback `agents.md`) once per agent
+- Prepend as `system` on every chat `callModel`; not stored in SQLite
+- TUI notice: `project instructions: AGENTS.md`
+- Compaction summarizer path unchanged (no AGENTS inject)
+
+### Agent conventions (repo AGENTS.md)
+
+- Keep gitignored `knowledge-base/` current with plan work
 - Answer from KB first, always validate against live code
 - Run `/unslop` before plans, docs, KB pages, and user-facing replies
 
@@ -37,10 +46,10 @@ updates with plan work, KB-then-code answers, and `/unslop` on prose.
 
 | Area | Impact |
 |------|--------|
-| **Performance** | None material |
-| **Memory** | None material |
-| **Behavior / correctness** | Launch no longer auto-resumes; quit prints session id for `/resume` |
-| **API / CLI** | Console quit banner after TUI exit |
+| **Performance** | Tiny extra tokens when AGENTS.md is present |
+| **Memory** | Cached AGENTS.md text per Agent |
+| **Behavior / correctness** | Launch no longer auto-resumes; quit prints session id; model sees workdir AGENTS.md |
+| **API / CLI** | Console quit banner after TUI exit; system role on chat requests |
 | **Dependencies** | None |
 | **Binary size / build time** | Negligible |
 
