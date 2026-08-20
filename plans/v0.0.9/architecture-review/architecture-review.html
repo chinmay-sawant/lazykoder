@@ -1,0 +1,469 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Architecture review for lazykoder</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script type="module">
+    import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+    mermaid.initialize({ startOnLoad: true, theme: "neutral", securityLevel: "loose" });
+  </script>
+  <style>
+    .seam { stroke-dasharray: 4 4; }
+    .leak { stroke: #dc2626; }
+    .deep { background: linear-gradient(135deg, #0f172a, #1e293b); }
+    .mass-iface { background: #fef3c7; border: 2px solid #d97706; }
+    .mass-impl { background: #e2e8f0; border: 2px solid #64748b; }
+    .mass-deep-iface { background: #d1fae5; border: 2px solid #059669; height: 2rem; }
+    .mass-deep-impl { background: #0f172a; color: #e2e8f0; border: 2px solid #0f172a; }
+  </style>
+</head>
+<body class="bg-stone-50 text-slate-900 font-sans">
+  <main class="max-w-5xl mx-auto px-6 py-12 space-y-12">
+    <header class="space-y-4">
+      <p class="text-xs uppercase tracking-wider text-slate-500">lazykoder · HEAD a8567b6 · 2026-08-20 · 5 explore agents</p>
+      <h1 class="font-serif text-4xl tracking-tight">Architecture review</h1>
+      <p class="text-slate-600 max-w-3xl">Deepening opportunities from recent hotspots: <code class="text-sm bg-stone-200 px-1 rounded">ui/chat</code>, <code class="text-sm bg-stone-200 px-1 rounded">agent</code>, <code class="text-sm bg-stone-200 px-1 rounded">subagent</code>, <code class="text-sm bg-stone-200 px-1 rounded">db</code>, provider. Vocabulary: module, interface, implementation, depth, seam, adapter, leverage, locality.</p>
+      <div class="flex flex-wrap gap-4 text-xs text-slate-600 border border-slate-200 bg-white rounded-lg p-4">
+        <div class="flex items-center gap-2"><span class="inline-block w-4 h-4 border-2 border-slate-800 bg-white"></span> module</div>
+        <div class="flex items-center gap-2"><span class="inline-block w-8 border-t-2 border-dashed border-slate-500"></span> seam</div>
+        <div class="flex items-center gap-2"><span class="inline-block w-8 border-t-2 border-red-600"></span> leakage</div>
+        <div class="flex items-center gap-2"><span class="inline-block w-4 h-4 bg-slate-900"></span> deep module</div>
+        <div class="flex items-center gap-2"><span class="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-medium">Strong</span></div>
+        <div class="flex items-center gap-2"><span class="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 font-medium">Worth exploring</span></div>
+        <div class="flex items-center gap-2"><span class="px-2 py-0.5 rounded-full bg-slate-200 text-slate-700 font-medium">Speculative</span></div>
+        <div class="flex items-center gap-2"><span class="px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-800 font-medium tabular-nums">n/10</span> priority for deepening now</div>
+      </div>
+      <div class="rounded-lg border border-slate-200 bg-white overflow-hidden">
+        <table class="w-full text-sm">
+          <thead class="bg-stone-100 text-left text-xs uppercase tracking-wider text-slate-500">
+            <tr><th class="px-4 py-2">#</th><th class="px-4 py-2">Candidate</th><th class="px-4 py-2">Strength</th><th class="px-4 py-2">Rating</th></tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            <tr><td class="px-4 py-2 font-mono text-xs">C1</td><td class="px-4 py-2"><a href="#c1" class="underline">Compaction / fill ownership</a></td><td class="px-4 py-2">Strong</td><td class="px-4 py-2 font-semibold tabular-nums text-indigo-800">9/10</td></tr>
+            <tr><td class="px-4 py-2 font-mono text-xs">C2</td><td class="px-4 py-2"><a href="#c2" class="underline">Turn-runtime from chat.Model</a></td><td class="px-4 py-2">Strong</td><td class="px-4 py-2 font-semibold tabular-nums text-indigo-800">9/10</td></tr>
+            <tr><td class="px-4 py-2 font-mono text-xs">C3</td><td class="px-4 py-2"><a href="#c3" class="underline">Session graph load</a></td><td class="px-4 py-2">Strong</td><td class="px-4 py-2 font-semibold tabular-nums text-indigo-800">8/10</td></tr>
+            <tr><td class="px-4 py-2 font-mono text-xs">C4</td><td class="px-4 py-2"><a href="#c4" class="underline">Exclusive TUI mode ownership</a></td><td class="px-4 py-2">Strong</td><td class="px-4 py-2 font-semibold tabular-nums text-indigo-800">8/10</td></tr>
+            <tr><td class="px-4 py-2 font-mono text-xs">C5</td><td class="px-4 py-2"><a href="#c5" class="underline">Turn loop vs Tool dispatch</a></td><td class="px-4 py-2">Strong</td><td class="px-4 py-2 font-semibold tabular-nums text-indigo-800">8/10</td></tr>
+            <tr><td class="px-4 py-2 font-mono text-xs">C7</td><td class="px-4 py-2"><a href="#c7" class="underline">Wire or retire tools/task</a></td><td class="px-4 py-2">Strong</td><td class="px-4 py-2 font-semibold tabular-nums text-indigo-800">7/10</td></tr>
+            <tr><td class="px-4 py-2 font-mono text-xs">C6</td><td class="px-4 py-2"><a href="#c6" class="underline">Subagent drawer projection</a></td><td class="px-4 py-2">Worth exploring</td><td class="px-4 py-2 font-semibold tabular-nums text-indigo-800">7/10</td></tr>
+            <tr><td class="px-4 py-2 font-mono text-xs">C8</td><td class="px-4 py-2"><a href="#c8" class="underline">Layout snapshot</a></td><td class="px-4 py-2">Worth exploring</td><td class="px-4 py-2 font-semibold tabular-nums text-indigo-800">6/10</td></tr>
+            <tr><td class="px-4 py-2 font-mono text-xs">C9</td><td class="px-4 py-2"><a href="#c9" class="underline">Event without db.Part</a></td><td class="px-4 py-2">Speculative</td><td class="px-4 py-2 font-semibold tabular-nums text-indigo-800">4/10</td></tr>
+          </tbody>
+        </table>
+        <p class="px-4 py-2 text-xs text-slate-500 border-t border-slate-100">Rating = leverage × proven friction × low risk of fighting existing decisions. Not code quality of the current module.</p>
+      </div>
+      <p class="text-sm text-slate-500">Hot file sizes: transcript.go 1514 · subagents.go 1490 · chat.go 1354 · agent.go 1000 · chat_test.go 2860. No <code>docs/adr/</code>; constraints live in knowledge-base decisions + AGENTS.md.</p>
+    </header>
+
+    <section id="candidates" class="space-y-10">
+
+      <!-- C1 -->
+      <article id="c1" class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-5">
+        <div class="flex flex-wrap items-start justify-between gap-3">
+          <h2 class="font-serif text-2xl">One home for Compaction and fill policy</h2>
+          <div class="flex gap-2 flex-wrap">
+            <span class="px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-900 text-xs font-semibold tabular-nums">9/10</span>
+            <span class="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-xs font-medium">Strong</span>
+            <span class="px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 text-xs">in-process</span>
+          </div>
+        </div>
+        <p class="font-mono text-xs text-slate-500 leading-relaxed">internal/agent/compact.go · compact_run.go · history.go · internal/settings/settings.go · internal/ui/chat/transcript.go · picker.go · keys.go · internal/subagent/runner.go</p>
+
+        <div class="grid md:grid-cols-2 gap-4">
+          <div class="rounded-lg border border-slate-200 p-3 space-y-2">
+            <p class="text-xs uppercase tracking-wider text-slate-500">Before</p>
+            <pre class="mermaid">flowchart TB
+              S[settings defaults 80/15k] --> UI[TUI estimateTokens chars/4]
+              A[agent Defaults 80/15k] --> MC[maybeCompact]
+              UI --> Hint[refreshCompactHint]
+              Hint -.leak.-> MC
+              Child[child CompactAuto true] --> Dead[no ContextWindow]
+              Ser[serializeEntries] --> Hard[hardcodes DefaultKeepTokens]
+              classDef leak stroke:#dc2626,stroke-width:2px;
+              class Hint,MC,Dead,Hard leak
+            </pre>
+          </div>
+          <div class="rounded-lg border border-emerald-200 p-3 space-y-2">
+            <p class="text-xs uppercase tracking-wider text-emerald-700">After</p>
+            <pre class="mermaid">flowchart TB
+              Set[settings knobs only] --> Comp[Compaction module]
+              Comp --> Need[NeedsCompact / estimate]
+              Comp --> Run[checkpoint + keep_tokens]
+              Comp --> Hist[buildHistory apply]
+              UI2[TUI] --> Need
+              Child2[child Agent] --> Comp
+              classDef deep fill:#0f172a,color:#e2e8f0,stroke:#0f172a;
+              class Comp deep
+            </pre>
+          </div>
+        </div>
+
+        <div class="grid md:grid-cols-3 gap-4 text-sm">
+          <div><p class="text-xs uppercase tracking-wider text-slate-500 mb-1">Problem</p><p>Fill math and Compaction thresholds live in agent, settings, and the TUI at once. Defaults are duplicated. <code>serializeEntries</code> ignores <code>KeepTokens</code>. Child auto-compact is a no-op.</p></div>
+          <div><p class="text-xs uppercase tracking-wider text-slate-500 mb-1">Solution</p><p>One Compaction module owns estimate, threshold, reason, envelope, and history apply. Settings store knobs. UI paints from exported helpers.</p></div>
+          <div><p class="text-xs uppercase tracking-wider text-slate-500 mb-1">Wins</p>
+            <ul class="list-disc pl-4 space-y-1 text-slate-700">
+              <li>locality: one threshold home</li>
+              <li>leverage: UI + Agent share NeedsCompact</li>
+              <li>keep_tokens bug dies once</li>
+              <li>child Options match reality</li>
+              <li>ForceCompact wired or deleted</li>
+            </ul>
+          </div>
+        </div>
+      </article>
+
+      <!-- C2 -->
+      <article id="c2" class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-5">
+        <div class="flex flex-wrap items-start justify-between gap-3">
+          <h2 class="font-serif text-2xl">Extract turn-runtime from chat.Model</h2>
+          <div class="flex gap-2 flex-wrap">
+            <span class="px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-900 text-xs font-semibold tabular-nums">9/10</span>
+            <span class="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-xs font-medium">Strong</span>
+            <span class="px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 text-xs">ports &amp; adapters</span>
+          </div>
+        </div>
+        <p class="font-mono text-xs text-slate-500 leading-relaxed">main.go · internal/ui/chat/chat.go · keys.go · settings.go · internal/agent · internal/subagent · confirm/ask hooks</p>
+
+        <div class="grid md:grid-cols-2 gap-4">
+          <div class="rounded-lg border border-slate-200 p-4">
+            <p class="text-xs uppercase tracking-wider text-slate-500 mb-3">Before · mass</p>
+            <div class="space-y-2">
+              <div class="mass-iface rounded p-2 text-xs">interface: Model fields (~165) + agentOptions + submit/runCompact/resume</div>
+              <div class="mass-impl rounded p-3 text-xs h-28">implementation: Manager boot, Host, Confirm/Ask channels, Agent.New, pulse, busy, rebuildSubMgr</div>
+              <p class="text-[10px] text-amber-700">shallow: interface nearly as wide as the wiring pile</p>
+            </div>
+          </div>
+          <div class="rounded-lg border border-emerald-200 p-4">
+            <p class="text-xs uppercase tracking-wider text-emerald-700 mb-3">After · mass</p>
+            <div class="space-y-2">
+              <div class="mass-deep-iface rounded p-2 text-xs text-emerald-900">interface: start turn / compact / continue / cancel / watch</div>
+              <div class="mass-deep-impl rounded p-3 text-xs h-28">implementation: Manager lifecycle, Host, gate adapter, Agent options, event pump</div>
+              <p class="text-[10px] text-emerald-700">deep: TUI only paints and routes keys</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid md:grid-cols-3 gap-4 text-sm">
+          <div><p class="text-xs uppercase tracking-wider text-slate-500 mb-1">Problem</p><p>chat is the composition root and the view. <code>submit</code>, <code>runCompact</code>, and <code>resumeAfterLimit</code> re-copy Agent wiring. Settings rebuild Manager mid-TUI.</p></div>
+          <div><p class="text-xs uppercase tracking-wider text-slate-500 mb-1">Solution</p><p>A turn-runtime module owns Manager, Host, Confirm/Ask adapters, and Agent construction. Chat calls a narrow seam via tea.Cmd.</p></div>
+          <div><p class="text-xs uppercase tracking-wider text-slate-500 mb-1">Wins</p>
+            <ul class="list-disc pl-4 space-y-1">
+              <li>locality: one boot ritual</li>
+              <li>leverage: tests fake runtime</li>
+              <li>chat_test.go can shed wiring cases</li>
+              <li>gate adapter reusable for children</li>
+            </ul>
+          </div>
+        </div>
+        <div class="rounded-md bg-amber-50 border border-amber-200 text-amber-900 text-sm p-3">Constraint: keep Update pure; side effects stay in tea.Cmd. Do not invent a multi-provider interface (decisions.md: OpenCode Go only).</div>
+      </article>
+
+      <!-- C3 -->
+      <article id="c3" class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-5">
+        <div class="flex flex-wrap items-start justify-between gap-3">
+          <h2 class="font-serif text-2xl">Session graph load in one place</h2>
+          <div class="flex gap-2 flex-wrap">
+            <span class="px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-900 text-xs font-semibold tabular-nums">8/10</span>
+            <span class="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-xs font-medium">Strong</span>
+            <span class="px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 text-xs">local-substitutable</span>
+          </div>
+        </div>
+        <p class="font-mono text-xs text-slate-500 leading-relaxed">internal/db/queries.go · internal/agent/history.go · summary.go · internal/ui/chat/transcript.go · subagents.go · files.go</p>
+
+        <div class="grid md:grid-cols-2 gap-4">
+          <div class="rounded-lg border border-slate-200 p-3">
+            <p class="text-xs uppercase tracking-wider text-slate-500 mb-2">Before</p>
+            <pre class="mermaid">flowchart LR
+              Store[Store CRUD] --> A[sessionEntries]
+              Store --> R[replay]
+              Store --> U[sessionUsageOf]
+              Store --> L[LastAssistantText]
+              Store --> S[loadSubagentLogItems]
+              A -.leak.-> M[N+1 ListParts]
+              R -.leak.-> M
+              classDef leak stroke:#dc2626,stroke-width:2px;
+              class A,R,M leak
+            </pre>
+          </div>
+          <div class="rounded-lg border border-emerald-200 p-3">
+            <p class="text-xs uppercase tracking-wider text-emerald-700 mb-2">After</p>
+            <pre class="mermaid">flowchart LR
+              Store2[Store] --> Graph[Session graph module]
+              Graph --> Hist[buildHistory]
+              Graph --> Replay[main + child transcript]
+              Graph --> Usage[usage / cost]
+              classDef deep fill:#0f172a,color:#e2e8f0;
+              class Graph deep
+            </pre>
+          </div>
+        </div>
+
+        <div class="grid md:grid-cols-3 gap-4 text-sm">
+          <div><p class="text-xs uppercase tracking-wider text-slate-500 mb-1">Problem</p><p>Messages, parts, and tool_calls are reassembled in Agent and UI with the same N+1 loop. Resume and Subagent log diverge on collapse defaults.</p></div>
+          <div><p class="text-xs uppercase tracking-wider text-slate-500 mb-1">Solution</p><p>One Session graph load (entries + tool map, optional usage). Transcript projection takes knobs; paint stays in chat.</p></div>
+          <div><p class="text-xs uppercase tracking-wider text-slate-500 mb-1">Wins</p>
+            <ul class="list-disc pl-4 space-y-1">
+              <li>locality: join lives once</li>
+              <li>leverage: resume, compact, meters</li>
+              <li>tests hit graph without View</li>
+              <li>Store deepens toward Session outcomes</li>
+            </ul>
+          </div>
+        </div>
+      </article>
+
+      <!-- C4 -->
+      <article id="c4" class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-5">
+        <div class="flex flex-wrap items-start justify-between gap-3">
+          <h2 class="font-serif text-2xl">Exclusive TUI mode ownership</h2>
+          <div class="flex gap-2 flex-wrap">
+            <span class="px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-900 text-xs font-semibold tabular-nums">8/10</span>
+            <span class="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-xs font-medium">Strong</span>
+            <span class="px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 text-xs">in-process</span>
+          </div>
+        </div>
+        <p class="font-mono text-xs text-slate-500 leading-relaxed">chat.go Update · view.go frame · keys.go · mouse.go · status/settings/sessions/picker/slash/subagents open helpers</p>
+
+        <div class="grid md:grid-cols-2 gap-4">
+          <div class="rounded-lg border border-slate-200 p-4 space-y-1">
+            <p class="text-xs uppercase tracking-wider text-slate-500 mb-2">Before · cross-section</p>
+            <div class="h-8 border-l-4 border-amber-400 bg-amber-50 px-2 text-xs flex items-center">confirmMode</div>
+            <div class="h-8 border-l-4 border-amber-400 bg-amber-50 px-2 text-xs flex items-center">askMode</div>
+            <div class="h-8 border-l-4 border-amber-400 bg-amber-50 px-2 text-xs flex items-center">settingsMode</div>
+            <div class="h-8 border-l-4 border-amber-400 bg-amber-50 px-2 text-xs flex items-center">statusMode · picker · slash · sessions · subs · usage · help</div>
+            <p class="text-[10px] text-slate-500 pt-1">each open* clears siblings by hand; Update + mouse re-enumerate</p>
+          </div>
+          <div class="rounded-lg border border-emerald-200 p-4">
+            <p class="text-xs uppercase tracking-wider text-emerald-700 mb-2">After · cross-section</p>
+            <div class="h-24 border-l-4 border-emerald-600 bg-slate-900 text-stone-100 px-3 text-xs flex items-center rounded-r">focus module: one exclusive screen/overlay · open/close · key + mouse priority</div>
+            <p class="text-[10px] text-emerald-700 pt-2">root Model stays; cascade stops rediscovering itself</p>
+          </div>
+        </div>
+
+        <div class="grid md:grid-cols-3 gap-4 text-sm">
+          <div><p class="text-xs uppercase tracking-wider text-slate-500 mb-1">Problem</p><p>~12 mode bools. Miss one clear and key routing disagrees with mouse priority.</p></div>
+          <div><p class="text-xs uppercase tracking-wider text-slate-500 mb-1">Solution</p><p>Own exclusive focus in one place shared by open/close, Update, View, and mouse.</p></div>
+          <div><p class="text-xs uppercase tracking-wider text-slate-500 mb-1">Wins</p>
+            <ul class="list-disc pl-4 space-y-1">
+              <li>locality: mutual exclusion once</li>
+              <li>safer later file splits</li>
+              <li>fewer mode-stack bugs</li>
+            </ul>
+          </div>
+        </div>
+      </article>
+
+      <!-- C5 -->
+      <article id="c5" class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-5">
+        <div class="flex flex-wrap items-start justify-between gap-3">
+          <h2 class="font-serif text-2xl">Split Agent turn loop from Tool dispatch</h2>
+          <div class="flex gap-2 flex-wrap">
+            <span class="px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-900 text-xs font-semibold tabular-nums">8/10</span>
+            <span class="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-xs font-medium">Strong</span>
+            <span class="px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 text-xs">in-process</span>
+          </div>
+        </div>
+        <p class="font-mono text-xs text-slate-500 leading-relaxed">internal/agent/agent.go · stream.go · tools_registry.go · policy · tools/bash · host.go</p>
+
+        <div class="grid md:grid-cols-2 gap-4">
+          <div class="rounded-lg border border-slate-200 p-3">
+            <p class="text-xs uppercase tracking-wider text-slate-500 mb-2">Before</p>
+            <pre class="mermaid">flowchart TB
+              Send[Send/Continue/Compact] --> Steps[runSteps/stepOnce]
+              Steps --> Tools[executeTool switch]
+              Tools --> E1[execBash]
+              Tools --> E2[execRead...]
+              Tools --> E3[execTask]
+              Reg[tools_registry] -.ads only.-> Steps
+              classDef leak stroke:#dc2626,stroke-width:2px;
+              class Tools,E1 leak
+            </pre>
+          </div>
+          <div class="rounded-lg border border-emerald-200 p-3">
+            <p class="text-xs uppercase tracking-wider text-emerald-700 mb-2">After</p>
+            <pre class="mermaid">flowchart TB
+              Loop[turn orchestration] --> Disp[name to runner]
+              Disp --> Bash[bash + Policy gate]
+              Disp --> Base[read/grep/write/edit...]
+              Disp --> Task[SubagentHost]
+              classDef deep fill:#0f172a,color:#e2e8f0;
+              class Loop,Disp deep
+            </pre>
+          </div>
+        </div>
+
+        <div class="grid md:grid-cols-3 gap-4 text-sm">
+          <div><p class="text-xs uppercase tracking-wider text-slate-500 mb-1">Problem</p><p>stepOnce is deep; agent.go is a shallow kitchen sink. Specs in registry, runners in a growing switch, Policy Deny produced in three callers.</p></div>
+          <div><p class="text-xs uppercase tracking-wider text-slate-500 mb-1">Solution</p><p>File-split by responsibility first: turn loop vs tool dispatch. Registry maps name→run. One Allow/Ask/Deny decision path into bash.Runner.</p></div>
+          <div><p class="text-xs uppercase tracking-wider text-slate-500 mb-1">Wins</p>
+            <ul class="list-disc pl-4 space-y-1">
+              <li>locality: add a Tool in one place</li>
+              <li>deletion test: stub tools, loop still runs</li>
+              <li>safety gate concentrates</li>
+              <li>agent.go under the 2k line wall</li>
+            </ul>
+          </div>
+        </div>
+      </article>
+
+      <!-- C6 -->
+      <article id="c6" class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-5">
+        <div class="flex flex-wrap items-start justify-between gap-3">
+          <h2 class="font-serif text-2xl">Subagent drawer projects Manager (and fix depth policy)</h2>
+          <div class="flex gap-2 flex-wrap">
+            <span class="px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-900 text-xs font-semibold tabular-nums">7/10</span>
+            <span class="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 text-xs font-medium">Worth exploring</span>
+            <span class="px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 text-xs">local-substitutable</span>
+          </div>
+        </div>
+        <p class="font-mono text-xs text-slate-500 leading-relaxed">internal/ui/chat/subagents.go · internal/subagent/manager.go · runner.go · config*.go · settings.go</p>
+
+        <div class="grid md:grid-cols-2 gap-4">
+          <div class="rounded-lg border border-slate-200 p-3">
+            <p class="text-xs uppercase tracking-wider text-slate-500 mb-2">Before</p>
+            <pre class="mermaid">sequenceDiagram
+              participant Pulse
+              participant Drawer
+              participant Mgr as Manager
+              participant Store
+              Pulse->>Drawer: refreshSubagentDrawerLive
+              Drawer->>Mgr: List
+              Drawer->>Store: ListChildSessions
+              Note over Drawer: invent completed / success / done
+              Note over Mgr: MaxDepth stored, unread
+              Note over Drawer: Host nil enforces depth 1
+            </pre>
+          </div>
+          <div class="rounded-lg border border-emerald-200 p-3">
+            <p class="text-xs uppercase tracking-wider text-emerald-700 mb-2">After</p>
+            <pre class="mermaid">sequenceDiagram
+              participant Pulse
+              participant Proj as projection
+              participant Mgr as Manager
+              Pulse->>Proj: refresh
+              Proj->>Mgr: List + terminal helpers
+              Proj-->>Pulse: stable rows
+              Note over Mgr: MaxDepth drives may-spawn
+            </pre>
+          </div>
+        </div>
+
+        <div class="grid md:grid-cols-3 gap-4 text-sm">
+          <div><p class="text-xs uppercase tracking-wider text-slate-500 mb-1">Problem</p><p>Drawer reimplements terminal status and merges orphans with a second vocabulary. Config.MaxDepth is mapped then never read; Host:nil is the real rule while settings allow up to 3.</p></div>
+          <div><p class="text-xs uppercase tracking-wider text-slate-500 mb-1">Solution</p><p>Projection over Manager.List. Honor MaxDepth at job construction or stop advertising it. Keep Host:nil as product policy until nesting ships.</p></div>
+          <div><p class="text-xs uppercase tracking-wider text-slate-500 mb-1">Wins</p>
+            <ul class="list-disc pl-4 space-y-1">
+              <li>locality: one lifecycle</li>
+              <li>settings stop lying</li>
+              <li>pulse stops knowing drawer guts</li>
+            </ul>
+          </div>
+        </div>
+      </article>
+
+      <!-- C7 -->
+      <article id="c7" class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-5">
+        <div class="flex flex-wrap items-start justify-between gap-3">
+          <h2 class="font-serif text-2xl">Wire or retire tools/task</h2>
+          <div class="flex gap-2 flex-wrap">
+            <span class="px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-900 text-xs font-semibold tabular-nums">7/10</span>
+            <span class="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-xs font-medium">Strong</span>
+            <span class="px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 text-xs">in-process</span>
+          </div>
+        </div>
+        <p class="font-mono text-xs text-slate-500 leading-relaxed">internal/tools/task/task.go · internal/subagent/host.go · internal/agent/host.go · tools_registry IsTaskTool*</p>
+
+        <div class="grid md:grid-cols-2 gap-4 text-sm">
+          <div class="rounded-lg border border-slate-200 p-4 space-y-2">
+            <p class="text-xs uppercase tracking-wider text-slate-500">Before</p>
+            <div class="border-2 border-dashed border-red-400 rounded p-3 text-xs">tools/task Specs + args · <strong>zero production importers</strong></div>
+            <div class="border-2 border-slate-800 rounded p-3 text-xs">Host.Specs + local taskArgs · live ads</div>
+            <p class="text-[10px] text-red-700">deletion test: delete tools/task, production still builds</p>
+          </div>
+          <div class="rounded-lg border border-emerald-200 p-4 space-y-2">
+            <p class="text-xs uppercase tracking-wider text-emerald-700">After</p>
+            <div class="deep text-stone-100 rounded p-4 text-xs">one Task schema home · Host adapts it · agent.SubagentHost stays the seam</div>
+            <p class="text-[10px] text-emerald-700">or retire the orphan package and document Host as schema owner</p>
+          </div>
+        </div>
+
+        <div class="grid md:grid-cols-3 gap-4 text-sm">
+          <div><p class="text-xs uppercase tracking-wider text-slate-500 mb-1">Problem</p><p>Dual public story. Host omits fields tools/task still documents. Schema drift is free.</p></div>
+          <div><p class="text-xs uppercase tracking-wider text-slate-500 mb-1">Solution</p><p>Single home: Host calls task package, or absorb and delete the unused package. Collapse IsTaskTool helpers.</p></div>
+          <div><p class="text-xs uppercase tracking-wider text-slate-500 mb-1">Wins</p>
+            <ul class="list-disc pl-4 space-y-1">
+              <li>leverage: one Specs source</li>
+              <li>AI finds the real ads</li>
+              <li>no shallow duplicate module</li>
+            </ul>
+          </div>
+        </div>
+      </article>
+
+      <!-- C8 -->
+      <article id="c8" class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-5">
+        <div class="flex flex-wrap items-start justify-between gap-3">
+          <h2 class="font-serif text-2xl">Layout snapshot for paint and hit-test</h2>
+          <div class="flex gap-2 flex-wrap">
+            <span class="px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-900 text-xs font-semibold tabular-nums">6/10</span>
+            <span class="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 text-xs font-medium">Worth exploring</span>
+            <span class="px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 text-xs">in-process</span>
+          </div>
+        </div>
+        <p class="font-mono text-xs text-slate-500 leading-relaxed">view.go · mouse.go · settings.go · subagents.go · prompt_mouse.go</p>
+        <div class="grid md:grid-cols-3 gap-4 text-sm">
+          <div><p class="text-xs uppercase tracking-wider text-slate-500 mb-1">Problem</p><p>Geometry is re-derived by re-painting (<code>settingsCloseRect</code> scans <code>settingsScreen</code>). Mouse and View disagree when one path drifts.</p></div>
+          <div><p class="text-xs uppercase tracking-wider text-slate-500 mb-1">Solution</p><p>One layout snapshot per frame: bands, chip rects, drawer tops. View paints it; mouse hits it.</p></div>
+          <div><p class="text-xs uppercase tracking-wider text-slate-500 mb-1">Wins</p>
+            <ul class="list-disc pl-4 space-y-1">
+              <li>locality: geometry bugs one place</li>
+              <li>hit tests without full paint</li>
+            </ul>
+          </div>
+        </div>
+      </article>
+
+      <!-- C9 -->
+      <article id="c9" class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-5">
+        <div class="flex flex-wrap items-start justify-between gap-3">
+          <h2 class="font-serif text-2xl">Agent Event without db.Part leakage</h2>
+          <div class="flex gap-2 flex-wrap">
+            <span class="px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-900 text-xs font-semibold tabular-nums">4/10</span>
+            <span class="px-2 py-0.5 rounded-full bg-slate-200 text-slate-700 text-xs font-medium">Speculative</span>
+            <span class="px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 text-xs">ports &amp; adapters</span>
+          </div>
+        </div>
+        <p class="font-mono text-xs text-slate-500 leading-relaxed">internal/agent/agent.go Event · stream.go · ui/chat applyPart · transcript replay</p>
+        <div class="rounded-md bg-amber-50 border border-amber-200 text-amber-900 text-sm p-3 mb-3">Related: provider wire types (<code>opencode.Message</code>) also sit in Agent. Do not invent a second-provider interface while OpenCode Go is the only product path. Domain types inside Agent are fine; a fake Client interface is premature.</div>
+        <div class="grid md:grid-cols-3 gap-4 text-sm">
+          <div><p class="text-xs uppercase tracking-wider text-slate-500 mb-1">Problem</p><p>Event embeds <code>db.Part</code> / <code>db.ToolCall</code>. UI switches on SQL part types. Schema is the TUI contract.</p></div>
+          <div><p class="text-xs uppercase tracking-wider text-slate-500 mb-1">Solution</p><p>Emit transcript deltas. Persist rows inside Agent/Store only.</p></div>
+          <div><p class="text-xs uppercase tracking-wider text-slate-500 mb-1">Wins</p>
+            <ul class="list-disc pl-4 space-y-1">
+              <li>seam: UI stops tracking schema</li>
+              <li>rename parts without TUI churn</li>
+            </ul>
+          </div>
+        </div>
+      </article>
+
+    </section>
+
+    <section id="top-recommendation" class="rounded-2xl border-2 border-emerald-600 bg-emerald-50 p-8 space-y-3">
+      <p class="text-xs uppercase tracking-wider text-emerald-800">Top recommendation</p>
+      <div class="flex flex-wrap items-center gap-3">
+        <h2 class="font-serif text-3xl text-emerald-950"><a href="#c1" class="underline decoration-emerald-400">One home for Compaction and fill policy</a></h2>
+        <span class="px-3 py-1 rounded-full bg-indigo-600 text-white text-sm font-semibold tabular-nums">9/10</span>
+      </div>
+      <p class="text-emerald-950 max-w-2xl">Proven drift today: duplicate 80/15k defaults, UI chars/4 parallel to agent, <code>serializeEntries</code> hardcoding keep tokens, dead <code>ForceCompact</code>, child <code>CompactAuto</code> with no window. Deepening here pays before any larger runtime extract, and it shrinks what <code>chat_test.go</code> must re-prove through View.</p>
+    </section>
+
+    <footer class="text-sm text-slate-500 border-t border-slate-200 pt-6 space-y-2">
+      <p>Scan method: git hotspot walk + 5 read-only explore agents (ui/chat, agent, subagent, db/provider, cross-cutting). Phase ledger: <code>plans/v0.0.9/architecture-review/</code>.</p>
+      <p>Which of these would you like to explore?</p>
+    </footer>
+  </main>
+</body>
+</html>

@@ -16,6 +16,10 @@
 This folder is the live ledger. Mark `[x]` only after the named gate
 command passes. Do not claim TUI feel from headless `go run`.
 
+**Related (separate track):** architecture deepening after the 2026-08-20
+scan lives in `plans/v0.0.9/architecture-review/` (HTML report + phase
+checklist). It does not replace phases 1-4 below.
+
 ---
 
 ## Overview
