@@ -183,7 +183,7 @@ func (t *ToolCall) UnmarshalJSON(data []byte) error {
 
 // Message is a single chat message in OpenAI-compatible wire format.
 type Message struct {
-	Role string `json:"role"` // "user" | "assistant" | "tool"
+	Role string `json:"role"` // "system" | "user" | "assistant" | "tool"
 	// Content is always sent. The Go API rejects messages that omit the
 	// field, including assistant tool-call turns with an empty body.
 	Content    string     `json:"content"`

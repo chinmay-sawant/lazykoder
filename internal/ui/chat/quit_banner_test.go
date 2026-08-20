@@ -2,6 +2,8 @@ package chat
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -117,5 +119,24 @@ func TestFreshLaunchDoesNotReplayExistingSession(t *testing.T) {
 	resumed := New(Options{Store: st, Client: deadClient(), Workdir: tmp, Session: &sess})
 	if !strings.Contains(stripANSI(viewText(resumed)), prior) {
 		t.Fatal("explicit Session resume did not replay prior text")
+	}
+}
+
+func TestNewSurfacesProjectInstructionsNotice(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("rules\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: dir})
+	if m.projectInstructionsNotice != "project instructions: AGENTS.md" {
+		t.Fatalf("notice = %q", m.projectInstructionsNotice)
+	}
+	v := stripANSI(viewText(m))
+	if !strings.Contains(v, "project instructions: AGENTS.md") {
+		t.Fatalf("view missing notice: %q", v)
+	}
+	m2 := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	if m2.projectInstructionsNotice != "" {
+		t.Fatalf("unexpected notice without AGENTS.md: %q", m2.projectInstructionsNotice)
 	}
 }

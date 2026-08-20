@@ -4,13 +4,14 @@
 > `ctrl+c` quit; knowledge-base `03-concepts/sessions-and-resume.md`
 > **Status:** implemented on branch; manual TUI gates open
 > **Branch:** `feature/v0.0.9-resume-session`
-> **Estimated effort:** 1-2 days across three phases
+> **Estimated effort:** 2-3 days across four phases
 > **Priority:** P1
 > **Skill:** `skills/phase-wise-checklist/SKILLS.md`
 > **Gate:** launching `bin/lk` always opens a blank new session; confirming
 > quit with `ctrl+c` leaves the alt screen, prints `lk <session_id>` plus a
 > resume hint on the normal console, then exits 0; `/resume` / `ctrl+s`
-> still loads past sessions
+> still loads past sessions; workdir `AGENTS.md` is sent as a system primer
+> on chat model calls
 
 This folder is the live ledger. Mark `[x]` only after the named gate
 command passes. Do not claim TUI feel from headless `go run`.
@@ -34,11 +35,16 @@ v0.0.9 flips the default:
 2. **Confirmed quit prints a banner.** After the TUI tears down, stdout
    shows `lk` plus the session id (when one exists) plus a one-line resume
    hint, then the process exits.
+3. **Workdir `AGENTS.md` becomes in-app context.** Each chat model call
+   prepends it as a `system` message (wire-only). The TUI notes when it
+   loaded.
 
 User decisions locked for this plan:
 
 - Fresh session on every launch (not opt-in).
 - Banner shape: `lk` + session id + resume hint (not bare `LZ`).
+- Inject workdir `AGENTS.md` only (fallback `agents.md`) as system on wire,
+  with a TUI notice.
 
 ---
 
@@ -76,6 +82,7 @@ User decisions locked for this plan:
 | [phase-1-fresh-launch.md](phase-1-fresh-launch.md) | Stop auto-resume; launch blank; keep `/resume` |
 | [phase-2-quit-banner.md](phase-2-quit-banner.md) | Print `lk <id>` + hint after alt screen exits |
 | [phase-3-docs-kb-gates.md](phase-3-docs-kb-gates.md) | Docs, knowledge-base, tips/help, full gates |
+| [phase-4-agents-md-context.md](phase-4-agents-md-context.md) | Inject workdir AGENTS.md as system primer |
 
 ## Shared invariants
 

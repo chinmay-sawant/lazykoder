@@ -386,6 +386,10 @@ SQLite. `/resume` or `ctrl+s` lists them and rebuilds the chosen transcript
 from the store (messages + parts) without a network call. New turns on a
 loaded session append to that same row.
 
+If the workdir has `AGENTS.md`, the empty state and alert row show
+`project instructions: AGENTS.md`. That file is sent as a system message on
+each model call; it is not a transcript row.
+
 ## Quit banner
 
 Confirmed quit (`ctrl+c` twice when the prompt is empty, or other paths that

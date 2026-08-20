@@ -52,5 +52,6 @@ the readable reference; keep the two in sync when adding or editing a tip.
 ## Sessions and safety
 
 - launch is fresh; `/resume` or `ctrl+s` loads a past run
+- `AGENTS.md` in this folder is sent as system context
 - destructive bash commands always ask first
 - open `/status` for tokens, cache, cost and tps

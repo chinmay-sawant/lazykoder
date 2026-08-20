@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -300,9 +301,10 @@ type Model struct {
 	slashFromPaste  bool
 	selection       textSelection
 	promptSel       promptSelection
-	copyNotice      string
-	promptSelectAll bool
-	tipsIndex       int
+	copyNotice               string
+	promptSelectAll          bool
+	tipsIndex                int
+	projectInstructionsNotice string // set when workdir AGENTS.md loaded; alert-row only
 
 	dragTarget int // -1 none, 0 transcript, 1 picker
 	dragOn     bool
@@ -483,6 +485,9 @@ func New(opts Options) Model {
 		m.model = cfg.EffectiveModel()
 		m.variant = cfg.EffectiveVariant()
 		m.statusSegments = db.DefaultStatusSegments()
+	}
+	if _, path, ok := agent.LoadProjectInstructions(opts.Workdir); ok {
+		m.projectInstructionsNotice = "project instructions: " + filepath.Base(path)
 	}
 	return m
 }

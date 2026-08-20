@@ -302,6 +302,7 @@ func (m Model) submit(text string) (Model, tea.Cmd) {
 	m.err = ""
 	m.stepLimitHit = false
 	m.copyNotice = ""
+	m.projectInstructionsNotice = ""
 	m.promptSelectAll = false
 	m.pendingUser = text
 	m.historyCursor = -1
@@ -354,6 +355,7 @@ func (m Model) runCompact(extra string) (Model, tea.Cmd) {
 	m.err = ""
 	m.stepLimitHit = false
 	m.copyNotice = ""
+	m.projectInstructionsNotice = ""
 	m.promptSelectAll = false
 	m.pendingUser = ""
 	m.promptUndo = nil
@@ -403,6 +405,7 @@ func (m Model) resumeAfterLimit() (Model, tea.Cmd) {
 	m.err = ""
 	m.stepLimitHit = false
 	m.copyNotice = ""
+	m.projectInstructionsNotice = ""
 	m.promptSelectAll = false
 	m.pendingUser = ""
 	m.historyCursor = -1

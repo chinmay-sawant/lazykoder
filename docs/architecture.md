@@ -83,6 +83,16 @@ The client is OpenAI-compatible:
 model count and to feed the interactive picker (`/model` or the footer
 model chip).
 
+## Project instructions (AGENTS.md)
+
+When the session workdir contains `AGENTS.md` (fallback `agents.md`), every
+chat model call prepends a `role=system` message with that file's contents.
+The primer is wire-only: it is not stored in SQLite and does not appear in
+`/resume` transcripts. Compaction summarizer calls do not include it. The
+TUI shows `project instructions: AGENTS.md` on the alert row / empty state
+when the file loaded. Oversized files are truncated around 200KB with an
+explicit note.
+
 ## Agent loop
 
 One user turn runs in `internal/agent.Send` with a hard step bound (default

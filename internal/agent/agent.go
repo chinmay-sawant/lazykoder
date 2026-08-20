@@ -104,11 +104,43 @@ type Agent struct {
 	opts    Options
 
 	sess *db.Session
+
+	// projectInstructions caches workdir AGENTS.md after the first load.
+	projectInstructions     string
+	projectInstructionsPath string
+	projectInstructionsDone bool
 }
 
 // New returns an Agent for the given store, provider client and workdir.
 func New(store *db.Store, client *opencode.Client, workdir string, opts Options) *Agent {
 	return &Agent{store: store, client: client, workdir: workdir, opts: opts}
+}
+
+// ensureProjectInstructions loads AGENTS.md once per Agent.
+func (a *Agent) ensureProjectInstructions() {
+	if a.projectInstructionsDone {
+		return
+	}
+	a.projectInstructionsDone = true
+	content, path, ok := LoadProjectInstructions(a.workdir)
+	if !ok {
+		return
+	}
+	a.projectInstructions = content
+	a.projectInstructionsPath = path
+}
+
+// withProjectInstructions prepends a system message when AGENTS.md is present.
+func (a *Agent) withProjectInstructions(history []opencode.Message) []opencode.Message {
+	a.ensureProjectInstructions()
+	body := FormatProjectInstructionsMessage(a.projectInstructions)
+	if body == "" {
+		return history
+	}
+	out := make([]opencode.Message, 0, len(history)+1)
+	out = append(out, opencode.Message{Role: "system", Content: body})
+	out = append(out, history...)
+	return out
 }
 
 // EventKind classifies streamed events.
@@ -257,7 +289,7 @@ func (a *Agent) callModel(ctx context.Context, events chan<- Event, history []op
 		Model:           a.opts.Model,
 		Endpoint:        a.opts.Endpoint,
 		ReasoningEffort: a.opts.Variant,
-		Messages:        history,
+		Messages:        a.withProjectInstructions(history),
 		Tools:           toolSpecsFor(a.opts.ToolNames, a.opts.Host),
 	}
 	if a.opts.DisableStreaming {

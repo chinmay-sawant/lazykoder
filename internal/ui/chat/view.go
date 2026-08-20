@@ -304,13 +304,15 @@ func (m Model) alertRow() string {
 
 // alertText is the transient message shown right-aligned on the alert row:
 // the red quit warning wins, then the green copy confirmation, then the
-// rotating idle tip.
+// AGENTS.md loaded notice, then the rotating idle tip.
 func (m Model) alertText() string {
 	switch {
 	case m.quitConfirm:
 		return lipgloss.NewStyle().Foreground(theme.ColorDanger()).Bold(true).Render("ctrl+c again to quit")
 	case m.copyNotice != "":
 		return lipgloss.NewStyle().Foreground(theme.ColorGood()).Bold(true).Render(m.copyNotice)
+	case m.projectInstructionsNotice != "":
+		return lipgloss.NewStyle().Foreground(theme.ColorGood()).Render(m.projectInstructionsNotice)
 	case m.tipsVisible():
 		return lipgloss.NewStyle().Bold(true).Foreground(theme.ColorMute()).Render(tipLabel) + " " + hintStyle.Render(tips.At(m.tipsIndex))
 	}
@@ -320,7 +322,7 @@ func (m Model) alertText() string {
 // tipsVisible reports whether the rotating usage tip should show.
 // Compact terminals keep tips out of the transcript gutter (they collide).
 func (m Model) tipsVisible() bool {
-	if m.busy || m.quitConfirm || m.copyNotice != "" {
+	if m.busy || m.quitConfirm || m.copyNotice != "" || m.projectInstructionsNotice != "" {
 		return false
 	}
 	if m.width < tipsMinWidth {
@@ -715,12 +717,16 @@ func (m Model) transcriptView() string {
 	h := m.transcriptRenderHeight()
 	w := max(minPaneWidth, m.width)
 	if len(m.items) == 0 {
-		empty := strings.Join([]string{
+		lines := []string{
 			lazykoderLogo,
 			lipgloss.NewStyle().Foreground(theme.ColorText()).Bold(true).Render("new session"),
 			hintStyle.Render("ask anything about this project"),
 			hintStyle.Render("/ commands   @ files   ? help   /settings"),
-		}, "\n")
+		}
+		if m.projectInstructionsNotice != "" {
+			lines = append(lines, hintStyle.Render(m.projectInstructionsNotice))
+		}
+		empty := strings.Join(lines, "\n")
 		return lipgloss.NewStyle().Width(w).Height(h).Align(lipgloss.Center, lipgloss.Center).Render(empty)
 	}
 	vp := m.paintedTranscript()

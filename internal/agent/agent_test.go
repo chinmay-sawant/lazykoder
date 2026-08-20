@@ -485,6 +485,72 @@ func TestSendPhase1Gate(t *testing.T) {
 	}
 }
 
+func TestSendInjectsProjectInstructions(t *testing.T) {
+	fake := newFakeProvider(t, respBody("ok", "", "stop", nil, testUsage))
+	st, _ := newTestEnv(t)
+	workdir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workdir, "AGENTS.md"), []byte("never invent APIs\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a := New(st, newClient(t, fake.srv), workdir, Options{DisableStreaming: true})
+	if _, err := sendAndCollect(t, a, "hi"); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if fake.requestCount() < 1 {
+		t.Fatal("no provider request")
+	}
+	msgs := fake.requestMessages(0)
+	if len(msgs) < 2 {
+		t.Fatalf("messages = %d, want at least system+user", len(msgs))
+	}
+	if msgs[0].Role != "system" {
+		t.Fatalf("first role = %q, want system", msgs[0].Role)
+	}
+	if !strings.Contains(msgs[0].Content, "never invent APIs") {
+		t.Fatalf("system content missing AGENTS.md: %q", msgs[0].Content)
+	}
+	if !strings.Contains(msgs[0].Content, projectInstructionsHeader) {
+		t.Fatalf("system content missing header: %q", msgs[0].Content)
+	}
+	foundUser := false
+	for _, m := range msgs[1:] {
+		if m.Role == "user" && strings.Contains(m.Content, "hi") {
+			foundUser = true
+			break
+		}
+	}
+	if !foundUser {
+		t.Fatalf("user turn missing after system: %+v", msgs)
+	}
+	// System primer is wire-only; SQLite should still be user+assistant only.
+	sid := a.sessionID()
+	dbMsgs, err := st.ListMessages(context.Background(), sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range dbMsgs {
+		if m.Role == "system" {
+			t.Fatal("system message must not be persisted")
+		}
+	}
+}
+
+func TestSendWithoutProjectInstructions(t *testing.T) {
+	fake := newFakeProvider(t, respBody("ok", "", "stop", nil, testUsage))
+	st, _ := newTestEnv(t)
+	a := New(st, newClient(t, fake.srv), t.TempDir(), Options{DisableStreaming: true})
+	if _, err := sendAndCollect(t, a, "hi"); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	msgs := fake.requestMessages(0)
+	if len(msgs) == 0 {
+		t.Fatal("no messages")
+	}
+	if msgs[0].Role == "system" {
+		t.Fatal("unexpected system message without AGENTS.md")
+	}
+}
+
 func TestSendUsageAndReasoning(t *testing.T) {
 	fake := newFakeProvider(t, respBody("visible text", "think step by step", "stop", nil, testUsage))
 	st, path := newTestEnv(t)
