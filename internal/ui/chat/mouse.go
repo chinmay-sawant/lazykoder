@@ -16,12 +16,17 @@ import (
 // jumpBarRow is the screen row of the jump-to-latest icon above the input
 // box: the row right after the transcript lines.
 func (m Model) jumpBarRow() int {
+	m = m.ensureLayout()
+	if m.layout.jumpBarRow > 0 || m.layout.key.h > 0 {
+		return m.layout.jumpBarRow
+	}
 	return m.transcriptTop() + m.transcriptRenderHeight()
 }
 
 // mousePress starts a scrollbar drag when the click lands on a scrollbar
 // column, and jumps the viewport to the clicked position.
 func (m Model) mousePress(msg tea.MouseClickMsg) (Model, tea.Cmd) {
+	m = m.ensureLayout()
 	mu := msg.Mouse()
 	m.copyNotice = ""
 	// Questions are modal: only an option row may consume a click, and all
@@ -297,8 +302,13 @@ func (m Model) transcriptPosition(mu tea.Mouse) (textPosition, bool) {
 	if m.subagentPickerMode && !m.subagentLogMode && m.pointerInSubagentDrawer(mu.Y) {
 		return textPosition{}, false
 	}
-	top := m.transcriptTop()
-	height := m.transcriptRenderHeight()
+	m = m.ensureLayout()
+	top := m.layout.transcriptTop
+	height := m.layout.transcriptH
+	if height == 0 {
+		top = m.transcriptTop()
+		height = m.transcriptRenderHeight()
+	}
 	if mu.Y < top || mu.Y >= top+height || mu.X < 0 || mu.X >= m.transcript.Width() {
 		return textPosition{}, false
 	}

@@ -254,10 +254,10 @@ func TestManualCompactStopsAfterCheckpoint(t *testing.T) {
 	for _, ev := range got {
 		if ev.Kind == EventCompacted {
 			after = ev.TokensUsed
-			if ev.Part.Text == nil {
+			if ev.Part.Text == "" {
 				t.Fatal("compact part missing text")
 			}
-			env := ParseCompactText(*ev.Part.Text)
+			env := ParseCompactText(ev.Part.Text)
 			if env.TokensAfter <= 0 || env.TokensAfter != ev.TokensUsed {
 				t.Fatalf("tokens_after = %d event = %d", env.TokensAfter, ev.TokensUsed)
 			}

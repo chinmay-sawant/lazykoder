@@ -52,12 +52,14 @@ const (
 
 // View renders the picker card, slash menu, confirm overlay, or the chat layout.
 func (m Model) View() tea.View {
+	m = m.ensureLayout()
 	return m.newView(m.frame())
 }
 
 // frame is the unpainted screen string. Mouse hit-testing scans this after
 // the same Width/Height paint as newView so click rows match the terminal.
 func (m Model) frame() string {
+	m = m.ensureLayout()
 	// Full-screen cards keep the historical paint order (sessions before log
 	// before settings...). Overlays stack on chat; key routing uses currentFocus.
 	switch {
@@ -66,6 +68,9 @@ func (m Model) frame() string {
 	case m.subagentLogMode:
 		return m.subagentLogScreen()
 	case m.settingsMode:
+		if m.layout.settingsPaint != "" {
+			return m.layout.settingsPaint
+		}
 		return m.settingsScreen()
 	case m.usageMode:
 		return m.usageScreen()
@@ -73,7 +78,10 @@ func (m Model) frame() string {
 		return m.helpScreen()
 	}
 	screen := m.chatScreen()
-	overlayH := m.composerTop()
+	overlayH := m.layout.composerTop
+	if overlayH == 0 {
+		overlayH = m.composerTop()
+	}
 	if m.confirmMode {
 		screen = overlayOn(screen, m.width, overlayH, m.confirmOverlay())
 	}

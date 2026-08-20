@@ -67,8 +67,8 @@ func TestReasoningCollapsesWhenToolStarts(t *testing.T) {
 	thought := "need a command"
 	m.applyPart(db.Part{ID: "prt_r3", Type: "reasoning", Text: &thought})
 	m.applyTool(agent.Event{
-		Tool: db.ToolCall{Tool: "bash", Status: "pending", InputJSON: `{"command":"ls"}`},
-		Part: db.Part{Type: "tool"},
+		Tool: agent.ToolDelta{Name: "bash", Status: "pending", InputJSON: `{"command":"ls"}`},
+		Part: agent.PartDelta{Kind: agent.PartDeltaTool},
 	})
 	v := stripANSI(viewText(m))
 	if strings.Contains(v, thought) {

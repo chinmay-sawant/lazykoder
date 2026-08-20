@@ -39,7 +39,7 @@ func (a *Agent) streamStep(ctx context.Context, events chan<- Event, req opencod
 	if err := a.ensurePartText(ctx, events, m.ID, "text", resp.Content, &textPart); err != nil {
 		return nil, err
 	}
-	if err := a.runTools(ctx, events, m.ID, resp.ToolCalls); err != nil {
+	if err := a.runTools(ctx, events, m.ID, fromWireToolCalls(resp.ToolCalls)); err != nil {
 		return nil, err
 	}
 	if err := a.writeStepFinish(ctx, events, m.ID, resp, started); err != nil {
@@ -90,7 +90,7 @@ func (a *Agent) beginAssistant(ctx context.Context, events chan<- Event) (db.Mes
 	if err != nil {
 		return db.Message{}, fmt.Errorf("agent: insert step-start: %w", err)
 	}
-	a.emit(events, Event{Kind: EventPart, SessionID: a.sessionID(), MessageID: m.ID, Part: part})
+	a.emit(events, Event{Kind: EventPart, SessionID: a.sessionID(), MessageID: m.ID, Part: partDeltaFromDB(part)})
 	return m, nil
 }
 
@@ -99,7 +99,7 @@ func (a *Agent) writeTextPart(ctx context.Context, events chan<- Event, msgID, t
 	if err != nil {
 		return fmt.Errorf("agent: insert %s: %w", typ, err)
 	}
-	a.emit(events, Event{Kind: EventPart, SessionID: a.sessionID(), MessageID: msgID, Part: part})
+	a.emit(events, Event{Kind: EventPart, SessionID: a.sessionID(), MessageID: msgID, Part: partDeltaFromDB(part)})
 	return nil
 }
 
@@ -128,7 +128,7 @@ func (a *Agent) writeStepFinish(ctx context.Context, events chan<- Event, msgID 
 	if err != nil {
 		return fmt.Errorf("agent: insert step-finish: %w", err)
 	}
-	a.emit(events, Event{Kind: EventPart, SessionID: a.sessionID(), MessageID: msgID, Part: inserted})
+	a.emit(events, Event{Kind: EventPart, SessionID: a.sessionID(), MessageID: msgID, Part: partDeltaFromDB(inserted)})
 	var output int64
 	output = resp.Usage.TokensOutput
 	a.emit(events, Event{Kind: EventStepMetrics, SessionID: a.sessionID(), MessageID: msgID,
@@ -147,7 +147,7 @@ func (a *Agent) appendPartDelta(ctx context.Context, events chan<- Event, msgID,
 			return fmt.Errorf("agent: insert %s: %w", typ, err)
 		}
 		*slot = &part
-		a.emit(events, Event{Kind: EventPart, SessionID: a.sessionID(), MessageID: msgID, Part: part})
+		a.emit(events, Event{Kind: EventPart, SessionID: a.sessionID(), MessageID: msgID, Part: partDeltaFromDB(part)})
 		return nil
 	}
 	text := chunk
@@ -158,7 +158,7 @@ func (a *Agent) appendPartDelta(ctx context.Context, events chan<- Event, msgID,
 		return err
 	}
 	(*slot).Text = &text
-	a.emit(events, Event{Kind: EventPart, SessionID: a.sessionID(), MessageID: msgID, Part: **slot})
+	a.emit(events, Event{Kind: EventPart, SessionID: a.sessionID(), MessageID: msgID, Part: partDeltaFromDB(**slot)})
 	return nil
 }
 
@@ -176,6 +176,6 @@ func (a *Agent) ensurePartText(ctx context.Context, events chan<- Event, msgID, 
 		return err
 	}
 	(*slot).Text = &want
-	a.emit(events, Event{Kind: EventPart, SessionID: a.sessionID(), MessageID: msgID, Part: **slot})
+	a.emit(events, Event{Kind: EventPart, SessionID: a.sessionID(), MessageID: msgID, Part: partDeltaFromDB(**slot)})
 	return nil
 }

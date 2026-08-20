@@ -887,10 +887,14 @@ func (m Model) persistSettings() Model {
 }
 
 // settingsCloseRect is the screen rectangle of the [x] close control on the
-// centered card header.
+// centered card header. Prefers the layout snapshot built with the same paint.
 func (m Model) settingsCloseRect() (x0, y, x1 int, ok bool) {
 	if !m.settingsMode {
 		return 0, 0, 0, false
+	}
+	m = m.ensureLayout()
+	if m.layout.settingsCloseOK {
+		return m.layout.settingsCloseX0, m.layout.settingsCloseY, m.layout.settingsCloseX1, true
 	}
 	for i, line := range strings.Split(m.settingsScreen(), "\n") {
 		plain := ansi.Strip(line)
@@ -912,7 +916,17 @@ func (m Model) settingsRowAtScreenY(y int) (row int, ok bool) {
 	if !m.settingsMode {
 		return 0, false
 	}
-	return settingsRowFromPaintedLine(plainLine(m.settingsScreen(), y))
+	m = m.ensureLayout()
+	if m.layout.settingsRowByY != nil {
+		if row, ok = m.layout.settingsRowByY[y]; ok {
+			return row, true
+		}
+	}
+	paint := m.layout.settingsPaint
+	if paint == "" {
+		paint = m.settingsScreen()
+	}
+	return settingsRowFromPaintedLine(plainLine(paint, y))
 }
 
 func settingsRowFromPaintedLine(plain string) (row int, ok bool) {
@@ -936,8 +950,24 @@ func settingsLineHasLabel(plain, label string) bool {
 // settingsListScreenTop is the first settings control row on the painted
 // screen (new-session model).
 func (m Model) settingsListScreenTop() int {
+	m = m.ensureLayout()
 	label := settingsRowLabel(settingsRowModel)
-	for i, line := range strings.Split(m.settingsScreen(), "\n") {
+	if m.layout.settingsRowByY != nil {
+		best := -1
+		for y, row := range m.layout.settingsRowByY {
+			if row == settingsRowModel && (best < 0 || y < best) {
+				best = y
+			}
+		}
+		if best >= 0 {
+			return best
+		}
+	}
+	paint := m.layout.settingsPaint
+	if paint == "" {
+		paint = m.settingsScreen()
+	}
+	for i, line := range strings.Split(paint, "\n") {
 		if settingsLineHasLabel(ansi.Strip(line), label) {
 			return i
 		}
@@ -952,6 +982,7 @@ func (m Model) settingsHit(x, y int, button tea.MouseButton) (Model, tea.Cmd, bo
 	if !m.settingsMode {
 		return m, nil, false
 	}
+	m = m.ensureLayout()
 	if button != tea.MouseLeft && button != tea.MouseRight {
 		return m, nil, false
 	}
@@ -965,7 +996,11 @@ func (m Model) settingsHit(x, y int, button tea.MouseButton) (Model, tea.Cmd, bo
 		return m, nil, true
 	}
 	m.settingsCursor = row
-	line := plainLine(m.settingsScreen(), y)
+	paint := m.layout.settingsPaint
+	if paint == "" {
+		paint = m.settingsScreen()
+	}
+	line := plainLine(paint, y)
 	switch row {
 	case settingsRowModel:
 		if dec, inc := hitStepChevrons(line, x); dec {

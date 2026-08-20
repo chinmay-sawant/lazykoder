@@ -1,9 +1,10 @@
 # Architecture review - phase-wise checklist
 
 > **Parent:** `plans/v0.0.9/architecture-review/README.md`
-> **Status:** phases 1-6 implemented and gated 2026-08-21; C8/C9 deferred
+> **Status:** phases 1-7 implemented and gated 2026-08-21
 > **Estimated effort:** 5-8 days
 > **Report:** `architecture-review.html` (candidates C1-C9)
+> **Deferred plan:** `phase-7-deferred-c8-c9-domain.md`
 > **Branch:** `chore/009-improve-architecture`
 
 Mark `[x]` only with current evidence. Record the gate command beside closure
@@ -33,8 +34,9 @@ Shipped via four parallel package-owned agents plus parent integration
 | 4 | C2 Turn-runtime | 9/10 | done |
 | 5 | C5 + C7 Tool dispatch / task schema | 8/10, 7/10 | done |
 | 6 | C6 Subagent projection + MaxDepth | 7/10 | done |
-| - | C8 Layout snapshot | 6/10 | deferred |
-| - | C9 Event without db.Part | 4/10 | deferred |
+| 7 | C8 Layout snapshot | 6/10 | done |
+| 7 | C9 Event without db.Part | 4/10 | done |
+| 7 | Agent ChatMessage domain types | - | done (no provider iface) |
 
 ---
 
@@ -177,30 +179,33 @@ Shipped via four parallel package-owned agents plus parent integration
 
 ---
 
-## Deferred (explicit)
+## Phase 7: Formerly deferred (C8, C9, domain types)
 
-### D1 Layout snapshot (report C8, 6/10)
+Plan: `phase-7-deferred-c8-c9-domain.md`.
 
-- [~] Deferred until the next paint/hit-test regression cluster. Owner: chat
-      geometry. Next gate: reproduce a paint≠hit bug, then add a per-frame
-      layout snapshot consumed by View and mouse.
+### 7.1 Layout snapshot (C8)
 
-### D2 Agent Event without `db.Part` (report C9, 4/10)
+- [x] `layout.go` / `layoutSnap` shared by View and mouse; settings paint cached once.
+- [x] Gate: `go test ./internal/ui/chat/ -run 'LayoutSnap|SettingsGeom'` + full chat package.
 
-- [~] Speculative. Session graph shipped; Event still embeds `db.Part`. Do not
-      pair with a premature multi-provider Client interface.
+### 7.2 Event without `db.Part` (C9)
 
-### D3 Provider domain types inside Agent
+- [x] `PartDelta` / `ToolDelta` on `agent.Event`; converters in `event_delta.go`.
+- [x] UI adapts via `event_adapt.go`; transcriptItem may still store db shapes for replay.
+- [x] Gate: `go test ./internal/agent/ ./internal/ui/chat/`.
 
-- [~] Worth exploring later: Agent-owned turn/message types with Client as
-      wire adapter only. Blocked by product decision "OpenCode Go only"
-      until a second provider is real.
+### 7.3 Agent domain messages (ADR-safe)
+
+- [x] `ChatMessage` / `ChatToolCall` in `chatmsg.go`; history/compact/tool loop use them.
+- [x] `toWireMessages` only at `callModel` / compact summarizer; `*opencode.Client` stays concrete.
+- [x] No provider interface added.
+- [x] Gate: `go test ./...` and `make lint` (pass 2026-08-21).
 
 ---
 
 ## Closure gates (whole track)
 
-- [x] `go test ./...` (pass 2026-08-21)
+- [x] `go test ./...` (pass 2026-08-21, including phase 7)
 - [x] `make lint` (pass 2026-08-21)
-- [x] Deferred C8/C9 left `[~]` on purpose
-- [ ] Commit when user asks (no git in this implementation pass)
+- [x] Phase 7 checklist marked after gates
+- [x] Commit and push phase 7 when user asks

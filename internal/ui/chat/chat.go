@@ -308,6 +308,9 @@ type Model struct {
 
 	renderCache *renderCache
 
+	// layout is the last outer-geometry snapshot (View + mouse share it).
+	layout layoutSnap
+
 	turnSeq    int
 	turnCancel context.CancelFunc
 	turnCtx    context.Context
@@ -850,18 +853,19 @@ func (m Model) applyEvent(ev agent.Event) Model {
 			m.pendingHistoryIndex = -1
 		}
 	case agent.EventPart:
-		m.applyPart(ev.Part)
+		part := dbPartFromDelta(ev.Part)
+		m.applyPart(part)
 		m = m.noteActivityFromPart(ev.Part)
 	case agent.EventTool:
 		m.applyTool(ev)
 		m.activity = toolActivity(ev.Tool)
 		// On task tool events: open drawer only when a new job appears.
-		if ev.Tool.Tool == "task" || strings.HasPrefix(ev.Tool.Tool, "task_") {
+		if ev.Tool.Name == "task" || strings.HasPrefix(ev.Tool.Name, "task_") {
 			m = m.openSubagentDrawerIfNew()
 			m.pulseOn = m.busy || m.hasLiveSubagents()
 		}
-		if ev.Tool.Tool == "todowrite" {
-			m = m.applyTodosFromTool(ev.Tool)
+		if ev.Tool.Name == "todowrite" {
+			m = m.applyTodosFromTool(dbToolFromDelta(ev.Tool))
 		}
 	case agent.EventTokenDelta:
 		if ev.TokenDelta > 0 {
@@ -901,7 +905,7 @@ func (m Model) applyEvent(ev agent.Event) Model {
 		m.cacheMiss = 0
 		m.pendingCompactReason = ""
 		m.compactHint = ""
-		m.applyCompactNotice(ev.Part)
+		m.applyCompactNotice(dbPartFromDelta(ev.Part))
 	}
 	return m
 }
@@ -1028,19 +1032,19 @@ func (m Model) generatedThisTurn() int64 {
 	return 0
 }
 
-func (m Model) noteActivityFromPart(p db.Part) Model {
-	switch p.Type {
-	case "reasoning":
-		if p.Text != nil && *p.Text != "" {
-			m.activity = "thinking  " + firstLine(*p.Text, activityMaxRunes)
+func (m Model) noteActivityFromPart(p agent.PartDelta) Model {
+	switch p.Kind {
+	case agent.PartDeltaReasoning:
+		if p.Text != "" {
+			m.activity = "thinking  " + firstLine(p.Text, activityMaxRunes)
 		} else {
 			m.activity = "thinking"
 		}
-	case "text":
-		if p.Text != nil && *p.Text != "" {
-			m.activity = "writing  " + firstLine(*p.Text, activityMaxRunes)
+	case agent.PartDeltaText:
+		if p.Text != "" {
+			m.activity = "writing  " + firstLine(p.Text, activityMaxRunes)
 		}
-	case "step-start":
+	case agent.PartDeltaStepStart:
 		if m.activity == "" {
 			m.activity = "thinking"
 		}
@@ -1048,12 +1052,12 @@ func (m Model) noteActivityFromPart(p db.Part) Model {
 	return m
 }
 
-func toolActivity(tc db.ToolCall) string {
-	name := tc.Tool
+func toolActivity(tc agent.ToolDelta) string {
+	name := tc.Name
 	if name == "" {
 		name = "tool"
 	}
-	cmd := toolCommand(tc)
+	cmd := toolCommand(dbToolFromDelta(tc))
 	switch tc.Status {
 	case "completed":
 		if cmd != "" {

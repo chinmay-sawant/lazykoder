@@ -1762,7 +1762,7 @@ func TestCompactEventResetsTokensUsed(t *testing.T) {
 	m = m.applyEvent(agent.Event{
 		Kind:       agent.EventCompacted,
 		TokensUsed: 1200,
-		Part:       db.Part{ID: "p_c", Type: agent.CompactPartType, Text: &env},
+		Part:       agent.PartDelta{ID: "p_c", Kind: agent.PartDeltaCompaction, Text: env},
 	})
 	if m.tokensUsed != 1200 {
 		t.Fatalf("tokensUsed = %d, want 1200 after compact", m.tokensUsed)
@@ -2567,8 +2567,8 @@ func TestEditOpenByDefaultAndToggle(t *testing.T) {
 	m = mm.(Model)
 	path := "main.go"
 	meta := `{"diff":"@@ -1,1 +1,1 @@\n-old\n+new"}`
-	m.applyTool(agent.Event{Tool: db.ToolCall{
-		Tool: "edit", Status: "pending", Title: &path, PartID: "p1", CallID: "c1",
+	m.applyTool(agent.Event{Tool: agent.ToolDelta{
+		Name: "edit", Status: "pending", Title: path, PartID: "p1", CallID: "c1",
 		InputJSON: `{"filePath":"main.go","oldString":"old","newString":"new"}`,
 	}})
 	if idx := m.lastTool; idx < 0 || m.items[idx].collapsed {
@@ -2580,10 +2580,10 @@ func TestEditOpenByDefaultAndToggle(t *testing.T) {
 		t.Fatal("toggle should collapse edit")
 	}
 	// Status update must keep the user's collapsed choice.
-	m.applyTool(agent.Event{Tool: db.ToolCall{
-		Tool: "edit", Status: "completed", Title: &path, PartID: "p1", CallID: "c1",
+	m.applyTool(agent.Event{Tool: agent.ToolDelta{
+		Name: "edit", Status: "completed", Title: path, PartID: "p1", CallID: "c1",
 		InputJSON:    `{"filePath":"main.go","oldString":"old","newString":"new"}`,
-		MetadataJSON: &meta,
+		MetadataJSON: meta,
 	}})
 	if !m.items[m.lastTool].collapsed {
 		t.Fatal("completed edit must stay collapsed after user closed it")
@@ -2605,9 +2605,9 @@ func TestEditCtrlEToggles(t *testing.T) {
 	m = mm.(Model)
 	path := "main.go"
 	meta := `{"diff":"@@ -1,1 +1,1 @@\n-a\n+b"}`
-	m.applyTool(agent.Event{Tool: db.ToolCall{
-		Tool: "edit", Status: "completed", Title: &path, PartID: "p1",
-		InputJSON: `{"filePath":"main.go","oldString":"a","newString":"b"}`, MetadataJSON: &meta,
+	m.applyTool(agent.Event{Tool: agent.ToolDelta{
+		Name: "edit", Status: "completed", Title: path, PartID: "p1",
+		InputJSON: `{"filePath":"main.go","oldString":"a","newString":"b"}`, MetadataJSON: meta,
 	}})
 	if m.items[m.lastTool].collapsed {
 		t.Fatal("edit should start open")

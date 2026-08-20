@@ -7,7 +7,6 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/chinmay-sawant/lazykoder/internal/agent"
 	"github.com/chinmay-sawant/lazykoder/internal/db"
 	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
@@ -138,11 +137,11 @@ func TestHelpOverlayHasNewCommands(t *testing.T) {
 func TestExpandedToolHasOutputSplit(t *testing.T) {
 	out := "hello output"
 	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
-	body := m.renderTool(agent.Event{Tool: db.ToolCall{
+	body := m.renderTool(db.ToolCall{
 		Tool:   "bash",
 		Status: "completed",
 		Output: &out,
-	}}, false, 0)
+	}, db.Part{}, false, 0)
 	plain := stripANSI(body)
 	if !strings.Contains(plain, "output") || !strings.Contains(plain, "hello output") {
 		t.Fatalf("expanded tool missing header/body split: %q", plain)

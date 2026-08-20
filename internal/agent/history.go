@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/chinmay-sawant/lazykoder/internal/db"
-	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 )
 
 type histEntry struct {
@@ -13,7 +12,7 @@ type histEntry struct {
 	parts []db.Part
 }
 
-func (a *Agent) buildHistory(ctx context.Context) ([]opencode.Message, error) {
+func (a *Agent) buildHistory(ctx context.Context) ([]ChatMessage, error) {
 	raw, err := a.loadHistory(ctx)
 	if err != nil {
 		return nil, err
@@ -25,7 +24,7 @@ func (a *Agent) buildHistory(ctx context.Context) ([]opencode.Message, error) {
 	return PruneToolOutputs(raw, keep), nil
 }
 
-func (a *Agent) loadHistory(ctx context.Context) ([]opencode.Message, error) {
+func (a *Agent) loadHistory(ctx context.Context) ([]ChatMessage, error) {
 	entries, byPart, err := a.sessionEntries(ctx)
 	if err != nil {
 		return nil, err
@@ -47,9 +46,9 @@ func (a *Agent) loadHistory(ctx context.Context) ([]opencode.Message, error) {
 			start = idx
 		}
 	}
-	out := make([]opencode.Message, 0, len(entries)+1)
+	out := make([]ChatMessage, 0, len(entries)+1)
 	if checkpoint != nil {
-		out = append(out, opencode.Message{
+		out = append(out, ChatMessage{
 			Role:    "user",
 			Content: compactCheckpointLead + checkpoint.Summary,
 		})
@@ -75,12 +74,12 @@ func (a *Agent) sessionEntries(ctx context.Context) ([]histEntry, map[string]db.
 	return entries, graph.ToolCallsByPart, nil
 }
 
-func (a *Agent) entryMessages(entry histEntry, byPart map[string]db.ToolCall) []opencode.Message {
+func (a *Agent) entryMessages(entry histEntry, byPart map[string]db.ToolCall) []ChatMessage {
 	switch entry.msg.Role {
 	case "user":
-		return []opencode.Message{{Role: "user", Content: concatText(entry.parts)}}
+		return []ChatMessage{{Role: "user", Content: concatText(entry.parts)}}
 	case "assistant":
-		msg := opencode.Message{Role: "assistant", Content: concatText(entry.parts)}
+		msg := ChatMessage{Role: "assistant", Content: concatText(entry.parts)}
 		var toolParts []db.Part
 		for _, p := range entry.parts {
 			if p.Type != "tool" || p.ToolCallID == nil {
@@ -95,15 +94,15 @@ func (a *Agent) entryMessages(entry histEntry, byPart map[string]db.ToolCall) []
 			if tc, ok := byPart[p.ID]; ok {
 				args = tc.InputJSON
 			}
-			msg.ToolCalls = append(msg.ToolCalls, opencode.ToolCall{
+			msg.ToolCalls = append(msg.ToolCalls, ChatToolCall{
 				ID:        *p.ToolCallID,
 				Name:      name,
 				Arguments: args,
 			})
 		}
-		out := []opencode.Message{msg}
+		out := []ChatMessage{msg}
 		for _, p := range toolParts {
-			out = append(out, opencode.Message{
+			out = append(out, ChatMessage{
 				Role:       "tool",
 				ToolCallID: *p.ToolCallID,
 				Content:    a.toolResult(p, byPart[p.ID]),

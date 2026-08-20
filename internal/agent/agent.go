@@ -117,14 +117,14 @@ func (a *Agent) ensureProjectInstructions() {
 }
 
 // withProjectInstructions prepends a system message when AGENTS.md is present.
-func (a *Agent) withProjectInstructions(history []opencode.Message) []opencode.Message {
+func (a *Agent) withProjectInstructions(history []ChatMessage) []ChatMessage {
 	a.ensureProjectInstructions()
 	body := FormatProjectInstructionsMessage(a.projectInstructions)
 	if body == "" {
 		return history
 	}
-	out := make([]opencode.Message, 0, len(history)+1)
-	out = append(out, opencode.Message{Role: "system", Content: body})
+	out := make([]ChatMessage, 0, len(history)+1)
+	out = append(out, ChatMessage{Role: "system", Content: body})
 	out = append(out, history...)
 	return out
 }
@@ -156,13 +156,14 @@ const (
 )
 
 // Event is one streamed write or error during Send.
+// Part/Tool are UI deltas; db rows stay inside agent persistence code.
 type Event struct {
 	Kind         EventKind
 	SessionID    string
 	MessageID    string
 	Role         string
-	Part         db.Part
-	Tool         db.ToolCall
+	Part         PartDelta
+	Tool         ToolDelta
 	TokenDelta   int64
 	TokensOutput int64
 	ElapsedMS    int64
@@ -263,12 +264,12 @@ func (a *Agent) stepOnce(ctx context.Context, events chan<- Event) (*opencode.Ch
 	return resp, nil
 }
 
-func (a *Agent) callModel(ctx context.Context, events chan<- Event, history []opencode.Message) (*opencode.ChatResponse, error) {
+func (a *Agent) callModel(ctx context.Context, events chan<- Event, history []ChatMessage) (*opencode.ChatResponse, error) {
 	req := opencode.ChatRequest{
 		Model:           a.opts.Model,
 		Endpoint:        a.opts.Endpoint,
 		ReasoningEffort: a.opts.Variant,
-		Messages:        a.withProjectInstructions(history),
+		Messages:        toWireMessages(a.withProjectInstructions(history)),
 		Tools:           toolSpecsFor(a.opts.ToolNames, a.opts.Host),
 	}
 	if a.opts.DisableStreaming {
@@ -339,7 +340,7 @@ func (a *Agent) writeUserTurn(ctx context.Context, userText string, events chan<
 	if err != nil {
 		return fmt.Errorf("agent: insert user part: %w", err)
 	}
-	a.emit(events, Event{Kind: EventPart, SessionID: a.sessionID(), MessageID: m.ID, Part: part})
+	a.emit(events, Event{Kind: EventPart, SessionID: a.sessionID(), MessageID: m.ID, Part: partDeltaFromDB(part)})
 	return nil
 }
 
@@ -369,7 +370,7 @@ func (a *Agent) writeResponse(ctx context.Context, events chan<- Event, resp *op
 			return err
 		}
 	}
-	if err := a.runTools(ctx, events, m.ID, resp.ToolCalls); err != nil {
+	if err := a.runTools(ctx, events, m.ID, fromWireToolCalls(resp.ToolCalls)); err != nil {
 		return err
 	}
 	return a.writeStepFinish(ctx, events, m.ID, resp, started)

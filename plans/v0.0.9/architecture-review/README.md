@@ -1,7 +1,7 @@
 # v0.0.9 architecture review - deepen hot modules
 
 > **Parent:** `plans/v0.0.9/` (fresh launch / quit banner track is separate)
-> **Status:** phases 1-6 implemented and gated 2026-08-21 (C8/C9 deferred)
+> **Status:** phases 1-7 implemented and gated 2026-08-21
 > **Branch:** `chore/009-improve-architecture`
 > **Estimated effort:** 5-8 days across six phases
 > **Priority:** P2 (navigability and test locality; no user-facing feature)
@@ -19,6 +19,7 @@ cross-cutting seams).
 | --- | --- |
 | `architecture-review.html` | Visual candidate report (open in a browser) |
 | `phase-wise-checklist.md` | Canonical execution ledger |
+| `phase-7-deferred-c8-c9-domain.md` | Plan for C8 layout, C9 Event deltas, Agent domain messages |
 | this README | Scope, order, constraints |
 
 Mark `[x]` only after the named gate command passes. Do not claim TUI feel

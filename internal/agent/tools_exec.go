@@ -13,7 +13,6 @@ import (
 
 	"github.com/chinmay-sawant/lazykoder/internal/db"
 	"github.com/chinmay-sawant/lazykoder/internal/policy"
-	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/bash"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/edit"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/grep"
@@ -30,7 +29,7 @@ type bashArgs struct {
 }
 
 // baseToolRunner executes one allowed base tool call (method-expression shape).
-type baseToolRunner func(a *Agent, ctx context.Context, events chan<- Event, partID, title string, tc opencode.ToolCall) (string, error)
+type baseToolRunner func(a *Agent, ctx context.Context, events chan<- Event, partID, title string, tc ChatToolCall) (string, error)
 
 // baseToolRunners maps advertised base tool names to their executors.
 // Task-family tools are not registered here; they go through SubagentHost.
@@ -45,9 +44,9 @@ var baseToolRunners = map[string]baseToolRunner{
 	toolTodowrite: (*Agent).execTodowrite,
 }
 
-func splitToolCallArguments(tc opencode.ToolCall) ([]opencode.ToolCall, error) {
+func splitToolCallArguments(tc ChatToolCall) ([]ChatToolCall, error) {
 	dec := json.NewDecoder(strings.NewReader(tc.Arguments))
-	var out []opencode.ToolCall
+	var out []ChatToolCall
 	for {
 		var raw json.RawMessage
 		err := dec.Decode(&raw)
@@ -74,8 +73,8 @@ func splitToolCallArguments(tc opencode.ToolCall) ([]opencode.ToolCall, error) {
 }
 
 // runTools executes non-task tools sequentially, then task-family tools in parallel.
-func (a *Agent) runTools(ctx context.Context, events chan<- Event, msgID string, toolCalls []opencode.ToolCall) error {
-	var expanded []opencode.ToolCall
+func (a *Agent) runTools(ctx context.Context, events chan<- Event, msgID string, toolCalls []ChatToolCall) error {
+	var expanded []ChatToolCall
 	for _, tc := range toolCalls {
 		calls, err := splitToolCallArguments(tc)
 		if err != nil {
@@ -87,7 +86,7 @@ func (a *Agent) runTools(ctx context.Context, events chan<- Event, msgID string,
 		expanded = append(expanded, calls...)
 	}
 	toolCalls = expanded
-	var sequential, parallel []opencode.ToolCall
+	var sequential, parallel []ChatToolCall
 	for _, tc := range toolCalls {
 		if isTaskToolName(tc.Name) {
 			parallel = append(parallel, tc)
@@ -110,7 +109,7 @@ func (a *Agent) runTools(ctx context.Context, events chan<- Event, msgID string,
 	var wg sync.WaitGroup
 	for _, tc := range parallel {
 		wg.Add(1)
-		go func(tc opencode.ToolCall) {
+		go func(tc ChatToolCall) {
 			defer wg.Done()
 			if err := a.runTool(ctx, events, msgID, tc); err != nil {
 				errCh <- err
@@ -127,7 +126,7 @@ func (a *Agent) runTools(ctx context.Context, events chan<- Event, msgID string,
 	return nil
 }
 
-func (a *Agent) runTool(ctx context.Context, events chan<- Event, msgID string, tc opencode.ToolCall) (err error) {
+func (a *Agent) runTool(ctx context.Context, events chan<- Event, msgID string, tc ChatToolCall) (err error) {
 	// Tool calls originate from model output and may execute in parallel. Never
 	// allow a malformed payload or an unexpected tool panic to bring down the
 	// entire application (a panic in one of the worker goroutines would crash
@@ -162,12 +161,12 @@ func (a *Agent) runTool(ctx context.Context, events chan<- Event, msgID string, 
 	if err := a.store.InsertToolCall(ctx, row); err != nil {
 		return fmt.Errorf("agent: insert tool call: %w", err)
 	}
-	a.emit(events, Event{Kind: EventTool, SessionID: a.sessionID(), MessageID: msgID, Part: part, Tool: row})
+	a.emit(events, Event{Kind: EventTool, SessionID: a.sessionID(), MessageID: msgID, Part: partDeltaFromDB(part), Tool: toolDeltaFromDB(row)})
 	_, err = a.executeTool(ctx, events, part.ID, title, tc)
 	return err
 }
 
-func toolTitle(tc opencode.ToolCall) string {
+func toolTitle(tc ChatToolCall) string {
 	var args map[string]json.RawMessage
 	if json.Unmarshal([]byte(tc.Arguments), &args) != nil {
 		return tc.Name
@@ -229,7 +228,7 @@ func toolTitle(tc opencode.ToolCall) string {
 	return tc.Name
 }
 
-func (a *Agent) executeTool(ctx context.Context, events chan<- Event, partID, title string, tc opencode.ToolCall) (string, error) {
+func (a *Agent) executeTool(ctx context.Context, events chan<- Event, partID, title string, tc ChatToolCall) (string, error) {
 	if isTaskToolName(tc.Name) {
 		return a.execTaskTool(ctx, events, partID, title, tc)
 	}
@@ -244,7 +243,7 @@ func (a *Agent) executeTool(ctx context.Context, events chan<- Event, partID, ti
 	return a.updateTool(ctx, events, partID, title, tc, "denied", &out, deniedJSON(), nil, nil)
 }
 
-func (a *Agent) execTaskTool(ctx context.Context, events chan<- Event, partID, title string, tc opencode.ToolCall) (string, error) {
+func (a *Agent) execTaskTool(ctx context.Context, events chan<- Event, partID, title string, tc ChatToolCall) (string, error) {
 	if a.opts.Host == nil {
 		out := "task tools require a subagent host"
 		return a.updateTool(ctx, events, partID, title, tc, "denied", &out, deniedJSON(), nil, nil)
@@ -265,7 +264,7 @@ func (a *Agent) execTaskTool(ctx context.Context, events chan<- Event, partID, t
 	return a.updateTool(ctx, events, partID, title, tc, status, &out, result, nil, metaPtr)
 }
 
-func (a *Agent) execBash(ctx context.Context, events chan<- Event, partID, title string, tc opencode.ToolCall) (string, error) {
+func (a *Agent) execBash(ctx context.Context, events chan<- Event, partID, title string, tc ChatToolCall) (string, error) {
 	var args bashArgs
 	if err := json.Unmarshal([]byte(tc.Arguments), &args); err != nil {
 		msg := "invalid bash arguments: " + err.Error()
@@ -315,7 +314,7 @@ func (a *Agent) execBash(ctx context.Context, events chan<- Event, partID, title
 		&res.StartTime, &res.EndTime)
 }
 
-func (a *Agent) execRead(ctx context.Context, events chan<- Event, partID, title string, tc opencode.ToolCall) (string, error) {
+func (a *Agent) execRead(ctx context.Context, events chan<- Event, partID, title string, tc ChatToolCall) (string, error) {
 	var args struct {
 		FilePath string `json:"filePath"`
 	}
@@ -337,7 +336,7 @@ func (a *Agent) execRead(ctx context.Context, events chan<- Event, partID, title
 	return a.updateTool(ctx, events, partID, title, tc, "completed", &out, toolOutputJSON(out), nil, &metaJSON)
 }
 
-func (a *Agent) execGrep(ctx context.Context, events chan<- Event, partID, title string, tc opencode.ToolCall) (string, error) {
+func (a *Agent) execGrep(ctx context.Context, events chan<- Event, partID, title string, tc ChatToolCall) (string, error) {
 	var args struct {
 		Pattern         string `json:"pattern"`
 		Path            string `json:"path"`
@@ -369,7 +368,7 @@ func (a *Agent) execGrep(ctx context.Context, events chan<- Event, partID, title
 	return a.updateTool(ctx, events, partID, title, tc, "completed", &out, toolOutputJSON(out), nil, &metaJSON)
 }
 
-func (a *Agent) execWrite(ctx context.Context, events chan<- Event, partID, title string, tc opencode.ToolCall) (string, error) {
+func (a *Agent) execWrite(ctx context.Context, events chan<- Event, partID, title string, tc ChatToolCall) (string, error) {
 	var args struct {
 		FilePath string `json:"filePath"`
 		Contents string `json:"contents"`
@@ -387,7 +386,7 @@ func (a *Agent) execWrite(ctx context.Context, events chan<- Event, partID, titl
 	return a.updateTool(ctx, events, partID, title, tc, "completed", &res.Output, toolOutputJSON(res.Output), nil, &metaJSON)
 }
 
-func (a *Agent) execEdit(ctx context.Context, events chan<- Event, partID, title string, tc opencode.ToolCall) (string, error) {
+func (a *Agent) execEdit(ctx context.Context, events chan<- Event, partID, title string, tc ChatToolCall) (string, error) {
 	var args struct {
 		FilePath  string `json:"filePath"`
 		OldString string `json:"oldString"`
@@ -406,7 +405,7 @@ func (a *Agent) execEdit(ctx context.Context, events chan<- Event, partID, title
 	return a.updateTool(ctx, events, partID, title, tc, "completed", &res.Output, toolOutputJSON(res.Output), nil, &metaJSON)
 }
 
-func (a *Agent) execWebfetch(ctx context.Context, events chan<- Event, partID, title string, tc opencode.ToolCall) (string, error) {
+func (a *Agent) execWebfetch(ctx context.Context, events chan<- Event, partID, title string, tc ChatToolCall) (string, error) {
 	var args struct {
 		URL    string `json:"url"`
 		Format string `json:"format"`
@@ -432,7 +431,7 @@ func (a *Agent) execWebfetch(ctx context.Context, events chan<- Event, partID, t
 	return a.updateTool(ctx, events, partID, title, tc, "completed", &out, toolOutputJSON(out), nil, &metaJSON)
 }
 
-func (a *Agent) execQuestion(ctx context.Context, events chan<- Event, partID, title string, tc opencode.ToolCall) (string, error) {
+func (a *Agent) execQuestion(ctx context.Context, events chan<- Event, partID, title string, tc ChatToolCall) (string, error) {
 	var args struct {
 		Questions []question.Question `json:"questions"`
 	}
@@ -454,7 +453,7 @@ func (a *Agent) execQuestion(ctx context.Context, events chan<- Event, partID, t
 	return a.updateTool(ctx, events, partID, title, tc, "completed", &res.Output, toolOutputJSON(res.Output), nil, &metaJSON)
 }
 
-func (a *Agent) execTodowrite(ctx context.Context, events chan<- Event, partID, title string, tc opencode.ToolCall) (string, error) {
+func (a *Agent) execTodowrite(ctx context.Context, events chan<- Event, partID, title string, tc ChatToolCall) (string, error) {
 	res, err := todo.Run(tc.Arguments)
 	if err != nil {
 		msg := err.Error()
@@ -482,7 +481,7 @@ func (a *Agent) execTodowrite(ctx context.Context, events chan<- Event, partID, 
 	return a.updateTool(ctx, events, partID, title, tc, "completed", &out, toolOutputJSON(out), nil, nil)
 }
 
-func (a *Agent) updateTool(ctx context.Context, events chan<- Event, partID, title string, tc opencode.ToolCall,
+func (a *Agent) updateTool(ctx context.Context, events chan<- Event, partID, title string, tc ChatToolCall,
 	status string, out *string, result string, exit *int, timesAndMeta ...any,
 ) (string, error) {
 	row := db.ToolCall{
@@ -517,7 +516,7 @@ func (a *Agent) updateTool(ctx context.Context, events chan<- Event, partID, tit
 	if err := a.store.UpdateToolCall(ctx, row); err != nil {
 		return "", fmt.Errorf("agent: update tool call: %w", err)
 	}
-	a.emit(events, Event{Kind: EventTool, SessionID: a.sessionID(), Tool: row})
+	a.emit(events, Event{Kind: EventTool, SessionID: a.sessionID(), Tool: toolDeltaFromDB(row)})
 	return result, nil
 }
 

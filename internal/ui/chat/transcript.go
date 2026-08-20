@@ -721,29 +721,33 @@ func (m *Model) collapseLiveReasoning() {
 }
 
 func (m *Model) applyTool(ev agent.Event) {
-	if ev.Tool.Tool == "" && ev.Part.ToolName != nil {
-		ev.Tool.Tool = *ev.Part.ToolName
+	tool := ev.Tool
+	part := ev.Part
+	if tool.Name == "" && part.ToolName != "" {
+		tool.Name = part.ToolName
 	}
-	if ev.Tool.Tool == "" {
+	if tool.Name == "" {
 		return
 	}
 	m.collapseLiveReasoning()
-	status := ev.Tool.Status
-	if status == "" && ev.Part.ToolStatus != nil {
-		status = *ev.Part.ToolStatus
-		ev.Tool.Status = status
+	status := tool.Status
+	if status == "" && part.ToolStatus != "" {
+		status = part.ToolStatus
+		tool.Status = status
 	}
 	if status == "" {
 		status = "pending"
-		ev.Tool.Status = status
+		tool.Status = status
 	}
-	when := itemTime(0, ev.Part.TimeCreated)
-	if ev.Tool.TimeStart != nil {
-		when = *ev.Tool.TimeStart
+	when := itemTime(0, part.TimeCreated)
+	if tool.TimeStart != nil {
+		when = *tool.TimeStart
 	}
+	dbTool := dbToolFromDelta(tool)
+	dbPart := dbPartFromDelta(part)
 	// Edit opens by default so the diff is visible; user can collapse with e.
-	collapsed := ev.Tool.Tool != "edit"
-	item := transcriptItem{kind: itemTool, collapsed: collapsed, when: when, tool: ev.Tool, part: ev.Part}
+	collapsed := tool.Name != "edit"
+	item := transcriptItem{kind: itemTool, collapsed: collapsed, when: when, tool: dbTool, part: dbPart}
 	if status == "" || status == "pending" {
 		m.items = append(m.items, item)
 		m.lastTool = len(m.items) - 1
@@ -751,7 +755,7 @@ func (m *Model) applyTool(ev agent.Event) {
 		m.syncTranscript()
 		return
 	}
-	if idx := m.findToolItemIndex(ev.Tool, ev.Part); idx >= 0 {
+	if idx := m.findToolItemIndex(dbTool, dbPart); idx >= 0 {
 		// Keep the user's open/closed choice across status updates.
 		item.collapsed = m.items[idx].collapsed
 		m.items[idx] = item
@@ -819,7 +823,7 @@ func (m Model) renderItemWithToolMode(it transcriptItem, selected bool, streamin
 		}
 		return head + "\n" + reasoningStyle.Render(ansi.Wrap(body, m.contentWidth(it.when), " "))
 	case itemTool:
-		return m.renderToolMode(agent.Event{Part: it.part, Tool: it.tool}, it.collapsed, it.when, fullToolOutput)
+		return m.renderToolMode(it.tool, it.part, it.collapsed, it.when, fullToolOutput)
 	case itemNote:
 		return hintStyle.Render(it.text)
 	}
@@ -829,25 +833,25 @@ func (m Model) renderItemWithToolMode(it transcriptItem, selected bool, streamin
 	return it.text
 }
 
-func (m Model) renderTool(ev agent.Event, collapsed bool, when int64) string {
-	return m.renderToolMode(ev, collapsed, when, false)
+func (m Model) renderTool(tool db.ToolCall, part db.Part, collapsed bool, when int64) string {
+	return m.renderToolMode(tool, part, collapsed, when, false)
 }
 
 // renderToolMode renders the main transcript with bounded expanded bodies.
 // The full-body mode is reserved for the full-screen sub-agent audit log.
-func (m Model) renderToolMode(ev agent.Event, collapsed bool, when int64, fullToolOutput bool) string {
-	name := ev.Tool.Tool
-	if name == "" && ev.Part.ToolName != nil {
-		name = *ev.Part.ToolName
+func (m Model) renderToolMode(tool db.ToolCall, part db.Part, collapsed bool, when int64, fullToolOutput bool) string {
+	name := tool.Tool
+	if name == "" && part.ToolName != nil {
+		name = *part.ToolName
 	}
-	status := ev.Tool.Status
-	if status == "" && ev.Part.ToolStatus != nil {
-		status = *ev.Part.ToolStatus
+	status := tool.Status
+	if status == "" && part.ToolStatus != nil {
+		status = *part.ToolStatus
 	}
 	if status == "" {
 		status = "pending"
 	}
-	title := toolCommand(ev.Tool)
+	title := toolCommand(tool)
 	if title == "" {
 		title = name
 	}
@@ -868,7 +872,7 @@ func (m Model) renderToolMode(ev agent.Event, collapsed bool, when int64, fullTo
 	}
 	// Collapsed or open: still show +/− counts on the edit header.
 	if name == "edit" {
-		if add, del := diffStat(m.toolEditDiff(ev.Tool)); add+del > 0 {
+		if add, del := diffStat(m.toolEditDiff(tool)); add+del > 0 {
 			label += "  " + formatDiffStat(add, del)
 		}
 	}
@@ -880,7 +884,7 @@ func (m Model) renderToolMode(ev agent.Event, collapsed bool, when int64, fullTo
 
 	// Edit tools: full-width soft green/red panel when expanded.
 	if name == "edit" {
-		return m.renderEditTool(header, ev, collapsed, bodyWidth)
+		return m.renderEditTool(header, tool, collapsed, bodyWidth)
 	}
 
 	card := toolCardStyle.Width(bodyWidth).Background(theme.ColorBg())
@@ -888,21 +892,21 @@ func (m Model) renderToolMode(ev agent.Event, collapsed bool, when int64, fullTo
 		return card.Render(header)
 	}
 	body := []string{header}
-	switch ev.Tool.Tool {
+	switch tool.Tool {
 	case "write":
-		if ev.Tool.Output != nil && *ev.Tool.Output != "" {
-			preview := strings.TrimSuffix(*ev.Tool.Output, "\n")
+		if tool.Output != nil && *tool.Output != "" {
+			preview := strings.TrimSuffix(*tool.Output, "\n")
 			if !fullToolOutput && len([]rune(preview)) > 400 {
 				preview = string([]rune(preview)[:400]) + "…"
 			}
 			body = append(body, toolOutputStyle.Width(bodyWidth).Render(strings.TrimSuffix(preview, "\n")))
 		}
 	default:
-		if command := toolCommand(ev.Tool); command != "" {
+		if command := toolCommand(tool); command != "" {
 			body = append(body, hintStyle.Width(bodyWidth).Render("  $ "+command))
 		}
-		if ev.Tool.Output != nil && *ev.Tool.Output != "" {
-			output := strings.TrimSuffix(*ev.Tool.Output, "\n")
+		if tool.Output != nil && *tool.Output != "" {
+			output := strings.TrimSuffix(*tool.Output, "\n")
 			if !fullToolOutput {
 				output, _ = truncateToolOutputForView(output)
 			}
@@ -916,17 +920,17 @@ func (m Model) renderToolMode(ev agent.Event, collapsed bool, when int64, fullTo
 
 // renderEditTool draws the edit tool as a full-width card with soft green/red
 // row washes. Open by default; collapsed shows only the header (+/− stats).
-func (m Model) renderEditTool(header string, ev agent.Event, collapsed bool, width int) string {
+func (m Model) renderEditTool(header string, tool db.ToolCall, collapsed bool, width int) string {
 	width = max(minPaneWidth, width)
 	panel := editCardStyle.Width(width)
 	head := panel.Render(header)
 	if collapsed {
 		return head
 	}
-	diff := m.toolEditDiff(ev.Tool)
+	diff := m.toolEditDiff(tool)
 	if diff == "" {
-		if ev.Tool.Output != nil && *ev.Tool.Output != "" {
-			out := panel.Foreground(theme.ColorMute()).Render(strings.TrimSuffix(*ev.Tool.Output, "\n"))
+		if tool.Output != nil && *tool.Output != "" {
+			out := panel.Foreground(theme.ColorMute()).Render(strings.TrimSuffix(*tool.Output, "\n"))
 			return head + "\n" + out
 		}
 		pending := panel.Foreground(theme.ColorMute()).Render("applying edit…")
