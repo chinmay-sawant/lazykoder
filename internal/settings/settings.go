@@ -59,6 +59,8 @@ const (
 	settingsDirMode = 0o755
 	// settingsFileMode is the on-disk mode for settings.json.
 	settingsFileMode = 0o600
+	// percentScale is the denominator for percent calculations (100%).
+	percentScale = 100
 )
 
 // Slot holds agent loop / step-budget preferences.
@@ -279,7 +281,7 @@ func (c Compaction) ThresholdTokens(window int64) int64 {
 	if window <= 0 {
 		return 0
 	}
-	return window * int64(c.Percent) / 100
+	return window * int64(c.Percent) / percentScale
 }
 
 func (a Agents) normalized() Agents {
