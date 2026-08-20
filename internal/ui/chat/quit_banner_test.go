@@ -1,0 +1,121 @@
+package chat
+
+import (
+	"context"
+	"strings"
+	"testing"
+
+	"github.com/chinmay-sawant/lazykoder/internal/db"
+)
+
+func TestFormatQuitBanner(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		id   string
+		want string
+	}{
+		{
+			name: "with session",
+			id:   "ses_abcdef0123456789",
+			want: quitLogo + "\nlk ses_abcdef0123456789\nresume with /resume or ctrl+s\n",
+		},
+		{
+			name: "empty",
+			id:   "",
+			want: quitLogo + "\nlk (no session)\nresume older runs with /resume or ctrl+s\n",
+		},
+		{
+			name: "whitespace only",
+			id:   "  \t  ",
+			want: quitLogo + "\nlk (no session)\nresume older runs with /resume or ctrl+s\n",
+		},
+		{
+			name: "trimmed id",
+			id:   "  ses_abc  ",
+			want: quitLogo + "\nlk ses_abc\nresume with /resume or ctrl+s\n",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := FormatQuitBanner(tc.id)
+			if got != tc.want {
+				t.Fatalf("FormatQuitBanner(%q) = %q, want %q", tc.id, got, tc.want)
+			}
+			if !strings.HasPrefix(got, quitLogo) {
+				t.Fatalf("quit logo missing from banner: %q", got)
+			}
+		})
+	}
+}
+
+func TestSessionID(t *testing.T) {
+	t.Parallel()
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	if got := m.SessionID(); got != "" {
+		t.Fatalf("SessionID on fresh model = %q, want empty", got)
+	}
+
+	tmp := t.TempDir()
+	st := newTestStore(t)
+	sess, err := st.CreateSession(context.Background(), db.Session{Title: "quit", Directory: tmp})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	m = New(Options{Store: st, Client: deadClient(), Workdir: tmp, Session: &sess})
+	if got := m.SessionID(); got != sess.ID {
+		t.Fatalf("SessionID = %q, want %q", got, sess.ID)
+	}
+}
+
+func TestFreshLaunchDoesNotReplayExistingSession(t *testing.T) {
+	tmp := t.TempDir()
+	st := newTestStore(t)
+	sess, err := st.CreateSession(context.Background(), db.Session{
+		Title:     "prior run",
+		Directory: tmp,
+		Model:     "deepseek-v4-flash",
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	um, err := st.InsertMessage(context.Background(), db.Message{
+		SessionID: sess.ID,
+		Role:      "user",
+		Agent:     "user",
+	})
+	if err != nil {
+		t.Fatalf("InsertMessage: %v", err)
+	}
+	prior := "unique prior transcript text xyzzy"
+	if _, err := st.InsertPart(context.Background(), db.Part{
+		MessageID: um.ID,
+		Type:      "text",
+		Text:      &prior,
+	}); err != nil {
+		t.Fatalf("InsertPart: %v", err)
+	}
+
+	// Launch path: Session is nil even though the store has a main session.
+	m := New(Options{Store: st, Client: deadClient(), Workdir: tmp})
+	if m.session != nil {
+		t.Fatal("fresh launch attached a session")
+	}
+	if got := m.SessionID(); got != "" {
+		t.Fatalf("SessionID = %q, want empty", got)
+	}
+	v := stripANSI(viewText(m))
+	if strings.Contains(v, prior) {
+		t.Fatalf("fresh launch replayed prior transcript: %q", v)
+	}
+	if !strings.Contains(v, "new session") {
+		t.Fatalf("fresh launch missing new-session chrome: %q", v)
+	}
+
+	// Explicit resume still works when a session is passed.
+	resumed := New(Options{Store: st, Client: deadClient(), Workdir: tmp, Session: &sess})
+	if !strings.Contains(stripANSI(viewText(resumed)), prior) {
+		t.Fatal("explicit Session resume did not replay prior text")
+	}
+}

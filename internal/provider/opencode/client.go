@@ -376,6 +376,28 @@ func chatResponseFromWire(wire wireResponse) *ChatResponse {
 	return out
 }
 
+func normalizeMessages(messages []Message) []Message {
+	out := append([]Message(nil), messages...)
+	pending := make([]string, 0)
+	seq := 0
+	for i := range out {
+		if out[i].Role == "assistant" {
+			for j := range out[i].ToolCalls {
+				if strings.TrimSpace(out[i].ToolCalls[j].ID) == "" {
+					seq++
+					out[i].ToolCalls[j].ID = fmt.Sprintf("call_lazykoder_%d", seq)
+				}
+				pending = append(pending, out[i].ToolCalls[j].ID)
+			}
+		}
+		if out[i].Role == "tool" && strings.TrimSpace(out[i].ToolCallID) == "" && len(pending) > 0 {
+			out[i].ToolCallID = pending[0]
+			pending = pending[1:]
+		}
+	}
+	return out
+}
+
 func (c *Client) postChat(ctx context.Context, req ChatRequest, stream bool) (*http.Response, error) {
 	model := c.model
 	if req.Model != "" {
@@ -384,7 +406,7 @@ func (c *Client) postChat(ctx context.Context, req ChatRequest, stream bool) (*h
 	payload := wireRequest{
 		Model:           model,
 		ReasoningEffort: req.ReasoningEffort,
-		Messages:        req.Messages,
+		Messages:        normalizeMessages(req.Messages),
 		MaxTokens:       req.MaxTokens,
 	}
 	if stream {

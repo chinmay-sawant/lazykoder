@@ -18,8 +18,9 @@
 - Model picker: fetch the model list and switch models mid-session
 - Auto-compact when used tokens exceed 80% of the live window (or `/compact`
   now). Shrinking to a smaller window hints `next send will compact`
-- Session replay: reopening the app in the same directory resumes the latest
-  session. `/status` shows current fill, cache, cost, and child spend
+- Fresh launch every time; `/resume` or `ctrl+s` loads a past run. Confirmed
+  `ctrl+c` quit prints `lk <session_id>` plus a resume hint on the console.
+  `/status` shows current fill, cache, cost, and child spend
 
 ## Screenshots
 
@@ -28,7 +29,7 @@ Taken from a live `bin/lk` run against the latest session in this project.
 <p align="center">
   <img src="screenshots/chat-session.png" alt="Latest chat session" width="820">
   <br>
-  <em>Launch resumes the latest session for the current directory</em>
+  <em>Launch opens a fresh session; use /resume for past runs</em>
 </p>
 
 <p align="center">

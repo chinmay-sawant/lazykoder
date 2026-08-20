@@ -35,7 +35,7 @@ the readable reference; keep the two in sync when adding or editing a tip.
 
 - type `@` to mention a project file
 - `ctrl+a` selects the whole input
-- `ctrl+c` copies the input, twice quits
+- `ctrl+c` copies the input, twice quits and prints `lk <session>`
 - `up`/`down` browse your previous prompts
 
 ## Transcript and mouse
@@ -51,6 +51,6 @@ the readable reference; keep the two in sync when adding or editing a tip.
 
 ## Sessions and safety
 
-- your session resumes where you left off
+- launch is fresh; `/resume` or `ctrl+s` loads a past run
 - destructive bash commands always ask first
 - open `/status` for tokens, cache, cost and tps

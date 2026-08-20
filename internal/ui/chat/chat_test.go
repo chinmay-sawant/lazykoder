@@ -384,6 +384,11 @@ func TestQuitKeys(t *testing.T) {
 	if msg := cmd(); msg != (tea.QuitMsg{}) {
 		t.Errorf("second ctrl+c in confirm mode: cmd() = %#v, want tea.QuitMsg", msg)
 	}
+	if id := m2.SessionID(); id == "" {
+		t.Fatal("second ctrl+c quit with empty SessionID after a started turn")
+	} else if !strings.HasPrefix(id, "ses_") {
+		t.Fatalf("SessionID = %q, want ses_ prefix", id)
+	}
 	deadline := time.Now().Add(5 * time.Second)
 	for fake.requestCount() < 2 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)

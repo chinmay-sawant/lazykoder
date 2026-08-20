@@ -17,6 +17,13 @@ import (
 
 const composerFooterDetailGap = 2
 
+// lazykoderLogo is shown when /new clears the transcript, so a fresh session
+// gets the same LazyKoder identity as the quit screen.
+const lazykoderLogo = "" +
+	"  █    █▀▀█ ▀▀▀█ █  █ █ ▄▀ █▀▀█ █▀▀▄ █▀▀▀ █▀▀█\n" +
+	"  █    █▄▄█  ▄▀   ▀▀█ █▀▄  █  █ █  █ █▀▀▀ █▄▄▀\n" +
+	"  ▀▀▀▀ ▀  ▀ ▀▀▀▀  ▀▀▀ ▀  ▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀  ▀"
+
 const (
 	minWholeTPS = 10
 	tpsKilo     = 1000
@@ -709,6 +716,7 @@ func (m Model) transcriptView() string {
 	w := max(minPaneWidth, m.width)
 	if len(m.items) == 0 {
 		empty := strings.Join([]string{
+			lazykoderLogo,
 			lipgloss.NewStyle().Foreground(theme.ColorText()).Bold(true).Render("new session"),
 			hintStyle.Render("ask anything about this project"),
 			hintStyle.Render("/ commands   @ files   ? help   /settings"),

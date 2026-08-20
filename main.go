@@ -2,14 +2,12 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/chinmay-sawant/lazykoder/internal/db"
 	"github.com/chinmay-sawant/lazykoder/internal/envfile"
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 	"github.com/chinmay-sawant/lazykoder/internal/settings"
@@ -41,12 +39,6 @@ func main() {
 		initial = keyErr.Error()
 	}
 
-	var sess *db.Session
-	sessions, err := env.DB.ListSessionsByDir(context.Background(), cwd)
-	if err == nil && len(sessions) > 0 {
-		sess = &sessions[0]
-	}
-
 	settingsPath := settings.Path(env.Dir)
 	cfg, err := settings.LoadFile(settingsPath)
 	if err != nil {
@@ -57,19 +49,24 @@ func main() {
 		}
 	}
 
+	// Always start fresh. Past runs stay in SQLite and load via /resume.
 	p := tea.NewProgram(chat.New(chat.Options{
 		Store:        env.DB,
 		Client:       client,
 		Workdir:      cwd,
-		Session:      sess,
 		MaxSteps:     cfg.EffectiveMaxSteps(),
 		InitialErr:   initial,
 		CachePath:    filepath.Join(env.Dir, "models.json"),
 		SettingsPath: settingsPath,
 		Settings:     &cfg,
 	}))
-	if _, err := p.Run(); err != nil {
+	final, err := p.Run()
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "lazykoder:", err)
 		os.Exit(1)
+	}
+	// Print after alt-screen teardown so the banner lands on the normal console.
+	if m, ok := final.(chat.Model); ok {
+		fmt.Fprint(os.Stdout, chat.FormatQuitBanner(m.SessionID()))
 	}
 }
