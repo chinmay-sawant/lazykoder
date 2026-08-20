@@ -13,37 +13,48 @@ import (
 func TestFormatQuitBanner(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		name string
-		id   string
-		want string
+		name  string
+		id    string
+		title string
+		want  string
 	}{
 		{
-			name: "with session",
-			id:   "ses_abcdef0123456789",
-			want: quitLogo + "\nlk ses_abcdef0123456789\nresume with /resume or ctrl+s\n",
+			name:  "with session and title",
+			id:    "ses_abcdef0123456789",
+			title: "fix the resume picker",
+			want:  quitLogo + "\nlk ses_abcdef0123456789\nsession name: fix the resume picker\nresume with /resume or ctrl+s\n",
 		},
 		{
-			name: "empty",
-			id:   "",
-			want: quitLogo + "\nlk (no session)\nresume older runs with /resume or ctrl+s\n",
+			name:  "empty title becomes untitled",
+			id:    "ses_abcdef0123456789",
+			title: "  \t  ",
+			want:  quitLogo + "\nlk ses_abcdef0123456789\nsession name: untitled\nresume with /resume or ctrl+s\n",
 		},
 		{
-			name: "whitespace only",
-			id:   "  \t  ",
-			want: quitLogo + "\nlk (no session)\nresume older runs with /resume or ctrl+s\n",
+			name:  "empty",
+			id:    "",
+			title: "ignored",
+			want:  quitLogo + "\nlk (no session)\nresume older runs with /resume or ctrl+s\n",
 		},
 		{
-			name: "trimmed id",
-			id:   "  ses_abc  ",
-			want: quitLogo + "\nlk ses_abc\nresume with /resume or ctrl+s\n",
+			name:  "whitespace only id",
+			id:    "  \t  ",
+			title: "x",
+			want:  quitLogo + "\nlk (no session)\nresume older runs with /resume or ctrl+s\n",
+		},
+		{
+			name:  "trimmed id and title",
+			id:    "  ses_abc  ",
+			title: "  hello   world  ",
+			want:  quitLogo + "\nlk ses_abc\nsession name: hello world\nresume with /resume or ctrl+s\n",
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := FormatQuitBanner(tc.id)
+			got := FormatQuitBanner(tc.id, tc.title)
 			if got != tc.want {
-				t.Fatalf("FormatQuitBanner(%q) = %q, want %q", tc.id, got, tc.want)
+				t.Fatalf("FormatQuitBanner(%q, %q) = %q, want %q", tc.id, tc.title, got, tc.want)
 			}
 			if !strings.HasPrefix(got, quitLogo) {
 				t.Fatalf("quit logo missing from banner: %q", got)
@@ -52,22 +63,28 @@ func TestFormatQuitBanner(t *testing.T) {
 	}
 }
 
-func TestSessionID(t *testing.T) {
+func TestSessionIDAndTitle(t *testing.T) {
 	t.Parallel()
 	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
 	if got := m.SessionID(); got != "" {
 		t.Fatalf("SessionID on fresh model = %q, want empty", got)
 	}
+	if got := m.SessionTitle(); got != "" {
+		t.Fatalf("SessionTitle on fresh model = %q, want empty", got)
+	}
 
 	tmp := t.TempDir()
 	st := newTestStore(t)
-	sess, err := st.CreateSession(context.Background(), db.Session{Title: "quit", Directory: tmp})
+	sess, err := st.CreateSession(context.Background(), db.Session{Title: "quit banner title", Directory: tmp})
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
 	m = New(Options{Store: st, Client: deadClient(), Workdir: tmp, Session: &sess})
 	if got := m.SessionID(); got != sess.ID {
 		t.Fatalf("SessionID = %q, want %q", got, sess.ID)
+	}
+	if got := m.SessionTitle(); got != "quit banner title" {
+		t.Fatalf("SessionTitle = %q, want quit banner title", got)
 	}
 }
 

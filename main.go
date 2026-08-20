@@ -67,6 +67,6 @@ func main() {
 	}
 	// Print after alt-screen teardown so the banner lands on the normal console.
 	if m, ok := final.(chat.Model); ok {
-		fmt.Fprint(os.Stdout, chat.FormatQuitBanner(m.SessionID()))
+		fmt.Fprint(os.Stdout, chat.FormatQuitBanner(m.SessionID(), m.SessionTitle()))
 	}
 }

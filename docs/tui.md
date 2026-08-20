@@ -397,15 +397,17 @@ return `tea.Quit`) leaves the alt screen, then prints the lazykoder ASCII
 wordmark plus session lines on the normal console before the process exits:
 
 ```text
-█    █▀▀█ ▀▀▀█ █  █ █ ▄▀ █▀▀█ █▀▀▄ █▀▀▀ █▀▀█
-█    █▄▄█  ▄▀   ▀▀█ █▀▄  █  █ █  █ █▀▀▀ █▄▄▀
-▀▀▀▀ ▀  ▀ ▀▀▀▀  ▀▀▀ ▀  ▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀  ▀
+  █    █▀▀█ ▀▀▀█ █  █ █ ▄▀ █▀▀█ █▀▀▄ █▀▀▀ █▀▀█
+  █    █▄▄█  ▄▀   ▀▀█ █▀▄  █  █ █  █ █▀▀▀ █▄▄▀
+  ▀▀▀▀ ▀  ▀ ▀▀▀▀  ▀▀▀ ▀  ▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀  ▀
 
 lk ses_<id>
+session name: session title here
 resume with /resume or ctrl+s
 ```
 
 If you quit before the first send (no session row yet), the same logo prints
-with `lk (no session)` and `resume older runs with /resume or ctrl+s`.
+with `lk (no session)` and `resume older runs with /resume or ctrl+s`. An
+empty title prints as `session name: untitled`.
 
 `ctrl+c` with text in the composer still copies and does not quit.
