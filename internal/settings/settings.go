@@ -47,6 +47,14 @@ const (
 	MaxMaxDepth = 3
 	// maxMaxQueued caps the sub-agent queue size.
 	maxMaxQueued = 100
+	// DefaultCompactPercent is when auto-compact fires (percent of window).
+	DefaultCompactPercent = 80
+	// MinCompactPercent is the lowest selectable auto-compact threshold.
+	MinCompactPercent = 5
+	// MaxCompactPercent is the highest selectable auto-compact threshold.
+	MaxCompactPercent = 99
+	// DefaultKeepTokens is the recent tail kept beside a summary.
+	DefaultKeepTokens = 15_000
 	// settingsDirMode is used when creating parent dirs for settings.json.
 	settingsDirMode = 0o755
 	// settingsFileMode is the on-disk mode for settings.json.
@@ -89,11 +97,24 @@ type Agents struct {
 	DefaultRole          string   `json:"default_role"` // explore|plan|general
 }
 
+// Compaction holds auto-compact thresholds.
+type Compaction struct {
+	// Auto runs the preflight size check. Manual /compact and one
+	// overflow retry stay available when this is false.
+	Auto bool `json:"auto"`
+	// Percent is the fill of the live model window that triggers
+	// auto-compact (5-99). Default 80 means used > 80% of context.
+	Percent int `json:"percent"`
+	// KeepTokens is the recent tail kept beside a summary.
+	KeepTokens int64 `json:"keep_tokens"`
+}
+
 // Settings is the on-disk project config under .lazykoder/settings.json.
 type Settings struct {
-	Slot   Slot   `json:"slot"`
-	Model  Model  `json:"model"`
-	Agents Agents `json:"agents"`
+	Slot       Slot       `json:"slot"`
+	Model      Model      `json:"model"`
+	Agents     Agents     `json:"agents"`
+	Compaction Compaction `json:"compaction"`
 }
 
 // Default returns the built-in defaults.
@@ -119,6 +140,11 @@ func Default() Settings {
 			BashAllowlist:        []string{"ls", "pwd", "cat", "echo", "find", "grep", "git", "go", "npm", "python", "make"},
 			AllowParallelWriters: false,
 			DefaultRole:          "explore",
+		},
+		Compaction: Compaction{
+			Auto:       true,
+			Percent:    DefaultCompactPercent,
+			KeepTokens: DefaultKeepTokens,
 		},
 	}
 }
@@ -186,6 +212,11 @@ func (s Settings) EffectiveAgents() Agents {
 	return s.normalized().Agents
 }
 
+// EffectiveCompaction returns normalized compact settings.
+func (s Settings) EffectiveCompaction() Compaction {
+	return s.normalized().Compaction
+}
+
 // EffectiveTimeout is the sub-agent timeout duration.
 // Zero DefaultTimeoutSec means no timeout from settings.
 func (a Agents) EffectiveTimeout() time.Duration {
@@ -222,7 +253,33 @@ func (s Settings) normalized() Settings {
 	}
 	s.Model.Variant = strings.TrimSpace(s.Model.Variant)
 	s.Agents = s.Agents.normalized()
+	s.Compaction = s.Compaction.normalized()
 	return s
+}
+
+func (c Compaction) normalized() Compaction {
+	if c.Percent <= 0 {
+		c.Percent = DefaultCompactPercent
+	}
+	if c.Percent < MinCompactPercent {
+		c.Percent = MinCompactPercent
+	}
+	if c.Percent > MaxCompactPercent {
+		c.Percent = MaxCompactPercent
+	}
+	if c.KeepTokens < 0 {
+		c.KeepTokens = DefaultKeepTokens
+	}
+	return c
+}
+
+// ThresholdTokens is the token count at which auto-compact fires for window.
+func (c Compaction) ThresholdTokens(window int64) int64 {
+	c = c.normalized()
+	if window <= 0 {
+		return 0
+	}
+	return window * int64(c.Percent) / 100
 }
 
 func (a Agents) normalized() Agents {
@@ -300,6 +357,19 @@ func NormalizeAfterLoad(s Settings, raw []byte) Settings {
 		s.Agents = Default().Agents
 	} else if !jsonHasKey(raw, "agents", "enabled") {
 		s.Agents.Enabled = true
+	}
+	if !jsonHasKey(raw, "compaction") {
+		s.Compaction = Default().Compaction
+	} else {
+		if !jsonHasKey(raw, "compaction", "auto") {
+			s.Compaction.Auto = true
+		}
+		if !jsonHasKey(raw, "compaction", "percent") {
+			s.Compaction.Percent = DefaultCompactPercent
+		}
+		if !jsonHasKey(raw, "compaction", "keep_tokens") {
+			s.Compaction.KeepTokens = DefaultKeepTokens
+		}
 	}
 	return s.normalized()
 }

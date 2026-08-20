@@ -21,13 +21,15 @@ const (
 	SessionsPicker      = "/resume or ctrl+s continues a past session"
 	ModelPicker         = "/model switches the chat model"
 	VariantPicker       = "/variant sets the reasoning effort"
-	SlotSettings        = "/settings opens project defaults (model, agents, safety)"
+	SlotSettings        = "/settings opens project defaults (model, agents, compaction, safety)"
 	AgentsDrawer        = "/agents opens the sub-agent drawer and logs"
 	ContinueSession     = "/continue resumes after a step limit"
+	CompactNow          = "/compact summarizes older context now"
+	AutoCompactLimit    = "auto-compact fires at 80% of the model window (set in /settings)"
 	RefreshModels       = "/refresh reloads the model list"
 	HelpOverlay         = "/help or ? shows every shortcut"
 	MentionFile         = "type @ to mention a project file"
-	ExpandThinking      = "t expands thinking, e expands the last tool"
+	ExpandThinking      = "ctrl+p expands thinking, ctrl+e expands tools"
 	DragSelectCopy      = "drag across the transcript to select and copy"
 	ToolCardClick       = "click a tool card to expand it"
 	ModelStatusClick    = "click the model label to switch models"
@@ -40,7 +42,7 @@ const (
 	ScrollbarJump       = "click the scrollbar to jump the transcript"
 	JumpToLatest        = "the ▼ above the box jumps to the latest output"
 	DestructiveAskFirst = "destructive bash commands always ask first"
-	FooterCosts         = "the footer shows model, tokens, cost and tps"
+	FooterCosts         = "open /status for tokens, cache, cost and tps"
 )
 
 // All is the full rotation list shown while idle.
@@ -57,6 +59,8 @@ var All = []string{
 	SlotSettings,
 	AgentsDrawer,
 	ContinueSession,
+	CompactNow,
+	AutoCompactLimit,
 	RefreshModels,
 	HelpOverlay,
 	MentionFile,

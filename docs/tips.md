@@ -23,9 +23,11 @@ the readable reference; keep the two in sync when adding or editing a tip.
 - `/resume` or `ctrl+s` continues a past session
 - `/model` switches the chat model
 - `/variant` sets the reasoning effort
-- `/settings` opens project defaults (model, agents, safety)
+- `/settings` opens project defaults (model, agents, compaction, safety)
 - `/agents` opens the sub-agent drawer and logs
 - `/continue` resumes after a step limit (or sends continue)
+- `/compact` summarizes older context now
+- auto-compact fires at 80% of the model window (set in `/settings`)
 - `/refresh` reloads the model list
 - `/help` or `?` shows every shortcut
 
@@ -40,7 +42,7 @@ the readable reference; keep the two in sync when adding or editing a tip.
 
 - drag across the transcript to select and copy
 - click a tool card to expand it
-- `t` expands thinking, `e` expands the last tool
+- `ctrl+p` expands thinking, `ctrl+e` expands tools
 - click the scrollbar to jump the transcript
 - the `▼` above the box jumps to the latest output
 - click the model label to switch models
@@ -51,4 +53,4 @@ the readable reference; keep the two in sync when adding or editing a tip.
 
 - your session resumes where you left off
 - destructive bash commands always ask first
-- the footer shows model, tokens, cost and tps
+- open `/status` for tokens, cache, cost and tps

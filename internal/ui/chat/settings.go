@@ -24,6 +24,8 @@ const (
 	settingsRowExploreModel
 	settingsRowLimit
 	settingsRowSteps
+	settingsRowCompactAuto
+	settingsRowCompactPercent
 	settingsRowAgentsEnabled
 	settingsRowAgentsRole
 	settingsRowAgentsConcurrent
@@ -42,6 +44,8 @@ const (
 	settingsCardHeaderRows = 2
 	// settingsTimeoutStepSec is the child-timeout stepper increment.
 	settingsTimeoutStepSec = 30
+	// settingsCompactPercentStep is the auto-compact threshold increment.
+	settingsCompactPercentStep = 5
 	// settingsMaxQueuedCap matches settings.maxMaxQueued (1-100).
 	settingsMaxQueuedCap = 100
 	// settingsAllowlistPreviewBudget is how much of innerW names may use
@@ -243,6 +247,10 @@ func (m Model) settingsPaintLines(innerW int) []settingsPaintLine {
 		settingsPaintLine{kind: settingsLineHeader, row: -1, text: "agent loop"},
 		m.settingsPaintRow(settingsRowLimit, "["+limitOn+"]", innerW, false),
 		m.settingsPaintRow(settingsRowSteps, stepsVal, innerW, stepsDim),
+		settingsPaintLine{kind: settingsLineHeader, row: -1, text: "compaction"},
+		m.settingsPaintRow(settingsRowCompactAuto, "["+boolOn(m.projectSettings.Compaction.Auto)+"]", innerW, false),
+		m.settingsPaintRow(settingsRowCompactPercent, fmt.Sprintf("◂ %d%% ▸", m.projectSettings.EffectiveCompaction().Percent), innerW, !m.projectSettings.Compaction.Auto),
+		settingsPaintLine{kind: settingsLineHint, row: -1, text: "auto-compact when used tokens exceed this % of the model window"},
 		settingsPaintLine{kind: settingsLineHeader, row: -1, text: "sub-agents"},
 		m.settingsPaintRow(settingsRowAgentsEnabled, "["+agentsOn+"]", innerW, false),
 		m.settingsPaintRow(settingsRowAgentsRole, "◂ "+roleVal+" ▸", innerW, false),
@@ -308,6 +316,10 @@ func settingsRowLabel(row int) string {
 		return "step limit"
 	case settingsRowSteps:
 		return "parent max steps"
+	case settingsRowCompactAuto:
+		return "auto-compact"
+	case settingsRowCompactPercent:
+		return "compact at"
 	case settingsRowAgentsEnabled:
 		return "sub-agents"
 	case settingsRowAgentsRole:
@@ -458,6 +470,10 @@ func (m Model) activateSettingsRow() (Model, tea.Cmd) {
 		if m.projectSettings.Slot.LimitEnabled {
 			return m.setMaxSteps(m.projectSettings.Slot.MaxSteps + 1), nil
 		}
+	case settingsRowCompactAuto:
+		return m.setCompactAuto(!m.projectSettings.Compaction.Auto), nil
+	case settingsRowCompactPercent:
+		return m.setCompactPercent(m.projectSettings.EffectiveCompaction().Percent + settingsCompactPercentStep), nil
 	case settingsRowAgentsEnabled:
 		return m.setAgentsEnabled(!m.projectSettings.Agents.Enabled), nil
 	case settingsRowAgentsRole:
@@ -506,6 +522,12 @@ func (m Model) adjustSettings(delta int) Model {
 		if m.projectSettings.Slot.LimitEnabled {
 			return m.setMaxSteps(m.projectSettings.Slot.MaxSteps + delta)
 		}
+	case settingsRowCompactAuto:
+		if delta != 0 {
+			return m.setCompactAuto(!m.projectSettings.Compaction.Auto)
+		}
+	case settingsRowCompactPercent:
+		return m.setCompactPercent(m.projectSettings.EffectiveCompaction().Percent + delta*settingsCompactPercentStep)
 	case settingsRowAgentsEnabled:
 		if delta != 0 {
 			return m.setAgentsEnabled(!m.projectSettings.Agents.Enabled)
@@ -547,6 +569,10 @@ func (m Model) toggleSettingsRow() Model {
 		if m.projectSettings.Slot.LimitEnabled {
 			return m.setMaxSteps(m.projectSettings.Slot.MaxSteps + 1)
 		}
+	case settingsRowCompactAuto:
+		return m.setCompactAuto(!m.projectSettings.Compaction.Auto)
+	case settingsRowCompactPercent:
+		return m.setCompactPercent(m.projectSettings.EffectiveCompaction().Percent + settingsCompactPercentStep)
 	case settingsRowAgentsEnabled:
 		return m.setAgentsEnabled(!m.projectSettings.Agents.Enabled)
 	case settingsRowAgentsRole:
@@ -755,6 +781,22 @@ func (m Model) setLimitEnabled(on bool) Model {
 	m.maxSteps = m.projectSettings.EffectiveMaxSteps()
 	m = m.persistSettings()
 	return m
+}
+
+func (m Model) setCompactAuto(on bool) Model {
+	m.projectSettings.Compaction.Auto = on
+	return m.persistSettings()
+}
+
+func (m Model) setCompactPercent(n int) Model {
+	if n < settings.MinCompactPercent {
+		n = settings.MinCompactPercent
+	}
+	if n > settings.MaxCompactPercent {
+		n = settings.MaxCompactPercent
+	}
+	m.projectSettings.Compaction.Percent = n
+	return m.persistSettings()
 }
 
 func (m Model) setMaxSteps(n int) Model {
@@ -995,6 +1037,15 @@ func (m Model) settingsHit(x, y int, button tea.MouseButton) (Model, tea.Cmd, bo
 		return m.cycleExploreModel(1), nil, true
 	case settingsRowLimit:
 		return m.setLimitEnabled(!m.projectSettings.Slot.LimitEnabled), nil, true
+	case settingsRowCompactAuto:
+		return m.setCompactAuto(!m.projectSettings.Compaction.Auto), nil, true
+	case settingsRowCompactPercent:
+		if dec, inc := hitStepChevrons(line, x); dec {
+			return m.setCompactPercent(m.projectSettings.EffectiveCompaction().Percent - settingsCompactPercentStep), nil, true
+		} else if inc {
+			return m.setCompactPercent(m.projectSettings.EffectiveCompaction().Percent + settingsCompactPercentStep), nil, true
+		}
+		return m.setCompactPercent(m.projectSettings.EffectiveCompaction().Percent + settingsCompactPercentStep), nil, true
 	case settingsRowSteps:
 		if !m.projectSettings.Slot.LimitEnabled {
 			return m, nil, true

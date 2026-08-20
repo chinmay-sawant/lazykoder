@@ -32,7 +32,7 @@ func TestSettingsSlashOpensCard(t *testing.T) {
 	if !strings.Contains(v, "SETTINGS") || !strings.Contains(v, "[x]") {
 		t.Fatalf("settings card missing header/x: %q", v)
 	}
-	for _, want := range []string{"new-session model", "child timeout", "default role", "child bash confirms", "parent bash allowlist"} {
+	for _, want := range []string{"new-session model", "child timeout", "default role", "child bash confirms", "parent bash allowlist", "auto-compact", "compact at"} {
 		if !strings.Contains(v, want) {
 			t.Fatalf("settings card missing %q: %q", want, v)
 		}
@@ -338,6 +338,41 @@ func TestSettingsHitAllRows(t *testing.T) {
 	}
 }
 
+func TestSettingsCompactPercentAdjustAndPersist(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	m := New(Options{
+		Store:        newTestStore(t),
+		Client:       deadClient(),
+		Workdir:      dir,
+		SettingsPath: path,
+	})
+	m = m.openSettings()
+	if m.projectSettings.Compaction.Percent != settings.DefaultCompactPercent {
+		t.Fatalf("default percent = %d", m.projectSettings.Compaction.Percent)
+	}
+	m.settingsCursor = settingsRowCompactPercent
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyLeft})
+	if m.projectSettings.Compaction.Percent != settings.DefaultCompactPercent-settingsCompactPercentStep {
+		t.Fatalf("percent after left = %d", m.projectSettings.Compaction.Percent)
+	}
+	m.settingsCursor = settingsRowCompactAuto
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeySpace})
+	if m.projectSettings.Compaction.Auto {
+		t.Fatal("auto-compact should toggle off")
+	}
+	loaded, err := settings.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Compaction.Auto {
+		t.Fatal("persisted auto still on")
+	}
+	if loaded.Compaction.Percent != settings.DefaultCompactPercent-settingsCompactPercentStep {
+		t.Fatalf("persisted percent = %d", loaded.Compaction.Percent)
+	}
+}
+
 func TestSettingsTimeoutRoleConfirmPersist(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "settings.json")
@@ -451,7 +486,7 @@ func settingsPaintedRow(m Model, label string) string {
 
 func settingsHitX(line string, row int) int {
 	switch row {
-	case settingsRowLimit, settingsRowAgentsEnabled, settingsRowAgentsWriters, settingsRowAllowlistEnabled:
+	case settingsRowLimit, settingsRowCompactAuto, settingsRowAgentsEnabled, settingsRowAgentsWriters, settingsRowAllowlistEnabled:
 		if x0, x1, ok := displaySpan(line, "[on]"); ok {
 			return (x0 + x1) / 2
 		}
@@ -504,6 +539,10 @@ func settingsHitChanged(before, after Model, row int) bool {
 		return after.projectSettings.Slot.LimitEnabled != before.projectSettings.Slot.LimitEnabled
 	case settingsRowSteps:
 		return after.projectSettings.Slot.MaxSteps != before.projectSettings.Slot.MaxSteps
+	case settingsRowCompactAuto:
+		return after.projectSettings.Compaction.Auto != before.projectSettings.Compaction.Auto
+	case settingsRowCompactPercent:
+		return after.projectSettings.Compaction.Percent != before.projectSettings.Compaction.Percent
 	case settingsRowAgentsEnabled:
 		return aa.Enabled != ba.Enabled
 	case settingsRowAgentsRole:

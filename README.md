@@ -13,11 +13,13 @@
 
 - Chat with OpenCode Go (`deepseek-v4-flash`) from a terminal TUI
 - Persists sessions, messages and tool runs in `./.lazykoder/lazykoder.db`
-- Runs tools (bash, read, write, edit, question, webfetch) through a policy
-  gate: any `rm`-class command needs your explicit y/n confirmation
-- Model picker: fetch the model list and switch models per session
+- Runs tools (bash, read, grep, write, edit, question, webfetch, task) through
+  a policy gate: any `rm`-class command needs your explicit y/n confirmation
+- Model picker: fetch the model list and switch models mid-session
+- Auto-compact when used tokens exceed 80% of the live window (or `/compact`
+  now). Shrinking to a smaller window hints `next send will compact`
 - Session replay: reopening the app in the same directory resumes the latest
-  session
+  session. `/status` shows current fill, cache, cost, and child spend
 
 ## Screenshots
 
@@ -32,7 +34,7 @@ Taken from a live `bin/lk` run against the latest session in this project.
 <p align="center">
   <img src="screenshots/slash-menu.png" alt="Slash command menu" width="820">
   <br>
-  <em>Type <code>/</code> for commands: new, resume, model, variant, refresh, help</em>
+  <em>Type <code>/</code> for Session, Model, Project, and Help commands (including <code>/compact</code>)</em>
 </p>
 
 <p align="center">

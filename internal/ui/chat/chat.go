@@ -182,25 +182,30 @@ type Model struct {
 	pendingUser         string
 	lastTool            int
 
-	model         string // current model; "" = provider default
-	variant       string // current reasoning variant; "" = provider default
-	models        []string
-	modelInfos    []modelscache.Info
-	modelsErr     string
-	modelsCached  bool // models came from the cache, not a live fetch
-	cachePath     string
-	activity      string
-	tokensUsed    int64
-	sessionCost   float64
-	tokensPerSec  float64
-	tpsEstimated  bool
-	cacheHit      int64
-	cacheMiss     int64
-	turnStarted   time.Time
-	turnGenTokens int64
-	turnItemFrom  int
-	tpsSamples    []tpsSample
-	stepMetrics   bool
+	model                string // current model; "" = provider default
+	variant              string // current reasoning variant; "" = provider default
+	models               []string
+	modelInfos           []modelscache.Info
+	modelsErr            string
+	modelsCached         bool // models came from the cache, not a live fetch
+	cachePath            string
+	activity             string
+	tokensUsed           int64
+	compacting           bool
+	compactHint          string
+	pendingCompactReason string
+	prevModel            string
+	prevWindow           int64
+	sessionCost          float64
+	tokensPerSec         float64
+	tpsEstimated         bool
+	cacheHit             int64
+	cacheMiss            int64
+	turnStarted          time.Time
+	turnGenTokens        int64
+	turnItemFrom         int
+	tpsSamples           []tpsSample
+	stepMetrics          bool
 
 	confirmCh   chan confirmRequest
 	askCh       chan askRequest
@@ -360,8 +365,9 @@ var slashCommands = []slashCmd{
 	{name: "/refresh", description: "reload the model list into models.json"},
 	{name: "/usage", description: "show OpenCode Go plan usage (rolling, weekly, monthly)"},
 	{name: "/status", description: "open the status drawer and toggle details"},
-	{name: "/settings", description: "project defaults (model, steps, agents, safety)", aliases: []string{"slot"}},
+	{name: "/settings", description: "project defaults (model, agents, compaction, safety)", aliases: []string{"slot"}},
 	{name: "/continue", description: "resume after a step-limit stop (or send continue)"},
+	{name: "/compact", description: "summarize older context now (optional notes)"},
 	{name: "/help", description: "keyboard shortcuts (?, also /keys)", aliases: []string{"keys"}},
 }
 
@@ -614,6 +620,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(msg.infos) > 0 {
 			m.modelInfos = msg.infos
 			m.recomputeSessionCost()
+			if m.session != nil {
+				m = m.reloadSubagentRows()
+			}
 		}
 		m.modelsCached = msg.fromCache
 		if msg.err != nil {
@@ -662,7 +671,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// soft-wrap and mouse hit-testing agree with what is painted.
 		m.prompt.SetWidth(m.promptContentWidth())
 		m.prompt.SetHeight(m.promptHeight())
-		m.transcript.SetHeight(max(minPaneHeight, m.transcriptRenderHeight()))
+		m.transcript.SetHeight(max(1, m.transcriptRenderHeight()))
 		m.syncTranscript()
 		if m.pickerBuilt {
 			m = m.resizePicker()
@@ -920,6 +929,18 @@ func (m Model) applyEvent(ev agent.Event) Model {
 				m.err = fmt.Sprintf("%s  ·  /continue to keep going", ev.Err.Error())
 			}
 		}
+		m.compacting = false
+	case agent.EventCompacting:
+		m.compacting = true
+		m.activity = "compacting"
+	case agent.EventCompacted:
+		m.compacting = false
+		m.tokensUsed = ev.TokensUsed
+		m.cacheHit = 0
+		m.cacheMiss = 0
+		m.pendingCompactReason = ""
+		m.compactHint = ""
+		m.applyCompactNotice(ev.Part)
 	}
 	return m
 }
@@ -956,6 +977,7 @@ func (m Model) finishTurn(err error) Model {
 		m.turnCancel = nil
 	}
 	m.busy = false
+	m.compacting = false
 	m.pendingUser = ""
 	m.pending = nil
 	m.pendingAsk = nil

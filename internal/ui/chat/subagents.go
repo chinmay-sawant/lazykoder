@@ -30,6 +30,9 @@ type subagentRow struct {
 	Activity       string // one-liner on the right (tool or status)
 	StartedAt      int64
 	Live           bool
+	Cost           float64
+	CacheHit       int64
+	CacheMiss      int64
 }
 
 const (
@@ -203,6 +206,12 @@ func (m Model) reloadSubagentRows() Model {
 	m.subagentItems = m.collectSubagentRows()
 	for i := range m.subagentItems {
 		m.subagentItems[i].Activity = m.subagentActivityLine(m.subagentItems[i])
+		if sid := m.subagentItems[i].ChildSessionID; sid != "" {
+			u := sessionUsageOf(m.store, m.modelInfos, sid)
+			m.subagentItems[i].Cost = u.Cost
+			m.subagentItems[i].CacheHit = u.CacheHit
+			m.subagentItems[i].CacheMiss = u.CacheMiss
+		}
 	}
 	if m.subagentCursor >= len(m.subagentItems) {
 		m.subagentCursor = max(0, len(m.subagentItems)-1)
@@ -247,6 +256,12 @@ func (m Model) refreshSubagentDrawerLive() Model {
 			row.Name = firstNonEmptyStr(snap.Name, row.Name)
 			row.Role = firstNonEmptyStr(snap.Role, row.Role)
 			row.Activity = m.subagentActivityLine(row)
+			if row.ChildSessionID != "" {
+				u := sessionUsageOf(m.store, m.modelInfos, row.ChildSessionID)
+				row.Cost = u.Cost
+				row.CacheHit = u.CacheHit
+				row.CacheMiss = u.CacheMiss
+			}
 			m.subagentItems[i] = row
 			present[row.ID] = true
 			continue
@@ -259,6 +274,12 @@ func (m Model) refreshSubagentDrawerLive() Model {
 			}
 		}
 		row.Activity = m.subagentActivityLine(row)
+		if row.ChildSessionID != "" {
+			u := sessionUsageOf(m.store, m.modelInfos, row.ChildSessionID)
+			row.Cost = u.Cost
+			row.CacheHit = u.CacheHit
+			row.CacheMiss = u.CacheMiss
+		}
 		m.subagentItems[i] = row
 	}
 	// Prepend brand-new jobs only (newest first); never reorder existing rows.
@@ -481,6 +502,32 @@ func formatToolActivity(tc db.ToolCall) string {
 		return name
 	}
 	return name + "  " + title
+}
+
+func (m Model) rolledSubagentUsage() sessionUsage {
+	var out sessionUsage
+	if len(m.subagentItems) > 0 {
+		for _, r := range m.subagentItems {
+			out.Cost += r.Cost
+			out.CacheHit += r.CacheHit
+			out.CacheMiss += r.CacheMiss
+		}
+		return out
+	}
+	if m.store == nil || m.session == nil {
+		return out
+	}
+	children, err := m.store.ListChildSessions(context.Background(), m.session.ID)
+	if err != nil {
+		return out
+	}
+	for _, ch := range children {
+		u := sessionUsageOf(m.store, m.modelInfos, ch.ID)
+		out.Cost += u.Cost
+		out.CacheHit += u.CacheHit
+		out.CacheMiss += u.CacheMiss
+	}
+	return out
 }
 
 func (m Model) hasLiveSubagents() bool {
@@ -735,6 +782,9 @@ func (m Model) subagentRowRight(row subagentRow, available int) string {
 	variant := firstNonEmptyStr(row.Variant, "default")
 	modelLabel := "model: " + model
 	identity := modelLabel + "  ·  thinking: " + variant
+	if row.Cost > 0 || row.CacheHit > 0 || row.CacheMiss > 0 {
+		identity = formatCost(row.Cost) + "  ·  " + formatCache(row.CacheHit, row.CacheMiss) + "  ·  " + identity
+	}
 	if activity := strings.TrimSpace(row.Activity); activity != "" && activity != strings.TrimSpace(row.Status) {
 		withActivity := identity + "  ·  " + activity
 		if lipgloss.Width(withActivity) <= available {
@@ -778,6 +828,9 @@ func (m Model) subagentLogScreen() string {
 	title += "  ·  thinking: " + firstNonEmptyStr(m.subagentSelected.Variant, "default")
 	if m.subagentSelected.Status != "" {
 		title += "  ·  " + m.subagentSelected.Status
+	}
+	if m.subagentSelected.Cost > 0 || m.subagentSelected.CacheHit > 0 || m.subagentSelected.CacheMiss > 0 {
+		title += "  ·  " + formatCost(m.subagentSelected.Cost) + "  ·  " + formatCache(m.subagentSelected.CacheHit, m.subagentSelected.CacheMiss)
 	}
 	closeBtn := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).Render("[x]")
 	gap := max(1, w-lipgloss.Width(title)-lipgloss.Width(closeBtn))

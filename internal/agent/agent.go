@@ -70,6 +70,29 @@ type Options struct {
 	// WebfetchClient is an explicit egress client, primarily for injected tests.
 	// Production leaves it nil, so webfetch uses its validated default client.
 	WebfetchClient *http.Client
+	// ContextWindow is the live model's catalog context (0 = unknown).
+	ContextWindow int64
+	// TokensUsed is the last known fill, used as a floor on the estimate.
+	TokensUsed int64
+	// OutgoingModel / OutgoingWindow / OutgoingEndpoint describe the model
+	// that produced the current history, used when shrinking the window.
+	OutgoingModel    string
+	OutgoingWindow   int64
+	OutgoingEndpoint string
+	// CompactAuto runs the preflight size check. Manual /compact and one
+	// overflow retry stay available when this is false.
+	CompactAuto bool
+	// CompactPercent is the fill of ContextWindow that triggers auto-compact.
+	// 0 uses DefaultCompactPercent (80).
+	CompactPercent int
+	// KeepTokens is the recent tail kept beside a summary. 0 uses the default.
+	KeepTokens int64
+	// CompactReason is an explicit preflight reason (model-shrink).
+	CompactReason string
+	// CompactInstructions are extra /compact notes appended to the prompt.
+	CompactInstructions string
+	// ForceCompact runs a compact turn before the first model call.
+	ForceCompact bool
 }
 
 // Agent runs user turns against a store and provider client.
@@ -107,6 +130,10 @@ const (
 	EventError
 	// EventDone fires after a successful turn, before the channel closes.
 	EventDone
+	// EventCompacting fires when a summarizer call starts.
+	EventCompacting
+	// EventCompacted fires after a checkpoint is persisted.
+	EventCompacted
 )
 
 // Event is one streamed write or error during Send.
@@ -120,6 +147,7 @@ type Event struct {
 	TokenDelta   int64
 	TokensOutput int64
 	ElapsedMS    int64
+	TokensUsed   int64
 	Err          error
 }
 
@@ -173,32 +201,12 @@ func (a *Agent) runSteps(ctx context.Context, events chan<- Event) error {
 	if maxSteps <= 0 {
 		maxSteps = defaultMaxSteps
 	}
+	force := a.opts.ForceCompact
 	for step := 0; step < maxSteps; step++ {
-		history, err := a.buildHistory(ctx)
+		resp, err := a.stepOnce(ctx, events, force)
+		force = false
 		if err != nil {
 			return a.fail(events, err)
-		}
-		req := opencode.ChatRequest{
-			Model:           a.opts.Model,
-			Endpoint:        a.opts.Endpoint,
-			ReasoningEffort: a.opts.Variant,
-			Messages:        history,
-			Tools:           toolSpecsFor(a.opts.ToolNames, a.opts.Host),
-		}
-		var resp *opencode.ChatResponse
-		if a.opts.DisableStreaming {
-			resp, err = a.client.Chat(ctx, req)
-			if err != nil {
-				return a.fail(events, fmt.Errorf("agent: provider: %w", err))
-			}
-			if err := a.writeResponse(ctx, events, resp); err != nil {
-				return a.fail(events, err)
-			}
-		} else {
-			resp, err = a.streamStep(ctx, events, req)
-			if err != nil {
-				return a.fail(events, err)
-			}
 		}
 		if resp.FinishReason != "tool-calls" && len(resp.ToolCalls) == 0 {
 			break
@@ -208,6 +216,60 @@ func (a *Agent) runSteps(ctx context.Context, events chan<- Event) error {
 		}
 	}
 	return nil
+}
+
+func (a *Agent) stepOnce(ctx context.Context, events chan<- Event, force bool) (*opencode.ChatResponse, error) {
+	history, err := a.buildHistory(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := a.maybeCompact(ctx, events, history, force); err != nil {
+		return nil, err
+	}
+	history, err = a.buildHistory(ctx)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := a.callModel(ctx, events, history)
+	if err == nil {
+		return resp, nil
+	}
+	if !IsContextOverflow(err) {
+		return nil, fmt.Errorf("agent: provider: %w", err)
+	}
+	if cerr := a.runCompact(ctx, events, CompactReasonOverflow, ""); cerr != nil {
+		return nil, fmt.Errorf("agent: compact after overflow: %w", cerr)
+	}
+	history, err = a.buildHistory(ctx)
+	if err != nil {
+		return nil, err
+	}
+	resp, err = a.callModel(ctx, events, history)
+	if err != nil {
+		return nil, fmt.Errorf("agent: provider: %w", err)
+	}
+	return resp, nil
+}
+
+func (a *Agent) callModel(ctx context.Context, events chan<- Event, history []opencode.Message) (*opencode.ChatResponse, error) {
+	req := opencode.ChatRequest{
+		Model:           a.opts.Model,
+		Endpoint:        a.opts.Endpoint,
+		ReasoningEffort: a.opts.Variant,
+		Messages:        history,
+		Tools:           toolSpecsFor(a.opts.ToolNames, a.opts.Host),
+	}
+	if a.opts.DisableStreaming {
+		resp, err := a.client.Chat(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		if err := a.writeResponse(ctx, events, resp); err != nil {
+			return nil, err
+		}
+		return resp, nil
+	}
+	return a.streamStep(ctx, events, req)
 }
 
 func (a *Agent) fail(events chan<- Event, err error) error {
@@ -267,63 +329,6 @@ func (a *Agent) writeUserTurn(ctx context.Context, userText string, events chan<
 	}
 	a.emit(events, Event{Kind: EventPart, SessionID: a.sessionID(), MessageID: m.ID, Part: part})
 	return nil
-}
-
-func (a *Agent) buildHistory(ctx context.Context) ([]opencode.Message, error) {
-	msgs, err := a.store.ListMessages(ctx, a.sessionID())
-	if err != nil {
-		return nil, fmt.Errorf("agent: list messages: %w", err)
-	}
-	tcs, err := a.store.ListToolCalls(ctx, a.sessionID())
-	if err != nil {
-		return nil, fmt.Errorf("agent: list tool calls: %w", err)
-	}
-	byPart := make(map[string]db.ToolCall, len(tcs))
-	for _, tc := range tcs {
-		byPart[tc.PartID] = tc
-	}
-	var out []opencode.Message
-	for _, m := range msgs {
-		parts, err := a.store.ListParts(ctx, m.ID)
-		if err != nil {
-			return nil, fmt.Errorf("agent: list parts: %w", err)
-		}
-		switch m.Role {
-		case "user":
-			out = append(out, opencode.Message{Role: "user", Content: concatText(parts)})
-		case "assistant":
-			msg := opencode.Message{Role: "assistant", Content: concatText(parts)}
-			var toolParts []db.Part
-			for _, p := range parts {
-				if p.Type != "tool" || p.ToolCallID == nil {
-					continue
-				}
-				toolParts = append(toolParts, p)
-				name := ""
-				if p.ToolName != nil {
-					name = *p.ToolName
-				}
-				args := ""
-				if tc, ok := byPart[p.ID]; ok {
-					args = tc.InputJSON
-				}
-				msg.ToolCalls = append(msg.ToolCalls, opencode.ToolCall{
-					ID:        *p.ToolCallID,
-					Name:      name,
-					Arguments: args,
-				})
-			}
-			out = append(out, msg)
-			for _, p := range toolParts {
-				out = append(out, opencode.Message{
-					Role:       "tool",
-					ToolCallID: *p.ToolCallID,
-					Content:    a.toolResult(p, byPart[p.ID]),
-				})
-			}
-		}
-	}
-	return out, nil
 }
 
 func (a *Agent) toolResult(p db.Part, tc db.ToolCall) string {

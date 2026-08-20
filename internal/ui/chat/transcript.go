@@ -136,7 +136,9 @@ func (m *Model) replay(sessionID string) {
 				collapsed := tool.Tool != "edit"
 				m.items = append(m.items, transcriptItem{kind: itemTool, collapsed: collapsed, when: when, tool: tool, part: p})
 			case "step-finish":
-				m.applyUsage(p)
+				m.applyUsage(p, msg.ModelID)
+			case agent.CompactPartType:
+				m.applyCompactNotice(p)
 			}
 		}
 	}
@@ -144,7 +146,7 @@ func (m *Model) replay(sessionID string) {
 	m.syncTranscript()
 }
 
-func (m *Model) applyUsage(p db.Part) {
+func (m *Model) applyUsage(p db.Part, modelID string) {
 	var in, out, total int64
 	if p.TokensInput != nil {
 		in = *p.TokensInput
@@ -158,16 +160,21 @@ func (m *Model) applyUsage(p db.Part) {
 	if total == 0 {
 		total = in + out
 	}
-	// Never drop the session total when a later step reports a smaller
-	// (or empty) usage blob.
-	if total > m.tokensUsed {
-		m.tokensUsed = total
+	// Live fill is the latest request size, not a session peak. Prefer
+	// input (what occupied the window). Skip empty blobs so a missing
+	// usage row does not wipe the meter.
+	fill := in
+	if fill == 0 {
+		fill = total
+	}
+	if fill > 0 {
+		m.tokensUsed = fill
 	}
 	var hit int64
 	if p.TokensCacheRead != nil {
 		hit = *p.TokensCacheRead
 	}
-	m.addStepCost(p)
+	m.addStepCost(p, modelID)
 
 	miss := cacheMissTokens(in, hit)
 	if hit > 0 {
@@ -189,15 +196,140 @@ func (m *Model) applyUsage(p db.Part) {
 }
 
 func (m *Model) bumpTokenFloor() {
-	if est := estimateTokens(m.items); est > m.tokensUsed {
+	est := estimateModelContext(m.items)
+	if est <= 0 {
+		return
+	}
+	last := lastCompactIndex(m.items)
+	if last >= 0 && last == len(m.items)-1 {
+		// Just compacted (or replay ended on a checkpoint). The meter is
+		// the rebuilt request, not the old peak.
+		m.tokensUsed = est
+		return
+	}
+	if est > m.tokensUsed {
 		m.tokensUsed = est
 	}
 }
 
-func (m *Model) addStepCost(p db.Part) {
-	if p.Cost != nil && *p.Cost > 0 {
-		m.sessionCost += *p.Cost
+func lastCompactIndex(items []transcriptItem) int {
+	last := -1
+	for i, it := range items {
+		if it.part.Type == agent.CompactPartType {
+			last = i
+		}
+	}
+	return last
+}
+
+// estimateModelContext is the fill the next provider call would see:
+// after a compact, summary + tail (and any newer turns), not the painted
+// pre-compact transcript.
+func estimateModelContext(items []transcriptItem) int64 {
+	last := lastCompactIndex(items)
+	if last < 0 {
+		return estimateTokens(items)
+	}
+	env := agent.CompactEnvelope{}
+	if items[last].part.Text != nil {
+		env = agent.ParseCompactText(*items[last].part.Text)
+	}
+	if env.TokensAfter > 0 {
+		return env.TokensAfter + estimateTokens(items[last+1:])
+	}
+	n := agent.EstimateTokens(env.Summary)
+	include := env.TailStartMessageID == ""
+	for i, it := range items {
+		if i == last || it.part.Type == agent.CompactPartType {
+			continue
+		}
+		if !include && it.part.MessageID == env.TailStartMessageID {
+			include = true
+		}
+		if include {
+			n += estimateTokens([]transcriptItem{it})
+		}
+	}
+	return n
+}
+
+func (m *Model) addStepCost(p db.Part, modelID string) {
+	m.sessionCost += stepCostUSD(p, m.modelInfos, m.usageModelID(modelID))
+}
+
+func (m *Model) recomputeSessionCost() {
+	if m.store == nil || m.session == nil || len(m.modelInfos) == 0 {
 		return
+	}
+	m.sessionCost = sessionUsageOf(m.store, m.modelInfos, m.session.ID).Cost
+}
+
+func (m *Model) addCost(inputTokens, outputTokens, cacheRead, cacheWrite int64) {
+	m.sessionCost += costUSDFor(m.modelInfos, m.usageModelID(""), inputTokens, outputTokens, cacheRead, cacheWrite)
+}
+
+func (m Model) usageModelID(modelID string) string {
+	if strings.TrimSpace(modelID) != "" {
+		return modelID
+	}
+	return m.modelLabel()
+}
+
+type sessionUsage struct {
+	Cost      float64
+	CacheHit  int64
+	CacheMiss int64
+}
+
+func sessionUsageOf(store *db.Store, infos []modelscache.Info, sessionID string) sessionUsage {
+	var out sessionUsage
+	if store == nil || sessionID == "" {
+		return out
+	}
+	ctx := context.Background()
+	sess, err := store.GetSession(ctx, sessionID)
+	if err != nil {
+		return out
+	}
+	msgs, err := store.ListMessages(ctx, sessionID)
+	if err != nil {
+		return out
+	}
+	for _, msg := range msgs {
+		parts, err := store.ListParts(ctx, msg.ID)
+		if err != nil {
+			continue
+		}
+		modelID := msg.ModelID
+		if modelID == "" {
+			modelID = sess.Model
+		}
+		for _, p := range parts {
+			if p.Type != "step-finish" {
+				continue
+			}
+			out.Cost += stepCostUSD(p, infos, modelID)
+			var in, hit int64
+			if p.TokensInput != nil {
+				in = *p.TokensInput
+			}
+			if p.TokensCacheRead != nil {
+				hit = *p.TokensCacheRead
+			}
+			if hit > 0 {
+				out.CacheHit += hit
+			}
+			if miss := cacheMissTokens(in, hit); miss > 0 {
+				out.CacheMiss += miss
+			}
+		}
+	}
+	return out
+}
+
+func stepCostUSD(p db.Part, infos []modelscache.Info, modelID string) float64 {
+	if p.Cost != nil && *p.Cost > 0 {
+		return *p.Cost
 	}
 	var in, out, total, hit, written int64
 	if p.TokensInput != nil {
@@ -216,43 +348,20 @@ func (m *Model) addStepCost(p db.Part) {
 		written = *p.TokensCacheWrite
 	}
 	if in > 0 || out > 0 || hit > 0 || written > 0 {
-		m.addCost(in, out, hit, written)
-		return
+		return costUSDFor(infos, modelID, in, out, hit, written)
 	}
 	if total > 0 {
-		m.addCost(0, total, 0, 0)
+		return costUSDFor(infos, modelID, 0, total, 0, 0)
 	}
+	return 0
 }
 
-func (m *Model) recomputeSessionCost() {
-	if m.store == nil || m.session == nil || len(m.modelInfos) == 0 {
-		return
-	}
-	m.sessionCost = 0
-	ctx := context.Background()
-	msgs, err := m.store.ListMessages(ctx, m.session.ID)
-	if err != nil {
-		return
-	}
-	for _, msg := range msgs {
-		parts, err := m.store.ListParts(ctx, msg.ID)
-		if err != nil {
-			continue
-		}
-		for _, p := range parts {
-			if p.Type == "step-finish" {
-				m.addStepCost(p)
-			}
-		}
-	}
-}
-
-func (m *Model) addCost(inputTokens, outputTokens, cacheRead, cacheWrite int64) {
-	info, ok := modelscache.InfoOf(m.modelInfos, m.modelLabel())
+func costUSDFor(infos []modelscache.Info, modelID string, input, output, cacheRead, cacheWrite int64) float64 {
+	info, ok := modelscache.InfoOf(infos, modelID)
 	if !ok {
-		return
+		return 0
 	}
-	m.sessionCost += info.CostUSD(inputTokens, outputTokens, cacheRead, cacheWrite)
+	return info.CostUSD(input, output, cacheRead, cacheWrite)
 }
 
 func cacheMissTokens(input, hit int64) int64 {
@@ -285,7 +394,7 @@ func estimateTokens(items []transcriptItem) int64 {
 func (m *Model) syncTranscript() {
 	// Leave columns for scrollbar (+ user-nav rail when present).
 	m.transcript.SetWidth(m.transcriptContentWidth())
-	m.transcript.SetHeight(max(minPaneHeight, m.transcriptRenderHeight()))
+	m.transcript.SetHeight(max(1, m.transcriptRenderHeight()))
 	atBottom := m.transcript.AtBottom()
 	yOffset := m.transcript.YOffset()
 	content := m.transcriptContent()
@@ -592,9 +701,43 @@ func (m *Model) applyPart(p db.Part) {
 		}
 	case "step-finish":
 		m.collapseLiveReasoning()
-		m.applyUsage(p)
+		m.applyUsage(p, m.model)
+	case agent.CompactPartType:
+		m.applyCompactNotice(p)
 	}
 	m.syncTranscript()
+}
+
+func (m *Model) applyCompactNotice(p db.Part) {
+	if p.Text == nil {
+		return
+	}
+	env := agent.ParseCompactText(*p.Text)
+	if env.TokensAfter > 0 {
+		m.tokensUsed = env.TokensAfter
+	}
+	// Cache stats are since the last checkpoint, not the whole session.
+	m.cacheHit = 0
+	m.cacheMiss = 0
+	text := "context compacted"
+	if env.FromWindow > 0 && env.ToWindow > 0 && env.FromWindow != env.ToWindow {
+		text = fmt.Sprintf("context compacted (%s -> %s)", formatTokens(env.FromWindow), formatTokens(env.ToWindow))
+	} else if env.FromModel != "" && env.ToModel != "" && env.FromModel != env.ToModel {
+		text = fmt.Sprintf("context compacted (%s -> %s)", env.FromModel, env.ToModel)
+	}
+	for i := range m.items {
+		if m.items[i].part.ID != "" && m.items[i].part.ID == p.ID {
+			m.items[i].text = text
+			m.items[i].part = p
+			return
+		}
+	}
+	m.items = append(m.items, transcriptItem{
+		kind: itemNote,
+		text: text,
+		when: itemTime(0, p.TimeCreated),
+		part: p,
+	})
 }
 
 func (m *Model) upsertExisting(p db.Part, text string) bool {

@@ -157,11 +157,24 @@ func (m Model) chatScreen() string {
 	botS := bottom.String()
 	topH := lipgloss.Height(topS)
 	botH := lipgloss.Height(botS)
-	pad := max(0, m.height-topH-botH)
+	pad := m.height - topH - botH
+	if pad > 0 {
+		return topS + strings.Repeat("\n", pad) + botS
+	}
 	if pad == 0 {
 		return topS + botS
 	}
-	return topS + strings.Repeat("\n", pad) + botS
+	// Chrome grew past the terminal (for example a taller slash palette).
+	// Keep the composer and drop extra transcript rows.
+	lines := strings.Split(topS, "\n")
+	keep := len(lines) + pad
+	if keep < 1 {
+		keep = 1
+	}
+	if keep > len(lines) {
+		keep = len(lines)
+	}
+	return strings.Join(lines[:keep], "\n") + botS
 }
 
 func overlayOn(base string, width, height int, card string) string {
@@ -332,11 +345,18 @@ func (m Model) composerTop() int {
 }
 
 func (m Model) composerBlock() string {
-	if m.showLiveStatus() && !m.liveStatusInSubagentDrawer() {
-		// Status + action strip sit directly above the input box.
-		return m.liveStatusView() + "\n" + m.promptLine()
+	var parts []string
+	if m.compactHint != "" && !m.busy {
+		parts = append(parts, hintStyle.Render(truncateRunes(m.compactHint, max(minPaneWidth, m.width))))
 	}
-	return m.promptLine()
+	if m.showLiveStatus() && !m.liveStatusInSubagentDrawer() {
+		parts = append(parts, m.liveStatusView())
+	}
+	parts = append(parts, m.promptLine())
+	if len(parts) == 1 {
+		return parts[0]
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 
 func (m Model) promptLine() string {
@@ -398,11 +418,16 @@ func (m Model) footerPieces() (tokens, cache, cost, tps string) {
 			tokens = "0/" + formatTokens(int64(window))
 		}
 	}
-	if m.statusSegmentEnabled("cache") && (m.cacheHit > 0 || m.cacheMiss > 0) {
-		cache = formatCache(m.cacheHit, m.cacheMiss)
+	hit, miss := m.cacheTotals()
+	if m.statusSegmentEnabled("cache") && (hit > 0 || miss > 0) {
+		cache = formatCache(hit, miss)
 	}
-	if m.statusSegmentEnabled("cost") && (m.tokensUsed > 0 || m.cacheHit > 0 || m.cacheMiss > 0 || m.sessionCost > 0) {
-		cost = formatCost(m.sessionCost)
+	_, subs, total := m.costTotals()
+	if m.statusSegmentEnabled("cost") && (total > 0 || m.tokensUsed > 0 || hit > 0 || miss > 0) {
+		cost = formatCost(total)
+		if subs > 0 {
+			cost += " +" + formatCost(subs)
+		}
 	}
 	if m.statusSegmentEnabled("tps") {
 		tps = m.tpsDisplayLabel()
@@ -559,6 +584,17 @@ func formatPercent(n int) string {
 	return fmt.Sprintf("%d%%", n)
 }
 
+func (m Model) cacheTotals() (hit, miss int64) {
+	u := m.rolledSubagentUsage()
+	return m.cacheHit + u.CacheHit, m.cacheMiss + u.CacheMiss
+}
+
+func (m Model) costTotals() (parent, subs, total float64) {
+	parent = m.sessionCost
+	subs = m.rolledSubagentUsage().Cost
+	return parent, subs, parent + subs
+}
+
 func formatCost(usd float64) string {
 	if usd <= 0 {
 		return "$0.00"
@@ -643,7 +679,11 @@ func (m Model) transcriptRenderHeight() int {
 	if m.err != "" {
 		fixedRows += lipgloss.Height(errStyle.Width(max(minPaneWidth, m.width)).Render(m.err))
 	}
-	return max(minPaneHeight, m.height-fixedRows)
+	avail := m.height - fixedRows
+	if avail < minPaneHeight {
+		return max(1, avail)
+	}
+	return avail
 }
 
 // paintedTranscript is the viewport the user sees: current width/height and
@@ -702,6 +742,7 @@ func (m Model) helpOverlay() string {
 		{"/new", "new session"},
 		{"/resume", "past sessions (ctrl+s)"},
 		{"/continue", "after a step-limit stop"},
+		{"/compact", "summarize older context"},
 		{"/settings", "project defaults"},
 		{"/agents", "sub-agents + logs"},
 		{"/status", "status details and visibility"},

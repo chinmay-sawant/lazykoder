@@ -64,6 +64,9 @@ Deleting a parent session cascades to child sessions (self-FK), their
 messages/parts/tools, and durable `subagent_jobs`. Deleting only a child
 session nulls `subagent_jobs.child_session_id` but keeps the job summary.
 Child messages set `messages.agent` to the sub-agent name.
+A parent compact turn sets `messages.agent` to `compaction` and writes
+one `parts.type = compaction` row. That is not a schema migration
+(version stays 11).
 
 Schema version is 11 (`schema_migrations`). Migrations 7-8 rebuild tables
 to add FKs SQLite cannot express with `ALTER TABLE`; migration 9 adds the
@@ -97,6 +100,14 @@ process restart. Open (`queued`/`running`) rows are resumed on startup via
 | `step-start` | marker only |
 | `step-finish` | `finish_reason`, token counts, `cost` |
 | `tool` | `tool_name` + a row in `tool_calls` |
+| `compaction` | `text` is a JSON envelope (plain text is treated as summary-only) |
+
+Compaction envelope fields: `summary`, `tail_start_message_id`,
+`from_model`, `to_model`, `from_window`, `to_window`, `reason`
+(`auto` / `overflow` / `model-shrink` / `manual`), `tokens_after`
+(estimated fill of summary + kept tail). Rows stay in SQLite; only
+`buildHistory` starts at the latest checkpoint. `messages.visible` is
+the TUI hide bit and is not used as a compact flag.
 
 ## Store API
 

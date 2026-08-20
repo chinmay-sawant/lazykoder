@@ -47,6 +47,9 @@ func TestDefault(t *testing.T) {
 	if a.AllowParallelWriters {
 		t.Fatal("AllowParallelWriters want false")
 	}
+	if !s.Compaction.Auto || s.Compaction.Percent != DefaultCompactPercent || s.Compaction.KeepTokens != DefaultKeepTokens {
+		t.Fatalf("compaction defaults %+v", s.Compaction)
+	}
 }
 
 func TestLoadMissingReturnsDefault(t *testing.T) {
@@ -63,6 +66,9 @@ func TestLoadMissingReturnsDefault(t *testing.T) {
 	}
 	if !s.Agents.Enabled || s.Agents.MaxConcurrent != DefaultMaxConcurrent {
 		t.Fatalf("agents %+v", s.Agents)
+	}
+	if !s.Compaction.Auto || s.Compaction.Percent != DefaultCompactPercent {
+		t.Fatalf("compaction %+v", s.Compaction)
 	}
 }
 
@@ -121,6 +127,38 @@ func TestSaveLoadRoundTripWithAgents(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got.Agents, want.Agents) {
 		t.Fatalf("agents got %+v want %+v", got.Agents, want.Agents)
+	}
+}
+
+func TestCompactionLoadSaveAndMissingBlock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	want := Settings{
+		Slot:       Slot{MaxSteps: 8, LimitEnabled: true},
+		Model:      Model{Default: DefaultModelID},
+		Compaction: Compaction{Auto: false, Percent: 50, KeepTokens: 5_000},
+	}
+	if err := Save(path, want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Compaction.Auto || got.Compaction.Percent != 50 || got.Compaction.KeepTokens != 5_000 {
+		t.Fatalf("saved compaction %+v", got.Compaction)
+	}
+	if err := os.WriteFile(path, []byte(`{"slot":{"max_steps":4}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err = LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Compaction.Auto || got.Compaction.Percent != DefaultCompactPercent || got.Compaction.KeepTokens != DefaultKeepTokens {
+		t.Fatalf("missing block should default: %+v", got.Compaction)
+	}
+	if got.Compaction.ThresholdTokens(1_000_000) != 800_000 {
+		t.Fatalf("80%% of 1M = %d", got.Compaction.ThresholdTokens(1_000_000))
 	}
 }
 
