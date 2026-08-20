@@ -264,10 +264,6 @@ func (m *Model) recomputeSessionCost() {
 	m.sessionCost = sessionUsageOf(m.store, m.modelInfos, m.session.ID).Cost
 }
 
-func (m *Model) addCost(inputTokens, outputTokens, cacheRead, cacheWrite int64) {
-	m.sessionCost += costUSDFor(m.modelInfos, m.usageModelID(""), inputTokens, outputTokens, cacheRead, cacheWrite)
-}
-
 func (m Model) usageModelID(modelID string) string {
 	if strings.TrimSpace(modelID) != "" {
 		return modelID

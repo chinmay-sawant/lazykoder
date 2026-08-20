@@ -38,6 +38,8 @@ const (
 	summarizerSlack = 256
 	// minChunkRunes is the smallest split used when the head is huge.
 	minChunkRunes = 256
+	// percentScale is the denominator for percent calculations (100%).
+	percentScale = 100
 )
 
 // CompactEnvelope is stored as JSON in a compaction part's text.
@@ -89,10 +91,10 @@ func NeedsCompact(estimate, window int64, percent int) bool {
 	if percent <= 0 {
 		percent = DefaultCompactPercent
 	}
-	if percent > 100 {
-		percent = 100
+	if percent > percentScale {
+		percent = percentScale
 	}
-	limit := window * int64(percent) / 100
+	limit := window * int64(percent) / percentScale
 	return estimate > limit
 }
 

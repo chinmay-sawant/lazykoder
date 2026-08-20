@@ -34,9 +34,10 @@ const (
 	ToolCardClick       = "click a tool card to expand it"
 	ModelStatusClick    = "click the model label to switch models"
 	SelectAllInput      = "ctrl+a selects the whole input"
-	CtrlCCopyQuit       = "ctrl+c copies the input, twice quits"
+	CtrlCCopyQuit       = "ctrl+c copies the input, twice quits and prints lk <session>"
 	HistoryBrowse       = "up/down browse your previous prompts"
-	SessionsResume      = "your session resumes where you left off"
+	SessionsResume      = "launch is fresh; /resume or ctrl+s loads a past run"
+	ProjectInstructions = "AGENTS.md in this folder is sent as system context"
 	ToolSuccessDiamond  = "a green diamond means the tool succeeded"
 	ToolFailureDiamond  = "a red diamond means the tool failed"
 	ScrollbarJump       = "click the scrollbar to jump the transcript"
@@ -72,6 +73,7 @@ var All = []string{
 	CtrlCCopyQuit,
 	HistoryBrowse,
 	SessionsResume,
+	ProjectInstructions,
 	ToolSuccessDiamond,
 	ToolFailureDiamond,
 	ScrollbarJump,

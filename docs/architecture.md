@@ -40,11 +40,15 @@ cwd = process working directory
      migrate schema
      ensure .gitignore lists .lazykoder/ (append only)
 3. read OPENCODE_API_KEY (fallback OPENCODE_ZEN_API_KEY)
-4. resume latest session for cwd, if any (transcript rebuilt from the store)
-5. tea.NewProgram(chat.New(...))   # Workdir is the project cwd; env.Dir is .lazykoder for db + models.json
-6. first send creates a session row, a user text part, provider calls,
+4. tea.NewProgram(chat.New(...))   # Session is nil: every launch is fresh
+                                   # Workdir is the project cwd; env.Dir is .lazykoder for db + models.json
+5. first send creates a session row, a user text part, provider calls,
    then assistant parts
+6. on quit, after alt-screen teardown, print `lk <session_id>` (or
+   `lk (no session)`) plus a `/resume` hint to stdout
 ```
+
+Past runs stay in SQLite. Load one explicitly with `/resume` or `ctrl+s`.
 
 A missing key is not a crash: the TUI starts and shows the error in the
 status line; the prompt stays usable.
@@ -78,6 +82,16 @@ The client is OpenAI-compatible:
 `GET /models` is fetched at startup (non-blocking, 10s timeout) to show the
 model count and to feed the interactive picker (`/model` or the footer
 model chip).
+
+## Project instructions (AGENTS.md)
+
+When the session workdir contains `AGENTS.md` (fallback `agents.md`), every
+chat model call prepends a `role=system` message with that file's contents.
+The primer is wire-only: it is not stored in SQLite and does not appear in
+`/resume` transcripts. Compaction summarizer calls do not include it. The
+TUI shows `project instructions: AGENTS.md` on the alert row / empty state
+when the file loaded. Oversized files are truncated around 200KB with an
+explicit note.
 
 ## Agent loop
 

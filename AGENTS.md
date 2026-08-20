@@ -35,9 +35,66 @@ Module: `github.com/chinmay-sawant/lazykoder`. GitHub repo: `https://github.com/
    Push to master via branch + PR when branch protection exists; do not
    improvise after a rejected push.
 6. **Checklists are live ledgers:** if a phase/plan file exists under `plans/`,
-   update its rows `[x]` in the same change that implements them — and only
+   update its rows `[x]` in the same change that implements them - and only
    when the gate actually passed. Never mark `[x]` from intent (a session once
-   marked every item `[x]` while claim-scan still failed).
+   marked every item `[x]` while claim-scan still failed). When you create,
+   change, or finish a plan under `plans/`, update `knowledge-base/` in the
+   same session so the local narrative matches what shipped (see Knowledge
+   base below).
+7. **Answer from knowledge-base, prove with code.** For any user question
+   about how lazykoder works, start in `knowledge-base/`. Then always open
+   the real source under `internal/` (and related files) to validate. A KB
+   hit is a starting point, not proof; the KB can be stale. If the KB and
+   code disagree, trust the code, fix the KB, and answer from the code.
+8. **Unslop all writing with `/unslop`.** Before writing or shipping plans,
+   docs, knowledge-base pages, PR/issue text, commit messages, or user-facing
+   replies, run `/unslop` (the unslop skill). Cut AI tells: puffery, em dashes,
+   chatbot filler, synonym cycling, title-case headings, and the rest of the
+   skill checklist. Do this before the text lands, not as an afterthought.
+   Code comments and AGENTS.md itself follow the same plain-speech bar.
+
+## Unslop (`/unslop`)
+
+Use the `/unslop` command for every prose surface in this repo:
+
+- User replies in chat
+- New or edited files under `plans/`
+- `docs/`, `knowledge-base/`, README, PR bodies, issue bodies, commit messages
+
+Load the unslop skill, rewrite to plain human voice, then self-audit: "What
+makes this obviously AI generated?" Fix remaining tells before you consider
+the writing done. Prefer concrete facts and file paths over vague summary
+language. The no-em-dash rule above is part of unslop, not a separate style.
+
+## Knowledge base (local only)
+
+`knowledge-base/` is the local Karpathy-style narrative layer. It is
+**gitignored** (hidden from git on purpose). Keep it current on disk even
+though it is not committed.
+
+### When to update it
+
+- Creating or editing a plan under `plans/` (reflect the intended product
+  shape if behavior will change).
+- Finishing a plan phase or shipping a behavior change: update the matching
+  KB pages in the same session as the code/docs change.
+- Any time code and KB disagree while answering a question: fix the KB.
+
+Do not skip KB updates because the folder is ignored. Ignored means
+"not in git", not "optional".
+
+### How to use it when answering
+
+1. Search/read `knowledge-base/` first for the topic.
+2. Whether or not you found a page, read the live code paths that own the
+   behavior (`internal/...`, `main.go`, tests as needed).
+3. Cross-check. Prefer code when they diverge; update the KB before closing.
+4. Prefer linking or quoting concrete files/symbols from code in the answer
+   so the user can verify.
+
+`docs/` remains the committed reference. `knowledge-base/` sits on top as
+the agent/human onboarding narrative. Update both when behavior changes;
+do not leave the KB behind just because git does not track it.
 
 ## Things to AVOID (repeat-work and waste from the audit)
 
@@ -68,8 +125,9 @@ Module: `github.com/chinmay-sawant/lazykoder`. GitHub repo: `https://github.com/
    changed area. Keep golden/screenshot tests if views grow.
 5. **Guessing APIs and paths.** Grep the symbol / glob the file before
    writing against it (agents burned cycles on `undefined: NewRequest`,
-   `svg.go`, `SPEC-NOTES.md` that never existed). `go build` before writing
-   tests.
+   `svg.go`, `SPEC-NOTES.md` that never existed). Same rule for product
+   questions: do not answer from `knowledge-base/` alone without opening
+   the matching code. `go build` before writing tests.
 6. **API guessing → write → compile-fail loops.** Six consecutive compile
    failures on one test file because the API was assumed, not read.
 7. **Silent coverage gaps.** If a task spans a dataset (`.lazykoder` fixtures,
@@ -187,13 +245,17 @@ Module: `github.com/chinmay-sawant/lazykoder`. GitHub repo: `https://github.com/
 
 ## Skills (this folder)
 
-- `skills/grok/`, `skills/opencode/`, `skills/agy/` — the audit-ledgers
+- `skills/grok/`, `skills/opencode/`, `skills/agy/` - the audit-ledgers
   (avoidable-work, repetitive-tasks, mistakes + AGENTS.md per tool) this file
   summarizes; consult them when a situation matches.
-- `skills/phase-wise-checklist/` — plan/checklist format for this project.
+- `skills/phase-wise-checklist/` - plan/checklist format for this project.
+  Plan work always pairs with a `knowledge-base/` update (local only).
+  Run `/unslop` on plan prose before saving.
 - `skills/release-note/`, `skills/perf-review/`, `skills/critical-go-review/`,
-  `skills/ponytail*` — review and release workflows (apply when the project
+  `skills/ponytail*` - review and release workflows (apply when the project
   matures).
+
+Also always apply `/unslop` (bundled unslop skill) to prose before it ships.
 
 Skill files load from this folder by name; verify the path before loading.
 

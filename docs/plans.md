@@ -34,6 +34,12 @@ snapshots:
 | `v0.0.8/phase-3-llm-compact.md` | tools-off summarizer call and overflow retry |
 | `v0.0.8/phase-4-model-switch-slash.md` | picker shrink hint, `/compact`, settings |
 | `v0.0.8/phase-5-gates.md` | full test/build and architecture/TUI docs |
+| `v0.0.9/README.md` | fresh launch + quit banner (`lk` + session id) |
+| `v0.0.9/phase-1-fresh-launch.md` | stop auto-resume; launch blank; keep `/resume` |
+| `v0.0.9/phase-2-quit-banner.md` | print `lk <ses_...>` + resume hint after alt screen |
+| `v0.0.9/phase-3-docs-kb-gates.md` | docs, knowledge-base, tips/help, full gates |
+| `v0.0.9/phase-4-agents-md-context.md` | inject workdir AGENTS.md as system primer |
+| `v0.0.9/phase-4-agents-md-context.md` | inject workdir AGENTS.md as system primer |
 
 Each checklist row is marked `[x]` only when the gate actually passed, with
 the command and exit code recorded beside the row. Rows are never checked
@@ -56,6 +62,15 @@ human runs them.
 - v0.0.5-v0.0.7: settings card, status drawer, usage, transcript polish
 - v0.0.8: auto-compact, `/compact`, mid-session shrink hint, live fill
   meters (not a lifetime peak), child cost on `/agents` and status
+
+## In progress
+
+- v0.0.9 (branch `feature/v0.0.9-resume-session`): every launch opens a
+  fresh session (no auto-resume); confirmed `ctrl+c` quit prints
+  `lk <session_id>` plus a `/resume` hint on the normal console after the
+  alt screen exits; workdir `AGENTS.md` is prepended as a system message on
+  chat model calls. Automated gates green; manual TUI rows open. Ledger:
+  `plans/v0.0.9/`.
 
 ## What 0.0.1 deliberately does not do
 

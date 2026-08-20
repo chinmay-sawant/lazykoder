@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -103,11 +104,43 @@ type Agent struct {
 	opts    Options
 
 	sess *db.Session
+
+	// projectInstructions caches workdir AGENTS.md after the first load.
+	projectInstructions     string
+	projectInstructionsPath string
+	projectInstructionsDone bool
 }
 
 // New returns an Agent for the given store, provider client and workdir.
 func New(store *db.Store, client *opencode.Client, workdir string, opts Options) *Agent {
 	return &Agent{store: store, client: client, workdir: workdir, opts: opts}
+}
+
+// ensureProjectInstructions loads AGENTS.md once per Agent.
+func (a *Agent) ensureProjectInstructions() {
+	if a.projectInstructionsDone {
+		return
+	}
+	a.projectInstructionsDone = true
+	content, path, ok := LoadProjectInstructions(a.workdir)
+	if !ok {
+		return
+	}
+	a.projectInstructions = content
+	a.projectInstructionsPath = path
+}
+
+// withProjectInstructions prepends a system message when AGENTS.md is present.
+func (a *Agent) withProjectInstructions(history []opencode.Message) []opencode.Message {
+	a.ensureProjectInstructions()
+	body := FormatProjectInstructionsMessage(a.projectInstructions)
+	if body == "" {
+		return history
+	}
+	out := make([]opencode.Message, 0, len(history)+1)
+	out = append(out, opencode.Message{Role: "system", Content: body})
+	out = append(out, history...)
+	return out
 }
 
 // EventKind classifies streamed events.
@@ -256,7 +289,7 @@ func (a *Agent) callModel(ctx context.Context, events chan<- Event, history []op
 		Model:           a.opts.Model,
 		Endpoint:        a.opts.Endpoint,
 		ReasoningEffort: a.opts.Variant,
-		Messages:        history,
+		Messages:        a.withProjectInstructions(history),
 		Tools:           toolSpecsFor(a.opts.ToolNames, a.opts.Host),
 	}
 	if a.opts.DisableStreaming {
@@ -394,8 +427,48 @@ func (a *Agent) writeResponse(ctx context.Context, events chan<- Event, resp *op
 	return a.writeStepFinish(ctx, events, m.ID, resp, started)
 }
 
+func splitToolCallArguments(tc opencode.ToolCall) ([]opencode.ToolCall, error) {
+	dec := json.NewDecoder(strings.NewReader(tc.Arguments))
+	var out []opencode.ToolCall
+	for {
+		var raw json.RawMessage
+		err := dec.Decode(&raw)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		if len(raw) == 0 || string(raw) == "null" {
+			return nil, fmt.Errorf("empty tool arguments")
+		}
+		call := tc
+		call.Arguments = string(raw)
+		if len(out) > 0 && call.ID != "" {
+			call.ID = fmt.Sprintf("%s_%d", tc.ID, len(out)+1)
+		}
+		out = append(out, call)
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("empty tool arguments")
+	}
+	return out, nil
+}
+
 // runTools executes non-task tools sequentially, then task-family tools in parallel.
 func (a *Agent) runTools(ctx context.Context, events chan<- Event, msgID string, toolCalls []opencode.ToolCall) error {
+	var expanded []opencode.ToolCall
+	for _, tc := range toolCalls {
+		calls, err := splitToolCallArguments(tc)
+		if err != nil {
+			// Keep the original call so the normal tool handler records a useful
+			// structured error instead of losing the provider response.
+			expanded = append(expanded, tc)
+			continue
+		}
+		expanded = append(expanded, calls...)
+	}
+	toolCalls = expanded
 	var sequential, parallel []opencode.ToolCall
 	for _, tc := range toolCalls {
 		if isTaskToolName(tc.Name) {
@@ -436,7 +509,18 @@ func (a *Agent) runTools(ctx context.Context, events chan<- Event, msgID string,
 	return nil
 }
 
-func (a *Agent) runTool(ctx context.Context, events chan<- Event, msgID string, tc opencode.ToolCall) error {
+func (a *Agent) runTool(ctx context.Context, events chan<- Event, msgID string, tc opencode.ToolCall) (err error) {
+	// Tool calls originate from model output and may execute in parallel. Never
+	// allow a malformed payload or an unexpected tool panic to bring down the
+	// entire application (a panic in one of the worker goroutines would crash
+	// the process). The individual handlers normally return structured errors;
+	// this is the last-resort safety net.
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("agent: tool %q failed unexpectedly: %v", tc.Name, recovered)
+		}
+	}()
+
 	status := "pending"
 	part, err := a.store.InsertPart(ctx, db.Part{
 		MessageID:  msgID,

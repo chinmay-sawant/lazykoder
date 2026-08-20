@@ -159,7 +159,7 @@ draft in the input box (**edit**). Actions:
 | `/agents` | open the sub-agent list and logs (aliases `/subs`) |
 | `/status` | open the status details and visibility drawer |
 | click `subs:N` | same as `/agents` when sub-agents exist for this session |
-| `ctrl+c` | two-step quit (press twice) |
+| `ctrl+c` | two-step quit (press twice); after exit prints `lk <session_id>` |
 
 ## Sub-agent drawer and logs
 
@@ -354,8 +354,8 @@ Selecting a model:
 3. sends `ChatRequest.Model` and the stored `endpoint` on every
    subsequent turn.
 
-The chosen model survives restart because the app resumes the latest session
-for the cwd on startup.
+The chosen model is stored on the session row. After a fresh launch, pick that
+session again with `/resume` or `ctrl+s` to get the same model back.
 
 ## Status drawer and todos
 
@@ -381,6 +381,33 @@ There is no hidden `+N` summary row.
 
 ## Session replay
 
-On start, the app looks up the latest session for the current directory and
-rebuilds the transcript from the store (messages + parts) without any
-network call. New turns append to the same session.
+Every launch opens a fresh session (blank transcript). Past runs stay in
+SQLite. `/resume` or `ctrl+s` lists them and rebuilds the chosen transcript
+from the store (messages + parts) without a network call. New turns on a
+loaded session append to that same row.
+
+If the workdir has `AGENTS.md`, the empty state and alert row show
+`project instructions: AGENTS.md`. That file is sent as a system message on
+each model call; it is not a transcript row.
+
+## Quit banner
+
+Confirmed quit (`ctrl+c` twice when the prompt is empty, or other paths that
+return `tea.Quit`) leaves the alt screen, then prints the lazykoder ASCII
+wordmark plus session lines on the normal console before the process exits:
+
+```text
+  █    █▀▀█ ▀▀▀█ █  █ █ ▄▀ █▀▀█ █▀▀▄ █▀▀▀ █▀▀█
+  █    █▄▄█  ▄▀   ▀▀█ █▀▄  █  █ █  █ █▀▀▀ █▄▄▀
+  ▀▀▀▀ ▀  ▀ ▀▀▀▀  ▀▀▀ ▀  ▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀  ▀
+
+lk ses_<id>
+session name: session title here
+resume with /resume or ctrl+s
+```
+
+If you quit before the first send (no session row yet), the same logo prints
+with `lk (no session)` and `resume older runs with /resume or ctrl+s`. An
+empty title prints as `session name: untitled`.
+
+`ctrl+c` with text in the composer still copies and does not quit.
