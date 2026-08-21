@@ -31,11 +31,11 @@ func TestMigrateIdempotent(t *testing.T) {
 
 	var n int
 	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master
-WHERE type = 'table' AND name IN ('sessions', 'messages', 'parts', 'tool_calls', 'subagent_jobs', 'todos', 'schema_migrations')`).Scan(&n); err != nil {
+WHERE type = 'table' AND name IN ('sessions', 'messages', 'parts', 'tool_calls', 'subagent_jobs', 'todos', 'recap_records', 'schema_migrations')`).Scan(&n); err != nil {
 		t.Fatalf("count tables: %v", err)
 	}
-	if n != 7 {
-		t.Fatalf("got %d tables, want 7", n)
+	if n != 8 {
+		t.Fatalf("got %d tables, want 8", n)
 	}
 
 	if err := s.Migrate(ctx); err != nil {
@@ -46,6 +46,142 @@ WHERE type = 'table' AND name IN ('sessions', 'messages', 'parts', 'tool_calls',
 	}
 	if n != schemaVersion {
 		t.Fatalf("got %d schema_migrations rows, want %d", n, schemaVersion)
+	}
+}
+
+func TestRecapRecordLifecycleAndOrdering(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	sess, err := s.CreateSession(ctx, Session{Directory: "/work", Model: "deepseek-v4-flash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := s.InsertMessage(ctx, Message{SessionID: sess.ID, Role: "user", TimeCreated: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.InsertMessage(ctx, Message{SessionID: sess.ID, Role: "assistant", TimeCreated: 200})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := RecapRecord{
+		SessionID:          sess.ID,
+		SourceStartSeq:     first.Seq,
+		SourceEndSeq:       second.Seq,
+		SourceStartTime:    first.TimeCreated,
+		SourceEndTime:      second.TimeCreated,
+		SourceEndMessageID: second.ID,
+		Model:              "deepseek-v4-flash",
+		Artifacts:          RecapArtifacts{},
+	}
+	reserved, created, err := s.ReserveRecap(ctx, want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !created || reserved.ID == "" || reserved.Status != RecapStatusQueued || reserved.Attempts != 0 {
+		t.Fatalf("reserved = %+v created=%t", reserved, created)
+	}
+	duplicate, created, err := s.ReserveRecap(ctx, want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created || duplicate.ID != reserved.ID {
+		t.Fatalf("duplicate = %+v created=%t", duplicate, created)
+	}
+	open, err := s.ListOpenRecaps(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(open) != 1 || open[0].ID != reserved.ID {
+		t.Fatalf("open recaps = %+v", open)
+	}
+	after, err := s.ListRecapsAfter(ctx, sess.ID, first.Seq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != 1 || after[0].SourceEndSeq != second.Seq {
+		t.Fatalf("recaps after = %+v", after)
+	}
+	if err := s.ClaimRecap(ctx, reserved.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CompleteRecap(ctx, reserved.ID, RecapArtifacts{
+		Sessions: RecapArtifact{Path: "sessions/000002-msg.md", SHA256: strings.Repeat("a", 64)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetRecap(ctx, reserved.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != RecapStatusCompleted || got.TimeStarted == nil || got.TimeFinished == nil {
+		t.Fatalf("completed = %+v", got)
+	}
+	if got.Artifacts.Sessions.Path != "sessions/000002-msg.md" {
+		t.Fatalf("artifacts = %+v", got.Artifacts)
+	}
+}
+
+func TestRecapRecordStatusTransitionsAndValidation(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	sess, err := s.CreateSession(ctx, Session{Directory: "/work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg, err := s.InsertMessage(ctx, Message{SessionID: sess.ID, Role: "user"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := RecapRecord{SessionID: sess.ID, SourceStartSeq: msg.Seq, SourceEndSeq: msg.Seq,
+		SourceStartTime: msg.TimeCreated, SourceEndTime: msg.TimeCreated, SourceEndMessageID: msg.ID, Model: "m"}
+	queued, _, err := s.ReserveRecap(ctx, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.FailRecap(ctx, queued.ID, "worker failed"); err != nil {
+		t.Fatal(err)
+	}
+	failed, err := s.GetRecap(ctx, queued.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed.Status != RecapStatusFailed || failed.Error != "worker failed" || failed.Attempts != 1 {
+		t.Fatalf("failed = %+v", failed)
+	}
+	if err := s.RequeueRecap(ctx, queued.ID); err != nil {
+		t.Fatalf("RequeueRecap: %v", err)
+	}
+	requeued, err := s.GetRecap(ctx, queued.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requeued.Status != RecapStatusQueued || requeued.Error != "" || requeued.TimeStarted != nil || requeued.TimeFinished != nil {
+		t.Fatalf("requeued = %+v", requeued)
+	}
+	cancelQueued, _, err := s.ReserveRecap(ctx, RecapRecord{
+		SessionID:          sess.ID,
+		SourceEndMessageID: "cancel-me",
+		Model:              "m",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CancelRecap(ctx, cancelQueued.ID); err != nil {
+		t.Fatal(err)
+	}
+	cancelled, err := s.GetRecap(ctx, cancelQueued.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cancelled.Status != RecapStatusCancelled {
+		t.Fatalf("cancelled = %+v", cancelled)
+	}
+	if _, _, err := s.ReserveRecap(ctx, RecapRecord{SessionID: sess.ID, SourceEndMessageID: "", Model: "m"}); err == nil {
+		t.Fatal("empty source message id should fail")
+	}
+	if _, _, err := s.ReserveRecap(ctx, RecapRecord{SessionID: sess.ID, SourceEndMessageID: "new", Model: "m", Artifacts: RecapArtifacts{Sessions: RecapArtifact{Path: "../../bad"}}}); err == nil {
+		t.Fatal("invalid artifact path should fail")
 	}
 }
 
@@ -613,6 +749,9 @@ func TestLegacyStatusSegmentsExpandOnMigration(t *testing.T) {
 	}
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM schema_migrations WHERE version = ?`, migrationStatusV2); err != nil {
 		t.Fatalf("rewind migration: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM schema_migrations WHERE version = ?`, migrationRecaps); err != nil {
+		t.Fatalf("rewind recap migration: %v", err)
 	}
 	if err := s.Migrate(ctx); err != nil {
 		t.Fatalf("Migrate: %v", err)

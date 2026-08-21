@@ -193,7 +193,8 @@ const (
 	migrationTodos      = 9
 	migrationSegments   = 10
 	migrationStatusV2   = 11
-	schemaVersion       = migrationStatusV2
+	migrationRecaps     = 12
+	schemaVersion       = migrationRecaps
 )
 
 // Migrate runs numbered migrations. schema_migrations records the applied
@@ -237,6 +238,29 @@ func (s *Store) Migrate(ctx context.Context) error {
 			})
 		case migrationStatusV2:
 			err = s.migrateV11StatusSegments(ctx)
+		case migrationRecaps:
+			err = s.applyMigration(ctx, migrationRecaps, []string{
+				`CREATE TABLE IF NOT EXISTS recap_records (
+  id                    TEXT PRIMARY KEY,
+  session_id            TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  source_start_seq      INTEGER NOT NULL,
+  source_end_seq        INTEGER NOT NULL,
+  source_start_time     INTEGER NOT NULL,
+  source_end_time       INTEGER NOT NULL,
+  source_end_message_id TEXT NOT NULL,
+  model                 TEXT NOT NULL,
+  artifacts_json        TEXT NOT NULL DEFAULT '{}',
+  status                TEXT NOT NULL,
+  attempts              INTEGER NOT NULL DEFAULT 0,
+  error                 TEXT,
+  time_created          INTEGER NOT NULL,
+  time_started          INTEGER,
+  time_finished         INTEGER
+)`,
+				`CREATE UNIQUE INDEX IF NOT EXISTS idx_recap_records_session_end ON recap_records(session_id, source_end_message_id)`,
+				`CREATE INDEX IF NOT EXISTS idx_recap_records_open ON recap_records(status, time_created, id) WHERE status IN ('queued', 'running')`,
+				`CREATE INDEX IF NOT EXISTS idx_recap_records_session_seq ON recap_records(session_id, source_end_seq, id)`,
+			})
 		default:
 			if i < 1 || i > len(schemaMigrations) {
 				return fmt.Errorf("db: missing migration statements for version %d", i)

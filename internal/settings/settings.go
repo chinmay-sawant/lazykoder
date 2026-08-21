@@ -122,6 +122,14 @@ type Compaction struct {
 	KeepTokens int64 `json:"keep_tokens"`
 }
 
+// Recap holds the hidden local-memory recap worker preferences.
+type Recap struct {
+	// Enabled controls whether completed parent turns may create recaps.
+	Enabled bool `json:"enabled"`
+	// Model is the model id used for recap generation.
+	Model string `json:"model"`
+}
+
 // Settings is the on-disk project config under .lazykoder/settings.json.
 type Settings struct {
 	Appearance Appearance `json:"appearance"`
@@ -129,6 +137,7 @@ type Settings struct {
 	Model      Model      `json:"model"`
 	Agents     Agents     `json:"agents"`
 	Compaction Compaction `json:"compaction"`
+	Recap      Recap      `json:"recap"`
 }
 
 // Default returns the built-in defaults.
@@ -160,6 +169,10 @@ func Default() Settings {
 			Auto:       true,
 			Percent:    defaultCompactPercent,
 			KeepTokens: defaultKeepTokens,
+		},
+		Recap: Recap{
+			Enabled: false,
+			Model:   DefaultModelID,
 		},
 	}
 }
@@ -226,6 +239,11 @@ func (s Settings) EffectiveCompaction() Compaction {
 	return s.normalized().Compaction
 }
 
+// EffectiveRecap returns normalized hidden recap preferences.
+func (s Settings) EffectiveRecap() Recap {
+	return s.normalized().Recap
+}
+
 // EffectiveTimeout is the sub-agent timeout duration.
 // Zero DefaultTimeoutSec means no timeout from settings.
 func (a Agents) EffectiveTimeout() time.Duration {
@@ -255,6 +273,10 @@ func (s Settings) normalized() Settings {
 	s.Model.Variant = strings.TrimSpace(s.Model.Variant)
 	s.Agents = s.Agents.normalized()
 	s.Compaction = s.Compaction.normalized()
+	s.Recap.Model = strings.TrimSpace(s.Recap.Model)
+	if s.Recap.Model == "" {
+		s.Recap.Model = DefaultModelID
+	}
 	return s
 }
 
@@ -381,6 +403,9 @@ func NormalizeAfterLoad(s Settings, raw []byte) Settings {
 		if !jsonHasKey(raw, "compaction", "keep_tokens") {
 			s.Compaction.KeepTokens = defaultKeepTokens
 		}
+	}
+	if !jsonHasKey(raw, "recap") {
+		s.Recap = Default().Recap
 	}
 	return s.normalized()
 }

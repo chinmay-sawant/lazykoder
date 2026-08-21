@@ -77,10 +77,11 @@ human runs them.
   alt screen exits; workdir `AGENTS.md` is prepended as a system message on
   chat model calls. Automated gates green; manual TUI rows open. Ledger:
   `plans/v0.0.9/`.
-- v0.0.10: planned optional recap artifacts. It will write ordered recaps,
-  questions, and things to avoid under `knowledge-base/recaps/` after
-  completed main-chat turns. The next parent user turn will run one bounded
-  internal grep lookup before its first ordinary provider request. Ledger:
+- v0.0.10: optional recap artifacts are implemented. It writes ordered
+  recaps, questions, and things to avoid under `knowledge-base/recaps/` after
+  completed main-chat turns. The next parent user turn runs one bounded
+  internal grep lookup before its first ordinary provider request. Automated
+  gates are green; live-terminal settings inspection remains open. Ledger:
   `plans/v0.0.10/`.
 
 ## What 0.0.1 deliberately does not do

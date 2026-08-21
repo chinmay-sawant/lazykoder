@@ -81,15 +81,15 @@ with each path and SHA-256 for recovery and audit.
 
 ## Work sequence
 
-1. [ ] [Phase 1](phase-1-settings-and-recap-records.md): add the persisted
+1. [x] [Phase 1](phase-1-settings-and-recap-records.md): add the persisted
    recap settings and the durable, idempotent recap record.
-2. [ ] [Phase 2](phase-2-hidden-recap-worker.md): build the time-windowed
+2. [x] [Phase 2](phase-2-hidden-recap-worker.md): build the time-windowed
    snapshot, questions, avoid rules, worker, and atomic artifacts.
-3. [ ] [Phase 3](phase-3-first-request-recall.md): add one safe internal grep
+3. [x] [Phase 3](phase-3-first-request-recall.md): add one safe internal grep
    lookup and first-request agent injection.
-4. [ ] [Phase 4](phase-4-settings-ui-and-turn-scheduling.md): expose settings,
+4. [~] [Phase 4](phase-4-settings-ui-and-turn-scheduling.md): expose settings,
    attach worker and recall services, then schedule successful parent turns.
-5. [ ] [Phase 5](phase-5-docs-and-gates.md): synchronize docs and run the
+5. [~] [Phase 5](phase-5-docs-and-gates.md): synchronize docs and run the
    complete automated and terminal checks.
 
 ## First-request recall
@@ -123,14 +123,14 @@ No new third-party dependency is planned.
 
 ## Closure gates
 
-- [ ] Focused settings, recap, database, and chat tests pass without network.
-- [ ] `go build ./...` exits 0.
-- [ ] `make test` exits 0.
-- [ ] `make lint` exits 0.
+- [x] Focused settings, recap, database, and chat tests pass without network.
+- [x] `go build ./...` exits 0.
+- [x] `make test` exits 0.
+- [x] `make lint` exits 0.
 - [ ] At 120x36 and 80x24 in a real terminal, both recap settings rows are
       reachable, readable, and clickable. No recap worker appears in the
       transcript, status line, or sub-agent drawer.
-- [ ] A restart resumes one unfinished recap at most once, and duplicate turn
+- [x] A restart resumes one unfinished recap at most once, and duplicate turn
       completion cannot produce a second file for the same end message.
-- [ ] A related next user turn makes one internal grep lookup before its first
+- [x] A related next user turn makes one internal grep lookup before its first
       ordinary request. Tool follow-ups and `/continue` make no lookup.

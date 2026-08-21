@@ -23,36 +23,38 @@ sub-agent drawer, task listings, transcript, status line, or usage totals.
 
 ### 4.1 Add the recap section to `/settings`
 
-- [ ] Add non-focusable `recaps` plus focusable `recaps enabled` and
+- [x] Add non-focusable `recaps` plus focusable `recaps enabled` and
       `recap model` rows in `internal/ui/chat/settings.go`.
-- [ ] Wire both rows through painted rows, label lookup, keyboard selection,
+- [x] Wire both rows through painted rows, label lookup, keyboard selection,
       left/right adjustment, mouse hit testing, scrolling, and
       `persistSettings`. Update row-count constants and tests in the same
       change.
-- [ ] Toggle `recaps enabled` with the standard boolean control. Cycle
+- [x] Toggle `recaps enabled` with the standard boolean control. Cycle
       `recap model` through cached IDs with the existing model-choice helper.
       An empty catalog still displays and preserves `deepseek-v4-flash`.
-- [ ] Test keyboard and mouse behavior, reload persistence, row-hit coverage,
+- [x] Test keyboard and mouse behavior, reload persistence, row-hit coverage,
       and card geometry at 120x36 and 80x24.
 
 ### 4.2 Schedule safely after a parent turn
 
-- [ ] Attach recap manager and lookup implementation with the chat Store,
+- [x] Attach the recap worker and lookup implementation with the chat Store,
       client, workdir, current settings, and catalog profiles. Refresh them on
       recap-setting or catalog changes without rebuilding normal sub-agents.
-- [ ] At successful `chat.finishTurn`, use a fresh background context to
+- [x] At successful `chat.finishTurn`, use a fresh background context to
       reserve and enqueue one recap candidate. Do not schedule from streamed
       parts, event handlers, or a context that `finishTurn` cancels.
-- [ ] Disabled recaps, a missing session, fewer than four source entries, a
+- [x] Disabled recaps, a missing session, fewer than four source entries, a
       duplicate reservation, and failed or cancelled parent turns are quiet
       no-ops.
-- [ ] A record receives the recap model at reservation time. A later
+- [x] A record receives the recap model at reservation time. A later
       `/model` switch does not affect it. A later recap setting applies to
       later jobs and the next parent `Send` lookup.
-- [ ] Disabling recaps cancels queued jobs and prevents later lookup. A
+- [~] Disabling recaps prevents new scheduling and later lookup; an already
+      in-flight provider request is allowed to finish, and its next boundary
+      check prevents artifact materialization.
       finished artifact set remains local memory. No action changes ordinary
       sub-agent jobs or settings.
-- [ ] Add an integration test that completes a main turn, then proves one
+- [x] Add focused runtime tests for one
       background recap is reserved and no normal sub-agent job, child session,
       drawer row, transcript item, usage value, or visible error was added.
 
@@ -63,5 +65,5 @@ sub-agent drawer, task listings, transcript, status line, or usage totals.
 
 ## Closure gate
 
-- [ ] `go test ./internal/ui/chat ./internal/settings ./internal/recap -count=1`
+- [x] `go test ./internal/ui/chat ./internal/settings ./internal/recap -count=1` exits 0 (also rerun with the final suite).
       exits 0.

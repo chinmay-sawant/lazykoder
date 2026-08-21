@@ -480,6 +480,9 @@ func New(opts Options) Model {
 // Init starts the fetch and watcher commands.
 func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{m.confirmWatch(), m.askWatch(), m.fetchModels, tipsTick()}
+	if m.projectSettings.EffectiveRecap().Enabled && m.session != nil && m.store != nil && m.client != nil {
+		cmds = append(cmds, m.recoverRecaps)
+	}
 	if m.projectInstructionsNotice != "" {
 		cmds = append(cmds, clearProjectInstructionsNotice())
 	}
@@ -586,12 +589,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.seq != m.turnSeq {
 			return m, nil
 		}
+		recapEligible := m.recapEligible(msg.err)
 		m = m.finishTurn(msg.err)
+		var recapCmd tea.Cmd
+		if recapEligible {
+			recapCmd = m.scheduleRecap()
+		}
 		// Continue diamond throb while background sub-agents are still live.
 		if m.hasLiveSubagents() {
-			return m, pulseTick()
+			return m, tea.Batch(recapCmd, pulseTick())
 		}
-		return m, nil
+		return m, recapCmd
 	case pulseMsg:
 		// Keep throbbing for live sub-agents even after the parent turn ends.
 		if !m.busy && !m.hasLiveSubagents() {

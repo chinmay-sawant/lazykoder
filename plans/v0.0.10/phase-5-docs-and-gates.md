@@ -25,30 +25,32 @@ make the card unusable.
 
 ### 5.1 Synchronize documentation and local knowledge base
 
-- [ ] Update `docs/storage.md` with `recap_records`, artifact manifests,
+- [x] Update `docs/storage.md` with `recap_records`, artifact manifests,
       preserved files after session deletion, statuses, and sequence ordering.
-- [ ] Update `docs/tui.md` with recap settings, defaults, silent artifact
+- [x] Update `docs/tui.md` with recap settings, defaults, silent artifact
       behavior, and first-request recall with no visible tool row.
-- [ ] Update `docs/architecture.md` with recap worker, first-request lookup,
+- [x] Update `docs/architecture.md` with recap worker, first-request lookup,
       agent injection order, and `grep.Run` as the confined search path.
-- [ ] Update `knowledge-base/03-concepts/recaps.md` with folder layout,
+- [x] Update `knowledge-base/03-concepts/recaps.md` with folder layout,
       one-to-two-hour selection, generated questions, things to avoid, safe
       recall, and the no-repeat tool-follow-up boundary.
-- [ ] Do not create placeholder artifacts. The three recap subfolders appear
+- [x] Do not create placeholder artifacts. The three recap subfolders appear
       only when a real artifact needs them.
 
 ### 5.2 Validate the delivered behavior
 
-- [ ] Run focused checks without a live API:
+- [x] Run focused checks without a live API: `go test ./... -count=1` and
+      `go test -race ./internal/recap ./internal/ui/chat` passed.
       `go test ./internal/settings ./internal/db ./internal/recap ./internal/agent ./internal/ui/chat -count=1`.
-- [ ] Run `go build ./...`, then `make test`, then `make lint`. Record
+- [x] Run `go build ./...`, then `make test`, then `make lint`. All three
+      commands passed.
       each exit code in this plan before marking its row complete.
 - [ ] In a real TTY, inspect `/settings` at 120x36 and 80x24. Toggle recaps,
       choose a model, save, reopen, and confirm the value remains readable.
-- [ ] With a fake provider, complete enough parent messages for a recap. Check
+- [~] With a fake provider, complete enough parent messages for a recap. Check
       recap, questions, and avoid outputs; correct front matter; no duplicate
       after replaying completion; and no drawer or transcript entry.
-- [ ] Send a related next user request. Check exactly one internal grep scan
+- [x] Send a related next user request. Check exactly one internal grep scan
       before the first normal provider request, bounded safe prompt injection,
       no scan after the model's tool call, and no scan for `/continue`.
 

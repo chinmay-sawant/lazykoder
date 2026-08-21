@@ -25,25 +25,25 @@ SQLite remains the single writer.
 
 ### 1.1 Recap settings contract
 
-- [ ] Add `settings.Recap` in `internal/settings/settings.go` with
+- [x] Add `settings.Recap` in `internal/settings/settings.go` with
       `Enabled bool` (`json:"enabled"`) and `Model string` (`json:"model"`).
       Keep it separate from `settings.Agents`.
-- [ ] Add `Recap` to `settings.Settings` as `json:"recap"`; `Default()` must
+- [x] Add `Recap` to `settings.Settings` as `json:"recap"`; `Default()` must
       set `enabled: false` and `model: "deepseek-v4-flash"`.
-- [ ] Normalize whitespace and an empty recap model back to
+- [x] Normalize whitespace and an empty recap model back to
       `deepseek-v4-flash`. Do not validate against a stale model cache during
       file load.
-- [ ] Extend `NormalizeAfterLoad` so settings files with no `recap` object
+- [x] Extend `NormalizeAfterLoad` so settings files with no `recap` object
       become recap-disabled with the DeepSeek model. A legacy missing key must
       never silently enable model calls.
-- [ ] Add `EffectiveRecap() Recap` beside the existing effective-setting
+- [x] Add `EffectiveRecap() Recap` beside the existing effective-setting
       helpers. It is the only runtime read of the recap setting.
-- [ ] Test defaults, a missing legacy block, invalid/empty model cleanup, and
+- [x] Test defaults, a missing legacy block, invalid/empty model cleanup, and
       save-load round trips in `internal/settings/settings_test.go`.
 
 ### 1.2 Durable recap ledger
 
-- [ ] Add migration 12 under `internal/db` for `recap_records`. Define:
+- [x] Add migration 12 under `internal/db` for `recap_records`. Define:
 
       ```text
       id                     TEXT PRIMARY KEY       // rec_<16 hex>
@@ -63,17 +63,17 @@ SQLite remains the single writer.
       time_finished          INTEGER nullable
       ```
 
-- [ ] Add a unique index on `(session_id, source_end_message_id)` and indexes
+- [x] Add a unique index on `(session_id, source_end_message_id)` and indexes
       for open records and per-session source order. Model duplicate inserts
       as a harmless already-reserved result.
-- [ ] Add `db.RecapRecord`, `db.RecapArtifacts`, and narrow Store methods
+- [x] Add `db.RecapRecord`, `db.RecapArtifacts`, and narrow Store methods
       for reserve, claim, complete, fail, cancel, list open, and list records
       after a session sequence. Validate the artifact JSON at the database
       boundary and keep status transitions in one package.
-- [ ] Preserve recap files if a user deletes a session. Deleting the session
+- [x] Preserve recap files if a user deletes a session. Deleting the session
       cascades the SQLite ledger only. The knowledge base is project memory,
       not a session-owned cache.
-- [ ] Test migration from the current schema, uniqueness, artifact-manifest
+- [x] Test migration from the current schema, uniqueness, artifact-manifest
       validation, status transitions, and record ordering in `internal/db`
       tests.
 
@@ -84,4 +84,4 @@ SQLite remains the single writer.
 
 ## Closure gate
 
-- [ ] `go test ./internal/settings ./internal/db -count=1` exits 0.
+- [x] `go test ./internal/settings ./internal/db -count=1` exits 0 (also rerun with the final focused suite).

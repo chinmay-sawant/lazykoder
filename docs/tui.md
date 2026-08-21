@@ -283,6 +283,8 @@ and keyboard hint rows keep the card's opaque neutral-charcoal background.
 | parent max steps | tool-calling rounds per user turn when the limit is on (1-1000, default 16) |
 | auto-compact | on/off for same-model percent preflight (default on) |
 | compact at | fire when used tokens exceed this % of the live window (5-99, steps of 5, default 80). Dimmed when auto is off, still editable |
+| recaps enabled | on/off for hidden recap generation and first-request local recall (default off) |
+| recap model | model for hidden recap generation (default `deepseek-v4-flash`) |
 | sub-agents | on/off for parent `task` tools |
 | default role | `explore` / `plan` / `general` when `task` omits role |
 | max concurrent | concurrent child agents (1-20, default 4) |
@@ -317,6 +319,12 @@ concurrent). Cancelling the parent turn also cancels child jobs.
 
 `keep_tokens` (recent tail beside the summary, default 15,000) is only
 in `.lazykoder/settings.json`. `/settings` does not edit it.
+
+When recaps are enabled, a completed main-chat turn may create files under
+`knowledge-base/recaps/sessions/`, `questions/`, and `things-to-avoid/`.
+The worker is silent: it does not add a transcript row or open the sub-agent
+drawer. A later parent turn performs one bounded local grep before its first
+provider request and sends matching lines as untrusted historical hints.
 
 When the step limit is off the agent still has a large safety bound so a
 runaway loop cannot run forever. `/model` and `/variant` still change only

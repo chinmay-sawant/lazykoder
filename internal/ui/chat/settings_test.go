@@ -36,7 +36,7 @@ func TestSettingsSlashOpensCard(t *testing.T) {
 	if !strings.Contains(v, "SETTINGS") || !strings.Contains(v, "[x]") {
 		t.Fatalf("settings card missing header/x: %q", v)
 	}
-	for _, want := range []string{"theme", "new-session model", "child timeout", "default role", "child bash confirms", "parent bash allowlist", "auto-compact", "compact at"} {
+	for _, want := range []string{"theme", "new-session model", "recaps enabled", "recap model", "child timeout", "default role", "child bash confirms", "parent bash allowlist", "auto-compact", "compact at"} {
 		if !strings.Contains(v, want) {
 			t.Fatalf("settings card missing %q: %q", want, v)
 		}
@@ -207,6 +207,42 @@ func TestSettingsDefaultModelCyclePersists(t *testing.T) {
 	}
 	if loaded.Model.Default != "claude-4" {
 		t.Fatalf("persisted model = %q", loaded.Model.Default)
+	}
+}
+
+func TestSettingsRecapToggleAndModelPersist(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	m := New(Options{
+		Store:        newTestStore(t),
+		Client:       deadClient(),
+		Workdir:      dir,
+		SettingsPath: path,
+	})
+	m.models = []string{"deepseek-v4-flash", "claude-4"}
+	m = m.openSettings()
+	if m.projectSettings.EffectiveRecap().Enabled {
+		t.Fatal("recaps enabled by default")
+	}
+	if got := m.projectSettings.EffectiveRecap().Model; got != settings.DefaultModelID {
+		t.Fatalf("recap model = %q, want %q", got, settings.DefaultModelID)
+	}
+	m.settingsCursor = settingsRowRecapEnabled
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyRight})
+	if !m.projectSettings.Recap.Enabled {
+		t.Fatal("right arrow did not enable recaps")
+	}
+	m.settingsCursor = settingsRowRecapModel
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyRight})
+	if got := m.projectSettings.Recap.Model; got != "claude-4" {
+		t.Fatalf("recap model = %q, want claude-4", got)
+	}
+	loaded, err := settings.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !loaded.Recap.Enabled || loaded.Recap.Model != "claude-4" {
+		t.Fatalf("persisted recap settings = %+v", loaded.Recap)
 	}
 }
 
@@ -459,6 +495,38 @@ func TestSettingsCardFitsCompactTerminal(t *testing.T) {
 	}
 }
 
+func TestSettingsRecapRowsFitRequestedTerminals(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		width  int
+		height int
+	}{
+		{name: "wide", width: 120, height: 36},
+		{name: "compact", width: 80, height: 24},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+			mm, _ := m.Update(tea.WindowSizeMsg{Width: tc.width, Height: tc.height})
+			m = mm.(Model).openSettings()
+			if got := len(strings.Split(m.settingsScreen(), "\n")); got != tc.height {
+				t.Fatalf("settings height = %d, want %d", got, tc.height)
+			}
+			for _, row := range []struct {
+				id    int
+				label string
+			}{
+				{id: settingsRowRecapEnabled, label: "recaps enabled"},
+				{id: settingsRowRecapModel, label: "recap model"},
+			} {
+				m.settingsCursor = row.id
+				if y := settingsPaintedRowY(m, row.label); y < 0 {
+					t.Fatalf("row %q is not visible at %dx%d:\n%s", row.label, tc.width, tc.height, stripANSI(viewText(m)))
+				}
+			}
+		})
+	}
+}
+
 func TestSettingsCompactPercentAdjustAndPersist(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "settings.json")
@@ -607,7 +675,7 @@ func settingsPaintedRow(m Model, label string) string {
 
 func settingsHitX(line string, row int) int {
 	switch row {
-	case settingsRowLimit, settingsRowCompactAuto, settingsRowAgentsEnabled, settingsRowAgentsWriters, settingsRowAllowlistEnabled:
+	case settingsRowLimit, settingsRowCompactAuto, settingsRowAgentsEnabled, settingsRowAgentsWriters, settingsRowAllowlistEnabled, settingsRowRecapEnabled:
 		if x0, x1, ok := displaySpan(line, "[on]"); ok {
 			return (x0 + x1) / 2
 		}
@@ -658,6 +726,10 @@ func settingsHitChanged(before, after Model, row int) bool {
 		return aa.ModelOverride != ba.ModelOverride
 	case settingsRowExploreModel:
 		return aa.ExploreModel != ba.ExploreModel
+	case settingsRowRecapEnabled:
+		return after.projectSettings.Recap.Enabled != before.projectSettings.Recap.Enabled
+	case settingsRowRecapModel:
+		return after.projectSettings.Recap.Model != before.projectSettings.Recap.Model
 	case settingsRowLimit:
 		return after.projectSettings.Slot.LimitEnabled != before.projectSettings.Slot.LimitEnabled
 	case settingsRowSteps:

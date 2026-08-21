@@ -14,14 +14,15 @@ owns the tool loop: it is not a wrapper around the OpenCode CLI or its global
 | --- | --- |
 | `main.go` | init workspace, load key, start the tea program |
 | `internal/workspace` | create `.lazykoder/`, open + migrate the db, ensure `.gitignore` |
-| `internal/db` | numbered migrations + session/message/part/tool store |
+| `internal/db` | numbered migrations + session/message/part/tool/recap store |
 | `internal/provider/opencode` | HTTP client for the OpenCode Go API |
 | `internal/agent` | turn loop, `buildHistory`, compact policy and summarizer run |
+| `internal/recap` | time-windowed snapshots, hidden no-tools worker, and atomic local artifacts |
 | `internal/prompts` | embedded `compact.md` via `go:embed` (`prompts.Must`) |
 | `internal/subagent` | Manager + Host + AgentRunner for concurrent children |
 | `internal/policy` | bash classifier returning Allow/Ask/Deny |
 | `internal/tools` | bash, read, grep, write, edit, question, webfetch, task schemas |
-| `internal/settings` | project settings: slot, model, `agents` caps, `compaction` |
+| `internal/settings` | project settings: slot, model, `agents` caps, `compaction`, and `recap` |
 | `internal/ui/chat` | transcript, prompt, status line, model picker |
 | `internal/ui/confirm` | the y/n confirm view (rm and question flows) |
 | `internal/envfile` | stdlib-only `.env` loader |
@@ -118,9 +119,22 @@ One user turn runs in `internal/agent.Send` with a hard step bound (default
    semaphore; other tools stay sequential.
 7. Tool results go back to the model for the next step; loop until
    `finish_reason` is not `tool-calls`.
+8. After a successful completed main-session turn, the TUI schedules one
+   hidden `internal/recap` worker. It snapshots up to five newest eligible
+   messages, writes recap/question/avoid artifacts, and marks the SQLite
+   record complete only after all required renames succeed.
 
 Everything the loop needs for a resumed session lives in the store; there is
 no in-memory tool state for the parent transcript.
+
+### First-request recall
+
+When `recap.enabled` is true, `internal/ui/chat` runs one bounded, quoted
+grep under `knowledge-base/recaps/` after persisting a new parent user message
+and before its first ordinary provider request. Matches are inserted as a
+wire-only system block after `AGENTS.md` instructions. The block is marked
+untrusted and is not persisted. Tool follow-ups, `/continue`, compaction, and
+child sessions do not repeat the lookup.
 
 ## Compaction
 

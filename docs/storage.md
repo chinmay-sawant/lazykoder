@@ -14,7 +14,7 @@ messages, parts and tool runs.
   when parent and sub-agents wrote in parallel. One connection serializes
   all store access safely for concurrent agents.
 - Numbered migrations recorded in `schema_migrations` (version 1 creates the
-  full schema; later versions alter or rebuild). Current version: **11**.
+  full schema; later versions alter or rebuild). Current version: **12**.
   `Migrate` is idempotent.
 
 ## Schema
@@ -46,6 +46,13 @@ subagent_jobs(id TEXT PK,
               time_created, time_updated, time_started, time_finished)
 todos(session_id -> sessions ON DELETE CASCADE, seq, content, status,
       time_updated, PRIMARY KEY(session_id, seq))
+recap_records(id TEXT PK,
+              session_id -> sessions ON DELETE CASCADE,
+              source_start_seq, source_end_seq, source_start_time,
+              source_end_time, source_end_message_id, model,
+              artifacts_json, status, attempts, error,
+              time_created, time_started, time_finished,
+              UNIQUE(session_id, source_end_message_id))
 ```
 
 Indexes (hot paths first):
@@ -65,13 +72,18 @@ messages/parts/tools, and durable `subagent_jobs`. Deleting only a child
 session nulls `subagent_jobs.child_session_id` but keeps the job summary.
 Child messages set `messages.agent` to the sub-agent name.
 A parent compact turn sets `messages.agent` to `compaction` and writes
-one `parts.type = compaction` row. That is not a schema migration
-(version stays 11).
+one `parts.type = compaction` row. That is not a schema migration.
 
-Schema version is 11 (`schema_migrations`). Migrations 7-8 rebuild tables
+Schema version is 12 (`schema_migrations`). Migrations 7-8 rebuild tables
 to add FKs SQLite cannot express with `ALTER TABLE`; migration 9 adds the
 session todo table, migration 10 adds the additive footer segment column, and
 migration 11 expands legacy footer visibility into the status drawer fields.
+Migration 12 adds the recap reservation and artifact lifecycle ledger.
+
+`recap_records` is keyed by the main session and newest source message. It
+retains source times for audit only. Queued and interrupted running rows are
+resumed when a session is reopened with recaps enabled. Artifact files remain
+under `knowledge-base/recaps/` even if the session is deleted.
 
 `subagent_jobs` is the durable task registry: spawn/status/finish are
 upserted so `task_list`, `task_status`, and `task_wait` still work after a
@@ -120,6 +132,11 @@ the TUI hide bit and is not used as a compact flag.
 `UpdateSessionSegments` (JSON footer visibility, also bumps `time_updated`),
 `UpsertSubagentJob` / `GetSubagentJob` / `ListSubagentJobs` /
 `ListOpenSubagentJobs` (durable sub-agent registry).
+
+`ReserveRecap`, `GetRecap`, `ClaimRecap`, `RequeueRecap`, `CompleteRecap`,
+`FailRecap`, `CancelRecap`, `ListOpenRecaps`, and `ListRecapsAfter` manage the
+recap lifecycle. `source_end_seq` and `source_end_message_id` identify a
+window; timestamps are metadata and do not sort artifacts.
 
 `ReplaceTodos` replaces all rows for one session in one transaction and
 assigns `seq` from zero. `ListTodos` returns the rows in display order.

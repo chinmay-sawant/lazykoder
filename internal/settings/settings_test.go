@@ -53,6 +53,9 @@ func TestDefault(t *testing.T) {
 	if !s.Compaction.Auto || s.Compaction.Percent != 80 || s.Compaction.KeepTokens != 15_000 {
 		t.Fatalf("compaction defaults %+v", s.Compaction)
 	}
+	if s.Recap.Enabled || s.Recap.Model != DefaultModelID {
+		t.Fatalf("recap defaults %+v", s.Recap)
+	}
 }
 
 func TestLoadMissingReturnsDefault(t *testing.T) {
@@ -72,6 +75,52 @@ func TestLoadMissingReturnsDefault(t *testing.T) {
 	}
 	if !s.Compaction.Auto || s.Compaction.Percent != 80 {
 		t.Fatalf("compaction %+v", s.Compaction)
+	}
+	if s.Recap.Enabled || s.Recap.Model != DefaultModelID {
+		t.Fatalf("recap %+v", s.Recap)
+	}
+}
+
+func TestLegacySettingsNormalizeRecapDisabled(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte(`{"model":{"default":"claude-4"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Recap.Enabled || s.Recap.Model != DefaultModelID {
+		t.Fatalf("legacy recap = %+v", s.Recap)
+	}
+}
+
+func TestRecapModelNormalizesWhitespaceAndEmpty(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte(`{"recap":{"enabled":true,"model":"  "}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.Recap.Enabled || s.EffectiveRecap().Model != DefaultModelID {
+		t.Fatalf("recap = %+v", s.Recap)
+	}
+}
+
+func TestRecapSaveLoadRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	want := Settings{Recap: Recap{Enabled: true, Model: "claude-4"}}
+	if err := Save(path, want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.Recap, want.Recap) {
+		t.Fatalf("recap got %+v want %+v", got.Recap, want.Recap)
 	}
 }
 

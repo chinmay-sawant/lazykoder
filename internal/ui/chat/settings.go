@@ -22,6 +22,8 @@ const (
 	settingsRowVariant
 	settingsRowChildModel
 	settingsRowExploreModel
+	settingsRowRecapEnabled
+	settingsRowRecapModel
 	settingsRowLimit
 	settingsRowSteps
 	settingsRowCompactAuto
@@ -252,6 +254,11 @@ func (m Model) settingsPaintLines(innerW int) []settingsPaintLine {
 	if exploreVal == "" {
 		exploreVal = "inherit"
 	}
+	recap := m.projectSettings.EffectiveRecap()
+	recapModelVal := recap.Model
+	if recapModelVal == "" {
+		recapModelVal = settings.DefaultModelID
+	}
 	limitOn := "off"
 	if m.projectSettings.Slot.LimitEnabled {
 		limitOn = "on"
@@ -291,6 +298,9 @@ func (m Model) settingsPaintLines(innerW int) []settingsPaintLine {
 		m.settingsPaintRow(settingsRowChildModel, "◂ "+childVal+" ▸", innerW, false),
 		m.settingsPaintRow(settingsRowExploreModel, "◂ "+exploreVal+" ▸", innerW, false),
 		settingsPaintLine{kind: settingsLineHint, row: -1, text: "live /model and /variant do not change these defaults"},
+		settingsPaintLine{kind: settingsLineHeader, row: -1, text: "recaps"},
+		m.settingsPaintRow(settingsRowRecapEnabled, "["+boolOn(recap.Enabled)+"]", innerW, false),
+		m.settingsPaintRow(settingsRowRecapModel, "◂ "+recapModelVal+" ▸", innerW, false),
 		settingsPaintLine{kind: settingsLineHeader, row: -1, text: "agent loop"},
 		m.settingsPaintRow(settingsRowLimit, "["+limitOn+"]", innerW, false),
 		m.settingsPaintRow(settingsRowSteps, stepsVal, innerW, stepsDim),
@@ -361,6 +371,10 @@ func settingsRowLabel(row int) string {
 		return "child model override"
 	case settingsRowExploreModel:
 		return "explore model"
+	case settingsRowRecapEnabled:
+		return "recaps enabled"
+	case settingsRowRecapModel:
+		return "recap model"
 	case settingsRowLimit:
 		return "step limit"
 	case settingsRowSteps:
@@ -517,6 +531,10 @@ func (m Model) activateSettingsRow() (Model, tea.Cmd) {
 		return m.cycleChildModel(1), nil
 	case settingsRowExploreModel:
 		return m.cycleExploreModel(1), nil
+	case settingsRowRecapEnabled:
+		return m.setRecapEnabled(!m.projectSettings.EffectiveRecap().Enabled), nil
+	case settingsRowRecapModel:
+		return m.cycleRecapModel(1), nil
 	case settingsRowLimit:
 		return m.setLimitEnabled(!m.projectSettings.Slot.LimitEnabled), nil
 	case settingsRowSteps:
@@ -611,6 +629,14 @@ func (m Model) adjustSettings(delta int) Model {
 		return m.cycleChildModel(delta)
 	case settingsRowExploreModel:
 		return m.cycleExploreModel(delta)
+	case settingsRowRecapEnabled:
+		if delta > 0 {
+			return m.setRecapEnabled(true)
+		} else if delta < 0 {
+			return m.setRecapEnabled(false)
+		}
+	case settingsRowRecapModel:
+		return m.cycleRecapModel(delta)
 	case settingsRowLimit:
 		if delta > 0 {
 			return m.setLimitEnabled(true)
@@ -711,6 +737,10 @@ func (m Model) toggleSettingsRow() Model {
 		return m.cycleChildModel(1)
 	case settingsRowExploreModel:
 		return m.cycleExploreModel(1)
+	case settingsRowRecapEnabled:
+		return m.setRecapEnabled(!m.projectSettings.EffectiveRecap().Enabled)
+	case settingsRowRecapModel:
+		return m.cycleRecapModel(1)
 	}
 	return m
 }
@@ -747,6 +777,26 @@ func (m Model) cycleDefaultVariant(delta int) Model {
 		idx += len(list)
 	}
 	return m.setDefaultVariant(list[idx])
+}
+
+func (m Model) cycleRecapModel(delta int) Model {
+	list := m.models
+	if len(list) == 0 {
+		list = []string{settings.DefaultModelID}
+	}
+	cur := m.projectSettings.EffectiveRecap().Model
+	if cur == "" {
+		cur = settings.DefaultModelID
+	}
+	idx := indexOfString(list, cur)
+	if idx < 0 {
+		idx = 0
+	}
+	idx = (idx + delta) % len(list)
+	if idx < 0 {
+		idx += len(list)
+	}
+	return m.setRecapModel(list[idx])
 }
 
 func (m Model) inheritModelChoices() []string {
@@ -904,6 +954,20 @@ func (m Model) setDefaultVariant(v string) Model {
 	}
 	m = m.persistSettings()
 	return m
+}
+
+func (m Model) setRecapEnabled(on bool) Model {
+	m.projectSettings.Recap.Enabled = on
+	return m.persistSettings()
+}
+
+func (m Model) setRecapModel(id string) Model {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		id = settings.DefaultModelID
+	}
+	m.projectSettings.Recap.Model = id
+	return m.persistSettings()
 }
 
 func (m Model) setLimitEnabled(on bool) Model {
@@ -1183,6 +1247,15 @@ func (m Model) settingsHit(x, y int, button tea.MouseButton) (Model, tea.Cmd, bo
 			return m.cycleExploreModel(1), nil, true
 		}
 		return m.cycleExploreModel(1), nil, true
+	case settingsRowRecapEnabled:
+		return m.setRecapEnabled(!m.projectSettings.EffectiveRecap().Enabled), nil, true
+	case settingsRowRecapModel:
+		if dec, inc := hitStepChevrons(line, x); dec {
+			return m.cycleRecapModel(-1), nil, true
+		} else if inc {
+			return m.cycleRecapModel(1), nil, true
+		}
+		return m.cycleRecapModel(1), nil, true
 	case settingsRowLimit:
 		return m.setLimitEnabled(!m.projectSettings.Slot.LimitEnabled), nil, true
 	case settingsRowCompactAuto:
