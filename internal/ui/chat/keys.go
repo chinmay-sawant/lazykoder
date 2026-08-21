@@ -2,17 +2,12 @@ package chat
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/chinmay-sawant/lazykoder/internal/agent"
-	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
-	"github.com/chinmay-sawant/lazykoder/internal/policy"
-	"github.com/chinmay-sawant/lazykoder/internal/subagent"
-	"github.com/chinmay-sawant/lazykoder/internal/tools/question"
 )
 
 type errMsg struct {
@@ -36,6 +31,21 @@ func isPromptNewline(key tea.KeyPressMsg) bool {
 	}
 	switch strings.ToLower(key.Keystroke()) {
 	case "shift+enter", "alt+enter", "ctrl+enter":
+		return true
+	}
+	return false
+}
+
+func isUndoKey(key tea.KeyPressMsg) bool {
+	if key.Mod.Contains(tea.ModCtrl) && (key.Code == 'z' || key.Code == 'Z' || key.Code == 26) {
+		return true
+	}
+	switch strings.ToLower(key.String()) {
+	case "ctrl+z", "ctrl+shift+z":
+		return true
+	}
+	switch strings.ToLower(key.Keystroke()) {
+	case "ctrl+z", "ctrl+shift+z":
 		return true
 	}
 	return false
@@ -111,16 +121,33 @@ func (m Model) updateKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 			return m, nil
 		case 'c', 'C':
 			m.quitConfirm = false
-			// Prefer an active mouse/range selection, then select-all / whole draft.
+			// Only copy when text is actively selected (via ctrl+a, mouse drag in composer,
+			// transcript selection, or history browsing).
 			if text, ok := m.selectedPromptText(); ok {
 				m.copyNotice = "Text copied"
 				return m, tea.Batch(tea.SetClipboard(text), clearCopyNotice())
 			}
-			if m.prompt.Value() == "" {
-				return m, nil
+			if text, ok := m.selectedText(); ok {
+				m.copyNotice = "Text copied"
+				return m, tea.Batch(tea.SetClipboard(text), clearCopyNotice())
 			}
-			m.copyNotice = "Text copied"
-			return m, tea.Batch(tea.SetClipboard(m.prompt.Value()), clearCopyNotice())
+			if item, ok := m.selectedHistoryItem(); ok {
+				m.copyNotice = "Text copied"
+				return m, tea.Batch(tea.SetClipboard(item.text), clearCopyNotice())
+			}
+			// When text is not selected, ctrl+c clears the composer draft.
+			if m.prompt.Value() != "" {
+				m = m.rememberPrompt()
+				m.prompt.SetValue("")
+				m.prompt.SetHeight(m.promptHeight())
+				m.historyCursor = -1
+				m.historyDraft = ""
+				m.slashFromPaste = false
+				m.promptSelectAll = false
+				m = m.clearPromptSelection()
+				return m.syncPromptSlash(), nil
+			}
+			return m, nil
 		case 'e', 'E':
 			// Toggle last tool card (including edit) even while the prompt has text.
 			m.quitConfirm = false
@@ -128,6 +155,9 @@ func (m Model) updateKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 		case 'p', 'P':
 			m.quitConfirm = false
 			return m.toggleAllReasoning(), nil
+		case 'z', 'Z':
+			m.quitConfirm = false
+			return m.undoPrompt(), nil
 		}
 		var cmd tea.Cmd
 		m.prompt, cmd = m.prompt.Update(key)
@@ -179,10 +209,7 @@ func (m Model) updateKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m.submit(text)
 	case '?':
 		if m.prompt.Value() == "" {
-			m.helpMode = true
-			m.usageMode = false
-			m.usageLoading = false
-			return m, nil
+			return m.setFocus(focusHelp), nil
 		}
 	case tea.KeyBackspace:
 		m.historyCursor = -1
@@ -298,47 +325,23 @@ func (m Model) updateConfirmKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 
 func (m Model) submit(text string) (Model, tea.Cmd) {
 	m.prompt.SetValue("")
-	m.busy = true
-	m.err = ""
-	m.stepLimitHit = false
-	m.copyNotice = ""
-	m.projectInstructionsNotice = ""
-	m.promptSelectAll = false
 	m.pendingUser = text
 	m.historyCursor = -1
 	m.historyDraft = ""
-	m.promptUndo = nil
-	m.slashFromPaste = false
 	m.pendingHistoryIndex = len(m.inputHistory)
 	m.inputHistory = append(m.inputHistory, inputHistoryItem{text: text})
 	// UI shows the typed text; the model receives @agent:… expansions.
 	m.items = append(m.items, transcriptItem{kind: itemUser, text: text, when: time.Now().UnixMilli()})
 	m.turnItemFrom = len(m.items)
-	m.turnGenTokens = 0
-	m.tpsSamples = nil
-	m.stepMetrics = false
-	m.syncTranscript()
-	m.turnSeq++
-	seq := m.turnSeq
-	ctx, cancel := context.WithCancel(context.Background())
-	m.turnCancel = cancel
-	m.turnCtx = ctx
-	m.eventCh = make(chan agent.Event, eventChanBuffer)
-	m.errCh = make(chan error, 1)
-	ag := agent.New(m.store, m.client, m.workdir, m.agentOptions())
-	eventCh, errCh := m.eventCh, m.errCh
-	sendText := m.withMentionContext(text)
-	sendCmd := func() tea.Msg {
-		go func() { errCh <- ag.Send(ctx, sendText, eventCh) }()
-		return nil
-	}
-	m.pulse = 0
-	m.pulseOn = true
-	m.activity = "thinking"
-	m.turnStarted = time.Now()
 	m.pendingCompactReason = ""
 	m.compactHint = ""
-	return m, tea.Batch(sendCmd, m.watchEvents(seq), pulseTick())
+	sendText := m.withMentionContext(text)
+	return m.startTurn(turnStart{
+		activity: "thinking",
+		run: func(ctx context.Context, ag *agent.Agent, eventCh chan agent.Event) error {
+			return ag.Send(ctx, sendText, eventCh)
+		},
+	})
 }
 
 func (m Model) runCompact(extra string) (Model, tea.Cmd) {
@@ -350,40 +353,16 @@ func (m Model) runCompact(extra string) (Model, tea.Cmd) {
 		return m, nil
 	}
 	m.prompt.SetValue("")
-	m.busy = true
-	m.compacting = true
-	m.err = ""
-	m.stepLimitHit = false
-	m.copyNotice = ""
-	m.projectInstructionsNotice = ""
-	m.promptSelectAll = false
 	m.pendingUser = ""
-	m.promptUndo = nil
-	m.slashFromPaste = false
 	m.turnItemFrom = len(m.items)
-	m.turnGenTokens = 0
-	m.tpsSamples = nil
-	m.stepMetrics = false
-	m.syncTranscript()
-	m.turnSeq++
-	seq := m.turnSeq
-	ctx, cancel := context.WithCancel(context.Background())
-	m.turnCancel = cancel
-	m.turnCtx = ctx
-	m.eventCh = make(chan agent.Event, eventChanBuffer)
-	m.errCh = make(chan error, 1)
-	ag := agent.New(m.store, m.client, m.workdir, m.agentOptions())
-	eventCh, errCh := m.eventCh, m.errCh
-	sendCmd := func() tea.Msg {
-		go func() { errCh <- ag.Compact(ctx, eventCh, agent.CompactReasonManual, extra) }()
-		return nil
-	}
-	m.pulse = 0
-	m.pulseOn = true
-	m.activity = "compacting"
-	m.turnStarted = time.Now()
 	m.compactHint = ""
-	return m, tea.Batch(sendCmd, m.watchEvents(seq), pulseTick())
+	return m.startTurn(turnStart{
+		activity:   "compacting",
+		compacting: true,
+		run: func(ctx context.Context, ag *agent.Agent, eventCh chan agent.Event) error {
+			return ag.Compact(ctx, eventCh, agent.CompactReasonManual, extra)
+		},
+	})
 }
 
 // runContinue resumes after a step-limit stop, or sends a normal "continue"
@@ -401,42 +380,18 @@ func (m Model) runContinue() (Model, tea.Cmd) {
 // resumeAfterLimit runs another MaxSteps budget without a new user message.
 func (m Model) resumeAfterLimit() (Model, tea.Cmd) {
 	m.prompt.SetValue("")
-	m.busy = true
-	m.err = ""
-	m.stepLimitHit = false
-	m.copyNotice = ""
-	m.projectInstructionsNotice = ""
-	m.promptSelectAll = false
 	m.pendingUser = ""
 	m.historyCursor = -1
 	m.historyDraft = ""
-	m.promptUndo = nil
-	m.slashFromPaste = false
 	m.pendingHistoryIndex = -1
 	m.items = append(m.items, transcriptItem{kind: itemNote, text: "continuing…"})
 	m.turnItemFrom = len(m.items)
-	m.turnGenTokens = 0
-	m.tpsSamples = nil
-	m.stepMetrics = false
-	m.syncTranscript()
-	m.turnSeq++
-	seq := m.turnSeq
-	ctx, cancel := context.WithCancel(context.Background())
-	m.turnCancel = cancel
-	m.turnCtx = ctx
-	m.eventCh = make(chan agent.Event, eventChanBuffer)
-	m.errCh = make(chan error, 1)
-	ag := agent.New(m.store, m.client, m.workdir, m.agentOptions())
-	eventCh, errCh := m.eventCh, m.errCh
-	sendCmd := func() tea.Msg {
-		go func() { errCh <- ag.Continue(ctx, eventCh) }()
-		return nil
-	}
-	m.pulse = 0
-	m.pulseOn = true
-	m.activity = "thinking"
-	m.turnStarted = time.Now()
-	return m, tea.Batch(sendCmd, m.watchEvents(seq), pulseTick())
+	return m.startTurn(turnStart{
+		activity: "thinking",
+		run: func(ctx context.Context, ag *agent.Agent, eventCh chan agent.Event) error {
+			return ag.Continue(ctx, eventCh)
+		},
+	})
 }
 
 func (m Model) watchEvents(seq int) tea.Cmd {
@@ -514,55 +469,12 @@ func (m Model) forceSend(text string) (Model, tea.Cmd) {
 	return m.submit(text)
 }
 
-// agentOptions builds Options for the parent agent, including the subagent Host.
 func parseCompactSubmit(text string) (name, extra string, ok bool) {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "/compact" || strings.HasPrefix(trimmed, "/compact ") {
 		return "/compact", strings.TrimSpace(strings.TrimPrefix(trimmed, "/compact")), true
 	}
 	return "", "", false
-}
-
-func (m Model) agentOptions() agent.Options {
-	cfg := m.projectSettings.EffectiveCompaction()
-	opts := agent.Options{
-		Session:              m.session,
-		MaxSteps:             m.maxSteps,
-		Model:                m.model,
-		Endpoint:             m.modelEndpoint(),
-		Variant:              m.variant,
-		Confirm:              m.confirmHook,
-		Ask:                  m.askHook,
-		BashAllowlist:        m.projectSettings.EffectiveAgents().BashAllowlist,
-		BashAllowlistEnabled: m.projectSettings.EffectiveAgents().BashAllowlistEnabled,
-		ContextWindow:        int64(modelscache.ContextOf(m.modelInfos, m.modelLabel())),
-		TokensUsed:           m.tokensUsed,
-		OutgoingModel:        m.prevModel,
-		OutgoingWindow:       m.prevWindow,
-		OutgoingEndpoint:     modelscache.EndpointOf(m.modelInfos, m.prevModel),
-		CompactAuto:          cfg.Auto,
-		CompactPercent:       cfg.Percent,
-		KeepTokens:           cfg.KeepTokens,
-		CompactReason:        m.pendingCompactReason,
-	}
-	if m.subMgr == nil || !m.projectSettings.EffectiveAgents().Enabled {
-		return opts
-	}
-	m.subMgr.SetRunner(subagent.AgentRunner{Store: m.store, Client: m.client})
-	m.subMgr.SetStore(m.store)
-	m.subMgr.SetRuntime(subagent.Runtime{
-		Workdir:  m.workdir,
-		Model:    m.model,
-		Endpoint: m.modelEndpoint(),
-		Variant:  m.variant,
-		Confirm:  m.confirmHook,
-	})
-	host := subagent.NewHost(m.subMgr)
-	if m.session != nil {
-		host.ParentSessionID = m.session.ID
-	}
-	opts.Host = host
-	return opts
 }
 
 func (m Model) rememberPrompt() Model {
@@ -584,6 +496,8 @@ func (m Model) undoPrompt() Model {
 	state := m.promptUndo[len(m.promptUndo)-1]
 	m.promptUndo = m.promptUndo[:len(m.promptUndo)-1]
 	m.prompt.SetValue(state.value)
+	m.prompt.CursorEnd()
+	m.prompt.SetHeight(m.promptHeight())
 	m.slashFromPaste = state.slashFromPaste
 	m.slashMode = false
 	m.slashCursor = 0
@@ -591,15 +505,7 @@ func (m Model) undoPrompt() Model {
 	m.historyCursor = -1
 	m.historyDraft = ""
 	m.promptSelectAll = false
-	return m
-}
-
-func (m Model) promptEditing() bool {
-	// Sub-agent list drawer keeps the composer active; full-screen log does not.
-	if m.subagentLogMode {
-		return false
-	}
-	return !m.confirmMode && !m.askMode && !m.helpMode && !m.usageMode && !m.settingsMode && !m.statusMode && !m.filePickerMode && !m.pickerMode && !m.sessionPickerMode && !m.slashMode
+	return m.syncPromptSlash()
 }
 
 func (m Model) selectedHistoryItem() (inputHistoryItem, bool) {
@@ -682,103 +588,4 @@ func (m Model) deleteSelectedHistory() (Model, tea.Cmd) {
 	}
 }
 
-func (m Model) confirmWatch() tea.Cmd {
-	return func() tea.Msg {
-		req := <-m.confirmCh
-		return confirmRequestMsg{req: req}
-	}
-}
 
-func (m Model) askWatch() tea.Cmd {
-	return func() tea.Msg {
-		req := <-m.askCh
-		return askRequestMsg{req: req}
-	}
-}
-
-func (m Model) confirmHook(dec policy.Decision, subject string) (bool, error) {
-	resp := make(chan bool, 1)
-	req := confirmRequest{dec: dec, subject: subject, resp: resp}
-	select {
-	case m.confirmCh <- req:
-	case <-m.doneCh:
-		return false, nil
-	case <-turnCtxDone(m.turnCtx):
-		return false, nil
-	}
-	select {
-	case ok := <-resp:
-		return ok, nil
-	case <-m.doneCh:
-		return false, nil
-	case <-turnCtxDone(m.turnCtx):
-		return false, nil
-	}
-}
-
-func (m Model) askHook(q question.Question) (int, error) {
-	resp := make(chan int, 1)
-	req := askRequest{q: q, resp: resp}
-	select {
-	case m.askCh <- req:
-	case <-m.doneCh:
-		return 0, errors.New("chat: cancelled")
-	case <-turnCtxDone(m.turnCtx):
-		return 0, errors.New("chat: cancelled")
-	}
-	select {
-	case idx := <-resp:
-		if idx < 0 || idx >= len(q.Options) {
-			return 0, errors.New("chat: cancelled")
-		}
-		return idx, nil
-	case <-m.doneCh:
-		return 0, errors.New("chat: cancelled")
-	case <-turnCtxDone(m.turnCtx):
-		return 0, errors.New("chat: cancelled")
-	}
-}
-
-func turnCtxDone(ctx context.Context) <-chan struct{} {
-	if ctx == nil {
-		return nil
-	}
-	return ctx.Done()
-}
-
-func (m Model) resolveConfirm(allow bool) Model {
-	if m.pending != nil {
-		select {
-		case m.pending.resp <- allow:
-		default:
-		}
-	}
-	m.pending = nil
-	m.confirmMode = false
-	return m
-}
-
-func (m Model) resolveAsk(allow bool) Model {
-	idx := 0
-	if !allow {
-		idx = 1
-	}
-	if m.pendingAsk != nil {
-		select {
-		case m.pendingAsk.resp <- idx:
-		default:
-		}
-	}
-	m.pendingAsk = nil
-	m.confirmMode = false
-	return m
-}
-
-func (m Model) closeDone() Model {
-	if m.doneClosed {
-		return m
-	}
-	m.doneClosed = true
-	close(m.doneCh)
-	return m
-}

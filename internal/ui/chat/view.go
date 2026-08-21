@@ -2,6 +2,7 @@ package chat
 
 import (
 	"fmt"
+	"image/color"
 	"path/filepath"
 	"strings"
 
@@ -16,6 +17,11 @@ import (
 )
 
 const composerFooterDetailGap = 2
+
+// composerFocusGlow is the static border glow strength while the user is
+// editing the draft: a dim step on the same border-to-accent ramp the pulse
+// uses, so focus reads as "lit" without competing with the busy throb.
+const composerFocusGlow = 0.3
 
 // lazykoderLogo is shown when /new clears the transcript, so a fresh session
 // gets the same LazyKoder identity as the quit screen.
@@ -52,29 +58,39 @@ const (
 
 // View renders the picker card, slash menu, confirm overlay, or the chat layout.
 func (m Model) View() tea.View {
+	theme.SetMode(m.projectSettings.EffectiveTheme())
+	configureThemeStyles()
+	m.prompt.SetStyles(promptStyles())
+	m = m.ensureLayout()
 	return m.newView(m.frame())
 }
 
 // frame is the unpainted screen string. Mouse hit-testing scans this after
 // the same Width/Height paint as newView so click rows match the terminal.
 func (m Model) frame() string {
-	if m.sessionPickerMode {
+	m = m.ensureLayout()
+	// Full-screen cards keep the historical paint order (sessions before log
+	// before settings...). Overlays stack on chat; key routing uses currentFocus.
+	switch {
+	case m.sessionPickerMode:
 		return m.sessionPickerScreen()
-	}
-	if m.subagentLogMode {
+	case m.subagentLogMode:
 		return m.subagentLogScreen()
-	}
-	if m.settingsMode {
+	case m.settingsMode:
+		if m.layout.settingsPaint != "" {
+			return m.layout.settingsPaint
+		}
 		return m.settingsScreen()
-	}
-	if m.usageMode {
+	case m.usageMode:
 		return m.usageScreen()
-	}
-	if m.helpMode {
+	case m.helpMode:
 		return m.helpScreen()
 	}
 	screen := m.chatScreen()
-	overlayH := m.composerTop()
+	overlayH := m.layout.composerTop
+	if overlayH == 0 {
+		overlayH = m.composerTop()
+	}
 	if m.confirmMode {
 		screen = overlayOn(screen, m.width, overlayH, m.confirmOverlay())
 	}
@@ -83,6 +99,9 @@ func (m Model) frame() string {
 	}
 	if m.filePickerMode {
 		screen = overlayOn(screen, m.width, overlayH, m.filePickerOverlay())
+	}
+	if m.formMode && m.formHost != nil {
+		screen = overlayOn(screen, m.width, m.height, m.formOverlay())
 	}
 	return screen
 }
@@ -97,8 +116,8 @@ func (m Model) paintedLines() []string {
 	return strings.Split(painted, "\n")
 }
 
-// newView paints a full-size solid black layer so the host terminal
-// background never shows through empty cells.
+// newView paints a full-size application background so the host terminal
+// profile cannot show through empty cells.
 func (m Model) newView(content string) tea.View {
 	painted := lipgloss.NewStyle().
 		Background(theme.ColorBg()).
@@ -388,10 +407,23 @@ func (m Model) promptLine() string {
 		text = withScrollbar(text, contentW, h, percent, true)
 	}
 	body := lipgloss.JoinVertical(lipgloss.Left, text, m.composerFooter(contentW))
+	body = keepBackground(body, theme.ColorComposer())
+	// The composer uses a dedicated input surface above the neutral black
+	// canvas. Its border carries state: it throbs with the shared pulse while
+	// the agent works, holds a dim accent glow while the user edits, and stays
+	// muted idle.
+	var border color.Color = theme.ColorBorder()
+	switch {
+	case m.busy && m.pulseOn:
+		border = theme.PulseAccent(m.pulseT())
+	case m.promptEditing():
+		border = theme.PulseAccent(composerFocusGlow)
+	}
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(theme.ColorBorder()).
-		Background(theme.ColorSurface()).
+		BorderForeground(border).
+		BorderBackground(theme.ColorComposer()).
+		Background(theme.ColorComposer()).
 		Width(max(minPaneWidth, m.width)).
 		Render(body)
 }
@@ -771,7 +803,7 @@ func (m Model) helpOverlay() string {
 		{"ctrl+a", "select all"},
 		{"ctrl+z", "undo prompt"},
 		{"c", "copy selection"},
-		{"ctrl+c", "copy; empty: quit twice"},
+		{"ctrl+c", "copy selected / clear / quit"},
 	}
 	keyStyle := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText())
 	actStyle := hintStyle
@@ -812,7 +844,9 @@ func (m Model) helpOverlay() string {
 				right = format(rows[i+mid], colW)
 			}
 			pad := max(1, innerW-lipgloss.Width(left)-lipgloss.Width(right))
-			body.WriteString(left + strings.Repeat(" ", pad) + right)
+			body.WriteString(left)
+			body.WriteString(strings.Repeat(" ", pad))
+			body.WriteString(right)
 		}
 	} else {
 		for i, row := range rows {
@@ -824,13 +858,15 @@ func (m Model) helpOverlay() string {
 	}
 	body.WriteString("\n")
 	body.WriteString(hintStyle.Width(innerW).Render("esc or ?  close"))
+	content := keepBackground(lipgloss.JoinVertical(lipgloss.Left, header, body.String()), theme.ColorSurface())
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(theme.ColorBorder()).
-		Background(theme.ColorBg()).
+		BorderBackground(theme.ColorSurface()).
+		Background(theme.ColorSurface()).
 		Padding(1, cardHorzPad).
 		Width(min(m.overlayWidth(), innerW+cardBorder+cardBorderPad)).
-		Render(lipgloss.JoinVertical(lipgloss.Left, header, body.String()))
+		Render(content)
 }
 
 func (m Model) helpCloseRect() (x0, y, x1 int, ok bool) {
@@ -887,11 +923,12 @@ func (m Model) headerView() string {
 
 func (m Model) confirmOverlay() string {
 	innerW := max(minPaneWidth, m.overlayWidth()-cardBorder-cardBorderPad)
-	inner := lipgloss.NewStyle().Width(innerW).Render(m.confirm.View())
+	inner := keepBackground(lipgloss.NewStyle().Width(innerW).Render(m.confirm.View()), theme.ColorSurface())
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(theme.ColorDanger()).
-		Background(theme.ColorBg()).
+		BorderBackground(theme.ColorSurface()).
+		Background(theme.ColorSurface()).
 		Padding(1, cardHorzPad).
 		Width(min(m.overlayWidth(), innerW+cardBorder+cardBorderPad)).
 		Render(inner)
@@ -899,13 +936,15 @@ func (m Model) confirmOverlay() string {
 
 func (m Model) askOverlay() string {
 	_, cardW, lines, _ := m.askOverlayLines()
+	content := keepBackground(strings.Join(lines, "\n"), theme.ColorSurface())
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(theme.ColorBorder()).
-		Background(theme.ColorDialog()).
+		BorderBackground(theme.ColorSurface()).
+		Background(theme.ColorSurface()).
 		Padding(1, cardHorzPad).
 		Width(cardW).
-		Render(strings.Join(lines, "\n"))
+		Render(content)
 }
 
 type askOptionSpan struct {
@@ -1120,7 +1159,8 @@ func withScrollbar(v string, width, height int, percent float64, overflow bool) 
 			b.WriteString("\n")
 		}
 		if w := width - lipgloss.Width(line); w > 0 {
-			b.WriteString(line + strings.Repeat(" ", w))
+			b.WriteString(line)
+			b.WriteString(strings.Repeat(" ", w))
 		} else {
 			b.WriteString(line)
 		}

@@ -190,7 +190,7 @@ func TestUserNavActiveTracksScrollAndShowsBubble(t *testing.T) {
 	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
 	mm, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 36})
 	m = mm.(Model)
-	long := strings.Repeat("line of assistant output\n", 25)
+	long := strings.Repeat("line of assistant output\n", 35)
 	m.items = []transcriptItem{
 		{kind: itemUser, text: "turn one about todos", when: time.Now().UnixMilli()},
 		{kind: itemAssistant, text: long, when: time.Now().UnixMilli()},

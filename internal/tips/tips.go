@@ -34,7 +34,7 @@ const (
 	ToolCardClick       = "click a tool card to expand it"
 	ModelStatusClick    = "click the model label to switch models"
 	SelectAllInput      = "ctrl+a selects the whole input"
-	CtrlCCopyQuit       = "ctrl+c copies the input, twice quits and prints lk <session>"
+	CtrlCCopyQuit       = "ctrl+c clears input, ctrl+a then ctrl+c copies, twice quits"
 	HistoryBrowse       = "up/down browse your previous prompts"
 	SessionsResume      = "launch is fresh; /resume or ctrl+s loads a past run"
 	ProjectInstructions = "AGENTS.md in this folder is sent as system context"

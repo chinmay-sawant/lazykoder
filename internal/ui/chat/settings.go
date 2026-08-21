@@ -1,8 +1,8 @@
 package chat
 
 import (
-	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -12,13 +12,13 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 	"github.com/chinmay-sawant/lazykoder/internal/settings"
-	"github.com/chinmay-sawant/lazykoder/internal/subagent"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
 
 // settingsRow is one focusable row in the project settings card.
 const (
-	settingsRowModel = iota
+	settingsRowTheme = iota
+	settingsRowModel
 	settingsRowVariant
 	settingsRowChildModel
 	settingsRowExploreModel
@@ -59,6 +59,12 @@ const (
 	settingsCardColsPerVertPad = 2
 	// settingsUsageReserveRows is the headroom added to the paint buffer.
 	settingsUsageReserveRows = 8
+	// settingsUsageMinHeight keeps the settings card from clipping its footer
+	// when the optional usage section would not fit in the terminal.
+	settingsUsageMinHeight = 42
+	// settingsContentFixedRows are the header, spacer, and footer inside the
+	// card. Borders and vertical padding are added separately.
+	settingsContentFixedRows = 3
 	// settingsUsageMaxCorners is the extra width kept for the error line.
 	settingsUsageMaxCorners = 16
 	// settingsUsageMinTextW is the floor width for the usage text row.
@@ -82,26 +88,20 @@ const (
 // loading when the plan usage has not been loaded yet; the caller kicks off
 // the fetch via maybeFetchUsage.
 func (m Model) openSettings() Model {
-	m.settingsMode = true
-	m.settingsCursor = settingsRowModel
+	m = m.setFocus(focusSettings)
+	m.settingsCursor = settingsRowTheme
+	m.settingsHover = -1
 	m.settingsEdit = false
 	m.settingsEditValue = ""
-	m.slashMode = false
-	m.slashCursor = 0
-	m.pickerMode = false
-	m.helpMode = false
-	m.usageMode = false
-	m.usageLoading = false
-	m.filePickerMode = false
-	m.sessionPickerMode = false
 	m.prompt.SetValue("")
 	m.promptUndo = nil
 	return m
 }
 
 func (m Model) closeSettings() Model {
-	m.settingsMode = false
+	m = m.clearFocus(focusSettings)
 	m.settingsCursor = 0
+	m.settingsHover = -1
 	m.settingsPickDefault = false
 	m.settingsEdit = false
 	m.settingsEditValue = ""
@@ -119,18 +119,21 @@ func (m Model) settingsCardView() string {
 	cardW := m.overlayWidth()
 	innerW := max(minPaneWidth, cardW-cardBorder-2*settingsCardHorzPad)
 
-	title := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).Render("SETTINGS")
+	title := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorAccent()).Render("SETTINGS")
 	closeBtn := m.settingsCloseLabel()
 	gap := max(1, innerW-lipgloss.Width(title)-lipgloss.Width(closeBtn))
 	header := title + strings.Repeat(" ", gap) + closeBtn
 
-	sel := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText())
+	sel := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).Background(theme.ColorBorder())
+	hover := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText())
 	normal := lipgloss.NewStyle().Foreground(theme.ColorMute())
+	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorAccent())
 	mute := hintStyle
 	dim := lipgloss.NewStyle().Foreground(theme.ColorMute()).Faint(true)
 
+	lines := m.visibleSettingsPaintLines(innerW)
 	var body strings.Builder
-	for i, line := range m.settingsPaintLines(innerW) {
+	for i, line := range lines {
 		if i > 0 {
 			body.WriteString("\n")
 		}
@@ -139,10 +142,14 @@ func (m Model) settingsCardView() string {
 			text = truncateRunes(text, innerW)
 		}
 		switch {
+		case line.kind == settingsLineHeader:
+			body.WriteString(headerStyle.MaxWidth(innerW).Render(text))
+		case line.kind == settingsLineHint:
+			body.WriteString(mute.MaxWidth(innerW).Render(text))
 		case line.kind == settingsLineRow && line.row == m.settingsCursor:
 			body.WriteString(sel.MaxWidth(innerW).Render(text))
-		case line.kind == settingsLineHeader || line.kind == settingsLineHint:
-			body.WriteString(mute.MaxWidth(innerW).Render(text))
+		case line.kind == settingsLineRow && line.row == m.settingsHover:
+			body.WriteString(hover.MaxWidth(innerW).Render(text))
 		case line.dim:
 			body.WriteString(dim.MaxWidth(innerW).Render(text))
 		default:
@@ -162,11 +169,13 @@ func (m Model) settingsCardView() string {
 	if extra := minInner - lipgloss.Height(content); extra > 0 {
 		content = lipgloss.JoinVertical(lipgloss.Left, header, "", body.String(), strings.Repeat("\n", extra-1), footer)
 	}
+	content = keepBackground(content, theme.ColorSurface())
 
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(theme.ColorBorder()).
-		Background(theme.ColorBg()).
+		BorderBackground(theme.ColorSurface()).
+		Background(theme.ColorSurface()).
 		Padding(settingsCardVertPad, settingsCardHorzPad).
 		Width(cardW).
 		Render(content)
@@ -179,6 +188,40 @@ func (m Model) settingsCardMinInnerHeight() int {
 		return minPaneHeight
 	}
 	return inner
+}
+
+func (m Model) settingsBodyMaxRows() int {
+	chrome := cardBorder + settingsCardColsPerVertPad*settingsCardVertPad + settingsContentFixedRows
+	return max(1, m.height-chrome)
+}
+
+func (m Model) visibleSettingsPaintLines(innerW int) []settingsPaintLine {
+	lines := m.settingsPaintLines(innerW)
+	maxRows := m.settingsBodyMaxRows()
+	if len(lines) <= maxRows {
+		return lines
+	}
+
+	selected := 0
+	for i, line := range lines {
+		if line.kind == settingsLineRow && line.row == m.settingsCursor {
+			selected = i
+			break
+		}
+	}
+	start := max(0, selected-maxRows+1)
+	for i := selected; i >= 0; i-- {
+		if lines[i].kind != settingsLineHeader || selected-i >= maxRows {
+			continue
+		}
+		start = i
+		break
+	}
+	end := min(len(lines), start+maxRows)
+	if end-start < maxRows {
+		start = max(0, end-maxRows)
+	}
+	return lines[start:end]
 }
 
 func (m Model) settingsCloseLabel() string {
@@ -237,7 +280,11 @@ func (m Model) settingsPaintLines(innerW int) []settingsPaintLine {
 	}
 
 	out := make([]settingsPaintLine, 0, settingsRowCount+settingsUsageReserveRows)
-	out = append(out, settingsPaintLine{kind: settingsLineHeader, row: -1, text: "model"})
+	out = append(out, settingsPaintLine{kind: settingsLineHeader, row: -1, text: "appearance"})
+	out = append(out,
+		m.settingsPaintRow(settingsRowTheme, "◂ "+m.projectSettings.EffectiveTheme()+" ▸", innerW, false),
+		settingsPaintLine{kind: settingsLineHeader, row: -1, text: "model"},
+	)
 	out = append(out,
 		m.settingsPaintRow(settingsRowModel, "◂ "+modelVal+" ▸", innerW, false),
 		m.settingsPaintRow(settingsRowVariant, "◂ "+variantVal+" ▸", innerW, false),
@@ -265,16 +312,16 @@ func (m Model) settingsPaintLines(innerW int) []settingsPaintLine {
 		m.settingsPaintRow(settingsRowAllowlist, allowlistVal, innerW, false),
 		settingsPaintLine{kind: settingsLineHint, row: -1, text: "children are not filtered by this list"},
 	)
-	if m.usageLoaded {
+	if m.height >= settingsUsageMinHeight && m.usageLoaded {
 		out = append(out, settingsPaintLine{kind: settingsLineHeader, row: -1, text: "opencode usage"})
 		out = append(out,
 			m.settingsUsageRow("rolling", m.usage.Rolling, innerW),
 			m.settingsUsageRow("weekly", m.usage.Weekly, innerW),
 			m.settingsUsageRow("monthly", m.usage.Monthly, innerW),
 		)
-	} else if m.usageErr != "" {
+	} else if m.height >= settingsUsageMinHeight && m.usageErr != "" {
 		out = append(out, settingsPaintLine{kind: settingsLineHint, row: -1, text: "opencode usage: " + truncateRunes(m.usageErr, max(settingsUsageMinTextW, innerW-settingsUsageMaxCorners))})
-	} else {
+	} else if m.height >= settingsUsageMinHeight {
 		out = append(out, settingsPaintLine{kind: settingsLineHint, row: -1, text: "opencode usage: run /usage to load plan usage"})
 	}
 	return out
@@ -290,20 +337,22 @@ func (m Model) settingsUsageRow(label string, w opencode.BillingWindow, innerW i
 	if !w.ResetsAt.IsZero() {
 		val += "  ·  " + w.ResetsAt.Local().Format("Jan 2 15:04")
 	}
-	return settingsPaintLine{kind: settingsLineRow, row: -1, text: settingsKVRow(false, label, val, innerW), dim: w.RateLimited}
+	return settingsPaintLine{kind: settingsLineRow, row: -1, text: settingsKVRow(false, false, label, val, innerW), dim: w.RateLimited}
 }
 
 func (m Model) settingsPaintRow(row int, value string, innerW int, dim bool) settingsPaintLine {
 	return settingsPaintLine{
 		kind: settingsLineRow,
 		row:  row,
-		text: settingsKVRow(m.settingsCursor == row, settingsRowLabel(row), value, innerW),
+		text: settingsKVRow(m.settingsCursor == row, m.settingsHover == row, settingsRowLabel(row), value, innerW),
 		dim:  dim,
 	}
 }
 
 func settingsRowLabel(row int) string {
 	switch row {
+	case settingsRowTheme:
+		return "theme"
 	case settingsRowModel:
 		return "new-session model"
 	case settingsRowVariant:
@@ -378,10 +427,12 @@ func boolOn(on bool) string {
 	return "off"
 }
 
-func settingsKVRow(selected bool, label, value string, width int) string {
+func settingsKVRow(selected, hovered bool, label, value string, width int) string {
 	prefix := "  "
 	if selected {
 		prefix = "▸ "
+	} else if hovered {
+		prefix = "• "
 	}
 	left := prefix + label
 	right := value
@@ -448,6 +499,8 @@ func (m Model) updateSettingsKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 
 func (m Model) activateSettingsRow() (Model, tea.Cmd) {
 	switch m.settingsCursor {
+	case settingsRowTheme:
+		return m.cycleTheme(1), nil
 	case settingsRowModel:
 		m.settingsPickDefault = true
 		m.settingsMode = false
@@ -468,24 +521,42 @@ func (m Model) activateSettingsRow() (Model, tea.Cmd) {
 		return m.setLimitEnabled(!m.projectSettings.Slot.LimitEnabled), nil
 	case settingsRowSteps:
 		if m.projectSettings.Slot.LimitEnabled {
-			return m.setMaxSteps(m.projectSettings.Slot.MaxSteps + 1), nil
+			return m.openSettingInputForm("Max Steps", "Maximum steps per prompt turn", strconv.Itoa(m.projectSettings.Slot.MaxSteps), validateIntSetting, func(mod Model, val string) (Model, tea.Cmd) {
+				v, _ := strconv.Atoi(val)
+				return mod.setMaxSteps(v), nil
+			})
 		}
 	case settingsRowCompactAuto:
 		return m.setCompactAuto(!m.projectSettings.Compaction.Auto), nil
 	case settingsRowCompactPercent:
-		return m.setCompactPercent(m.projectSettings.EffectiveCompaction().Percent + settingsCompactPercentStep), nil
+		return m.openSettingInputForm("Compaction Context %", "Percentage of context window (10-90)", strconv.Itoa(m.projectSettings.EffectiveCompaction().Percent), validatePercentSetting, func(mod Model, val string) (Model, tea.Cmd) {
+			v, _ := strconv.Atoi(val)
+			return mod.setCompactPercent(v), nil
+		})
 	case settingsRowAgentsEnabled:
 		return m.setAgentsEnabled(!m.projectSettings.Agents.Enabled), nil
 	case settingsRowAgentsRole:
 		return m.cycleAgentsRole(1), nil
 	case settingsRowAgentsConcurrent:
-		return m.setAgentsConcurrent(m.projectSettings.Agents.MaxConcurrent + 1), nil
+		return m.openSettingInputForm("Max Concurrent Agents", "Max parallel sub-agents", strconv.Itoa(m.projectSettings.Agents.MaxConcurrent), validateIntSetting, func(mod Model, val string) (Model, tea.Cmd) {
+			v, _ := strconv.Atoi(val)
+			return mod.setAgentsConcurrent(v), nil
+		})
 	case settingsRowAgentsQueued:
-		return m.setAgentsQueued(m.projectSettings.Agents.MaxQueued + 1), nil
+		return m.openSettingInputForm("Max Queued Agents", "Max queued sub-agent backlog", strconv.Itoa(m.projectSettings.Agents.MaxQueued), validateIntSetting, func(mod Model, val string) (Model, tea.Cmd) {
+			v, _ := strconv.Atoi(val)
+			return mod.setAgentsQueued(v), nil
+		})
 	case settingsRowAgentsChildSteps:
-		return m.setAgentsChildSteps(m.projectSettings.Agents.ChildMaxSteps + 1), nil
+		return m.openSettingInputForm("Child Agent Steps", "Maximum steps for each child agent", strconv.Itoa(m.projectSettings.Agents.ChildMaxSteps), validateIntSetting, func(mod Model, val string) (Model, tea.Cmd) {
+			v, _ := strconv.Atoi(val)
+			return mod.setAgentsChildSteps(v), nil
+		})
 	case settingsRowAgentsTimeout:
-		return m.setAgentsTimeout(m.projectSettings.Agents.DefaultTimeoutSec + settingsTimeoutStepSec), nil
+		return m.openSettingInputForm("Agent Timeout (sec)", "Child agent execution timeout in seconds", strconv.Itoa(m.projectSettings.Agents.DefaultTimeoutSec), validateIntSetting, func(mod Model, val string) (Model, tea.Cmd) {
+			v, _ := strconv.Atoi(val)
+			return mod.setAgentsTimeout(v), nil
+		})
 	case settingsRowAgentsWriters:
 		return m.setAgentsWriters(!m.projectSettings.Agents.AllowParallelWriters), nil
 	case settingsRowBashConfirm:
@@ -493,10 +564,34 @@ func (m Model) activateSettingsRow() (Model, tea.Cmd) {
 	case settingsRowAllowlistEnabled:
 		return m.setAllowlistEnabled(!m.projectSettings.Agents.BashAllowlistEnabled), nil
 	case settingsRowAllowlist:
-		m.settingsEdit = true
-		m.settingsEditValue = strings.Join(m.projectSettings.Agents.BashAllowlist, ", ")
+		return m.openSettingInputForm("Bash Allowlist", "Comma-separated allowlisted command prefixes", strings.Join(m.projectSettings.Agents.BashAllowlist, ", "), nil, func(mod Model, val string) (Model, tea.Cmd) {
+			var list []string
+			for _, p := range strings.Split(val, ",") {
+				if s := strings.TrimSpace(p); s != "" {
+					list = append(list, s)
+				}
+			}
+			mod.projectSettings.Agents.BashAllowlist = list
+			return mod.persistSettings(), nil
+		})
 	}
 	return m, nil
+}
+
+func validateIntSetting(s string) error {
+	v, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil || v < 1 {
+		return fmt.Errorf("must be a positive integer")
+	}
+	return nil
+}
+
+func validatePercentSetting(s string) error {
+	v, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil || v < 10 || v > 90 {
+		return fmt.Errorf("must be between 10 and 90")
+	}
+	return nil
 }
 
 func (m Model) setAllowlistEnabled(on bool) Model {
@@ -506,6 +601,8 @@ func (m Model) setAllowlistEnabled(on bool) Model {
 
 func (m Model) adjustSettings(delta int) Model {
 	switch m.settingsCursor {
+	case settingsRowTheme:
+		return m.cycleTheme(delta)
 	case settingsRowModel:
 		return m.cycleDefaultModel(delta)
 	case settingsRowVariant:
@@ -515,22 +612,28 @@ func (m Model) adjustSettings(delta int) Model {
 	case settingsRowExploreModel:
 		return m.cycleExploreModel(delta)
 	case settingsRowLimit:
-		if delta != 0 {
-			return m.setLimitEnabled(!m.projectSettings.Slot.LimitEnabled)
+		if delta > 0 {
+			return m.setLimitEnabled(true)
+		} else if delta < 0 {
+			return m.setLimitEnabled(false)
 		}
 	case settingsRowSteps:
 		if m.projectSettings.Slot.LimitEnabled {
 			return m.setMaxSteps(m.projectSettings.Slot.MaxSteps + delta)
 		}
 	case settingsRowCompactAuto:
-		if delta != 0 {
-			return m.setCompactAuto(!m.projectSettings.Compaction.Auto)
+		if delta > 0 {
+			return m.setCompactAuto(true)
+		} else if delta < 0 {
+			return m.setCompactAuto(false)
 		}
 	case settingsRowCompactPercent:
 		return m.setCompactPercent(m.projectSettings.EffectiveCompaction().Percent + delta*settingsCompactPercentStep)
 	case settingsRowAgentsEnabled:
-		if delta != 0 {
-			return m.setAgentsEnabled(!m.projectSettings.Agents.Enabled)
+		if delta > 0 {
+			return m.setAgentsEnabled(true)
+		} else if delta < 0 {
+			return m.setAgentsEnabled(false)
 		}
 	case settingsRowAgentsRole:
 		return m.cycleAgentsRole(delta)
@@ -539,18 +642,22 @@ func (m Model) adjustSettings(delta int) Model {
 	case settingsRowAgentsQueued:
 		return m.setAgentsQueued(m.projectSettings.Agents.MaxQueued + delta)
 	case settingsRowAgentsChildSteps:
-		return m.setAgentsChildSteps(m.projectSettings.Agents.ChildMaxSteps + delta)
+		return m.setAgentsChildSteps(m.projectSettings.Agents.ChildMaxSteps + delta*10)
 	case settingsRowAgentsTimeout:
 		return m.setAgentsTimeout(m.projectSettings.Agents.DefaultTimeoutSec + delta*settingsTimeoutStepSec)
 	case settingsRowAgentsWriters:
-		if delta != 0 {
-			return m.setAgentsWriters(!m.projectSettings.Agents.AllowParallelWriters)
+		if delta > 0 {
+			return m.setAgentsWriters(true)
+		} else if delta < 0 {
+			return m.setAgentsWriters(false)
 		}
 	case settingsRowBashConfirm:
 		return m.cycleBashConfirm(delta)
 	case settingsRowAllowlistEnabled:
-		if delta != 0 {
-			return m.setAllowlistEnabled(!m.projectSettings.Agents.BashAllowlistEnabled)
+		if delta > 0 {
+			return m.setAllowlistEnabled(true)
+		} else if delta < 0 {
+			return m.setAllowlistEnabled(false)
 		}
 	case settingsRowAllowlist:
 		if delta != 0 {
@@ -563,6 +670,8 @@ func (m Model) adjustSettings(delta int) Model {
 
 func (m Model) toggleSettingsRow() Model {
 	switch m.settingsCursor {
+	case settingsRowTheme:
+		return m.cycleTheme(1)
 	case settingsRowLimit:
 		return m.setLimitEnabled(!m.projectSettings.Slot.LimitEnabled)
 	case settingsRowSteps:
@@ -749,6 +858,27 @@ func indexOfString(list []string, want string) int {
 	return -1
 }
 
+func (m Model) cycleTheme(delta int) Model {
+	if delta == 0 {
+		return m
+	}
+	next := settings.DefaultTheme
+	if m.projectSettings.EffectiveTheme() == "dark" {
+		next = "light"
+	}
+	return m.setTheme(next)
+}
+
+func (m Model) setTheme(value string) Model {
+	m.projectSettings.Appearance.Theme = settings.NormalizeTheme(value)
+	theme.SetMode(m.projectSettings.EffectiveTheme())
+	configureThemeStyles()
+	m.prompt.SetStyles(promptStyles())
+	m.layout = layoutSnap{}
+	m.syncTranscript()
+	return m.persistSettings()
+}
+
 func (m Model) setDefaultModel(id string) Model {
 	id = strings.TrimSpace(id)
 	if id == "" {
@@ -886,28 +1016,6 @@ func (m Model) setAgentsWriters(on bool) Model {
 	return m
 }
 
-func (m Model) rebuildSubMgr() Model {
-	if m.store == nil || m.client == nil {
-		return m
-	}
-	if m.subMgr != nil {
-		m.subMgr.Shutdown()
-	}
-	m.subMgr = subagent.NewManager(subagent.ConfigFromSettings(m.projectSettings), subagent.AgentRunner{
-		Store:  m.store,
-		Client: m.client,
-	})
-	m.subMgr.SetStore(m.store)
-	m.subMgr.SetRuntime(subagent.Runtime{
-		Workdir: m.workdir,
-		Model:   m.projectSettings.EffectiveModel(),
-		Variant: m.projectSettings.EffectiveVariant(),
-	})
-	// Recover open durable jobs so task_list/wait stay consistent after settings rebuild.
-	_ = m.subMgr.Recover(context.Background())
-	return m
-}
-
 func (m Model) persistSettings() Model {
 	if m.settingsPath == "" {
 		return m
@@ -919,10 +1027,14 @@ func (m Model) persistSettings() Model {
 }
 
 // settingsCloseRect is the screen rectangle of the [x] close control on the
-// centered card header.
+// centered card header. Prefers the layout snapshot built with the same paint.
 func (m Model) settingsCloseRect() (x0, y, x1 int, ok bool) {
 	if !m.settingsMode {
 		return 0, 0, 0, false
+	}
+	m = m.ensureLayout()
+	if m.layout.settingsCloseOK {
+		return m.layout.settingsCloseX0, m.layout.settingsCloseY, m.layout.settingsCloseX1, true
 	}
 	for i, line := range strings.Split(m.settingsScreen(), "\n") {
 		plain := ansi.Strip(line)
@@ -944,7 +1056,17 @@ func (m Model) settingsRowAtScreenY(y int) (row int, ok bool) {
 	if !m.settingsMode {
 		return 0, false
 	}
-	return settingsRowFromPaintedLine(plainLine(m.settingsScreen(), y))
+	m = m.ensureLayout()
+	if m.layout.settingsRowByY != nil {
+		if row, ok = m.layout.settingsRowByY[y]; ok {
+			return row, true
+		}
+	}
+	paint := m.layout.settingsPaint
+	if paint == "" {
+		paint = m.settingsScreen()
+	}
+	return settingsRowFromPaintedLine(plainLine(paint, y))
 }
 
 func settingsRowFromPaintedLine(plain string) (row int, ok bool) {
@@ -968,8 +1090,24 @@ func settingsLineHasLabel(plain, label string) bool {
 // settingsListScreenTop is the first settings control row on the painted
 // screen (new-session model).
 func (m Model) settingsListScreenTop() int {
+	m = m.ensureLayout()
 	label := settingsRowLabel(settingsRowModel)
-	for i, line := range strings.Split(m.settingsScreen(), "\n") {
+	if m.layout.settingsRowByY != nil {
+		best := -1
+		for y, row := range m.layout.settingsRowByY {
+			if row == settingsRowModel && (best < 0 || y < best) {
+				best = y
+			}
+		}
+		if best >= 0 {
+			return best
+		}
+	}
+	paint := m.layout.settingsPaint
+	if paint == "" {
+		paint = m.settingsScreen()
+	}
+	for i, line := range strings.Split(paint, "\n") {
 		if settingsLineHasLabel(ansi.Strip(line), label) {
 			return i
 		}
@@ -984,6 +1122,7 @@ func (m Model) settingsHit(x, y int, button tea.MouseButton) (Model, tea.Cmd, bo
 	if !m.settingsMode {
 		return m, nil, false
 	}
+	m = m.ensureLayout()
 	if button != tea.MouseLeft && button != tea.MouseRight {
 		return m, nil, false
 	}
@@ -997,8 +1136,17 @@ func (m Model) settingsHit(x, y int, button tea.MouseButton) (Model, tea.Cmd, bo
 		return m, nil, true
 	}
 	m.settingsCursor = row
-	line := plainLine(m.settingsScreen(), y)
+	paint := m.layout.settingsPaint
+	if paint == "" {
+		paint = m.settingsScreen()
+	}
+	line := plainLine(paint, y)
 	switch row {
+	case settingsRowTheme:
+		if dec, inc := hitStepChevrons(line, x); dec || inc {
+			return m.cycleTheme(1), nil, true
+		}
+		return m.cycleTheme(1), nil, true
 	case settingsRowModel:
 		if dec, inc := hitStepChevrons(line, x); dec {
 			return m.cycleDefaultModel(-1), nil, true

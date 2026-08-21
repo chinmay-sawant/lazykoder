@@ -1,5 +1,5 @@
 // Package task holds pure schemas and JSON helpers for parent task tools.
-// It does not run sub-agents; agent and subagent packages consume these types.
+// It does not run sub-agents; subagent.Host consumes these types for ads/parse.
 package task
 
 import (
@@ -40,10 +40,8 @@ type TaskArgs struct {
 	Background  bool   `json:"background"`
 }
 
-// ListArgs is the argument object for task_list.
-type ListArgs struct {
-	Status string `json:"status"`
-}
+// ListArgs is the argument object for task_list (no filters today).
+type ListArgs struct{}
 
 // StatusArgs is the argument object for task_status.
 type StatusArgs struct {
@@ -51,12 +49,13 @@ type StatusArgs struct {
 }
 
 // WaitArgs is the argument object for task_wait.
+// Empty ID waits for all jobs under the parent session.
 type WaitArgs struct {
-	ID         string `json:"id"`
-	TimeoutSec int    `json:"timeout_sec"`
+	ID string `json:"id"`
 }
 
 // CancelArgs is the argument object for task_cancel.
+// Empty ID or CancelAll cancels every non-terminal job for the parent.
 type CancelArgs struct {
 	ID        string `json:"id"`
 	CancelAll bool   `json:"cancel_all"`
@@ -105,12 +104,14 @@ type WaitResult struct {
 
 // CancelResult is returned by task_cancel.
 type CancelResult struct {
-	ID        string   `json:"id,omitempty"`
-	Cancelled []string `json:"cancelled,omitempty"`
-	CancelAll bool     `json:"cancel_all,omitempty"`
+	ID             string   `json:"id,omitempty"`
+	Cancelled      []string `json:"cancelled,omitempty"`
+	CancelledCount int      `json:"cancelled_count,omitempty"`
+	CancelAll      bool     `json:"cancel_all,omitempty"`
 }
 
 // Specs returns the five task tool definitions for provider advertising.
+// Keep in sync with what subagent.Host actually executes.
 func Specs() []opencode.ToolSpec {
 	return []opencode.ToolSpec{
 		specTask(),
@@ -123,23 +124,48 @@ func Specs() []opencode.ToolSpec {
 
 func specTask() opencode.ToolSpec {
 	return opencode.ToolSpec{
-		Name:        ToolTask,
-		Description: "Spawn a sub-agent to work on a prompt. Roles: explore and plan are read-only; general may write. Set background true to return immediately; otherwise wait for completion.",
+		Name: ToolTask,
+		Description: "Spawn a sub-agent on a focused prompt. Prefer background=true for parallel work, then task_wait. " +
+			"Raise max_steps for multi-file explores (default is higher than parent chat but still finite). " +
+			"Ask the child to finish with a short written report before the step budget ends.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"name":        map[string]any{"type": "string", "description": "short display name for the sub-agent"},
-				"prompt":      map[string]any{"type": "string", "description": "full task prompt for the sub-agent"},
-				"description": map[string]any{"type": "string", "description": "one-line summary shown in the parent UI"},
+				"prompt": map[string]any{
+					"type":        "string",
+					"description": "Full instructions for the sub-agent (include: write a final summary before stopping)",
+				},
+				"description": map[string]any{
+					"type":        "string",
+					"description": "Short label shown in the UI",
+				},
+				"name": map[string]any{
+					"type":        "string",
+					"description": "Optional stable name for the job",
+				},
 				"role": map[string]any{
 					"type":        "string",
-					"description": "sub-agent role",
+					"description": "explore | plan | general (default explore)",
 					"enum":        []string{RoleExplore, RolePlan, RoleGeneral},
 				},
-				"model":      map[string]any{"type": "string", "description": "model id override; empty uses parent model"},
-				"variant":    map[string]any{"type": "string", "description": "reasoning effort / variant override"},
-				"max_steps":  map[string]any{"type": "integer", "description": "max agent steps for the child"},
-				"background": map[string]any{"type": "boolean", "description": "if true, return after spawn without waiting"},
+				"model": map[string]any{
+					"type":        "string",
+					"description": "Optional model override",
+				},
+				"variant": map[string]any{
+					"type":        "string",
+					"description": "Optional reasoning variant",
+				},
+				"max_steps": map[string]any{
+					"type":        "integer",
+					"description": "Child tool-round budget (0 = config default, typically 1000). Use 48-64 for large audits.",
+				},
+				"background": map[string]any{
+					"type":        "boolean",
+					"description": "If true, return immediately while the job runs (recommended for parallel agents)",
+				},
+				// Wall-clock lifetime is not model-controlled: Host always
+				// uses Config.Timeout from settings (default_timeout_sec).
 			},
 			"required": []string{"prompt"},
 		},
@@ -148,25 +174,25 @@ func specTask() opencode.ToolSpec {
 
 func specTaskList() opencode.ToolSpec {
 	return opencode.ToolSpec{
-		Name:        ToolTaskList,
-		Description: "List child sub-agents of the current parent. Optionally filter by status.",
+		Name: ToolTaskList,
+		Description: "List sub-agent jobs for the current parent session " +
+			"(includes completed jobs from SQLite after restart).",
 		Parameters: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"status": map[string]any{"type": "string", "description": "optional status filter (e.g. running, completed, failed, cancelled)"},
-			},
+			"type":       "object",
+			"properties": map[string]any{},
 		},
 	}
 }
 
 func specTaskStatus() opencode.ToolSpec {
 	return opencode.ToolSpec{
-		Name:        ToolTaskStatus,
-		Description: "Get status and summary for one child sub-agent by id.",
+		Name: ToolTaskStatus,
+		Description: "Get status for one sub-agent by id " +
+			"(works for finished jobs persisted in SQLite).",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"id": map[string]any{"type": "string", "description": "child task id"},
+				"id": map[string]any{"type": "string", "description": "Job id (sub_...)"},
 			},
 			"required": []string{"id"},
 		},
@@ -175,13 +201,17 @@ func specTaskStatus() opencode.ToolSpec {
 
 func specTaskWait() opencode.ToolSpec {
 	return opencode.ToolSpec{
-		Name:        ToolTaskWait,
-		Description: "Wait for a child to finish, or for all children when id is empty.",
+		Name: ToolTaskWait,
+		Description: "Wait for one sub-agent (id) or all jobs for this parent session. " +
+			"Returns durable summaries from SQLite when jobs already finished " +
+			"(including after a crash/restart). Always call this after background task spawns.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"id":          map[string]any{"type": "string", "description": "child task id; empty waits for all"},
-				"timeout_sec": map[string]any{"type": "integer", "description": "max seconds to wait"},
+				"id": map[string]any{
+					"type":        "string",
+					"description": "Job id; omit or empty to wait for all",
+				},
 			},
 		},
 	}
@@ -190,12 +220,18 @@ func specTaskWait() opencode.ToolSpec {
 func specTaskCancel() opencode.ToolSpec {
 	return opencode.ToolSpec{
 		Name:        ToolTaskCancel,
-		Description: "Cancel a running child by id, or all children when cancel_all is true.",
+		Description: "Cancel one sub-agent (id) or all non-terminal jobs for this parent session.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"id":         map[string]any{"type": "string", "description": "child task id to cancel"},
-				"cancel_all": map[string]any{"type": "boolean", "description": "if true, cancel every running child"},
+				"id": map[string]any{
+					"type":        "string",
+					"description": "Job id; omit or empty to cancel all",
+				},
+				"cancel_all": map[string]any{
+					"type":        "boolean",
+					"description": "If true, cancel every non-terminal job (same as omitting id)",
+				},
 			},
 		},
 	}
@@ -258,7 +294,6 @@ func ParseListArgs(raw []byte) (ListArgs, error) {
 	if err := unmarshalArgs(raw, &a); err != nil {
 		return ListArgs{}, fmt.Errorf("task_list: %w", err)
 	}
-	a.Status = strings.TrimSpace(a.Status)
 	return a, nil
 }
 
@@ -285,17 +320,14 @@ func ParseWaitArgs(raw []byte) (WaitArgs, error) {
 	return a, nil
 }
 
-// ParseCancelArgs unmarshals and validates task_cancel arguments.
-// Either a non-empty id or cancel_all=true is required.
+// ParseCancelArgs unmarshals task_cancel arguments.
+// Empty id (or cancel_all=true) means cancel all non-terminal jobs.
 func ParseCancelArgs(raw []byte) (CancelArgs, error) {
 	var a CancelArgs
 	if err := unmarshalArgs(raw, &a); err != nil {
 		return CancelArgs{}, fmt.Errorf("task_cancel: %w", err)
 	}
 	a.ID = strings.TrimSpace(a.ID)
-	if a.ID == "" && !a.CancelAll {
-		return CancelArgs{}, fmt.Errorf("task_cancel: id is required unless cancel_all is true")
-	}
 	return a, nil
 }
 

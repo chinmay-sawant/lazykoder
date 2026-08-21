@@ -19,6 +19,9 @@ func TestDefault(t *testing.T) {
 	if s.Model.Default != DefaultModelID {
 		t.Fatalf("Default model = %q, want %q", s.Model.Default, DefaultModelID)
 	}
+	if s.Appearance.Theme != DefaultTheme {
+		t.Fatalf("Theme = %q, want %q", s.Appearance.Theme, DefaultTheme)
+	}
 	a := s.Agents
 	if !a.Enabled {
 		t.Fatal("Agents.Enabled want true")
@@ -47,7 +50,7 @@ func TestDefault(t *testing.T) {
 	if a.AllowParallelWriters {
 		t.Fatal("AllowParallelWriters want false")
 	}
-	if !s.Compaction.Auto || s.Compaction.Percent != DefaultCompactPercent || s.Compaction.KeepTokens != DefaultKeepTokens {
+	if !s.Compaction.Auto || s.Compaction.Percent != 80 || s.Compaction.KeepTokens != 15_000 {
 		t.Fatalf("compaction defaults %+v", s.Compaction)
 	}
 }
@@ -67,7 +70,7 @@ func TestLoadMissingReturnsDefault(t *testing.T) {
 	if !s.Agents.Enabled || s.Agents.MaxConcurrent != DefaultMaxConcurrent {
 		t.Fatalf("agents %+v", s.Agents)
 	}
-	if !s.Compaction.Auto || s.Compaction.Percent != DefaultCompactPercent {
+	if !s.Compaction.Auto || s.Compaction.Percent != 80 {
 		t.Fatalf("compaction %+v", s.Compaction)
 	}
 }
@@ -75,8 +78,9 @@ func TestLoadMissingReturnsDefault(t *testing.T) {
 func TestSaveLoadRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.json")
 	want := Settings{
-		Slot:  Slot{MaxSteps: 8, LimitEnabled: false},
-		Model: Model{Default: "claude-4", Variant: "high"},
+		Appearance: Appearance{Theme: "light"},
+		Slot:       Slot{MaxSteps: 8, LimitEnabled: false},
+		Model:      Model{Default: "claude-4", Variant: "high"},
 	}
 	if err := Save(path, want); err != nil {
 		t.Fatal(err)
@@ -91,6 +95,23 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	if got.Model.Default != "claude-4" || got.Model.Variant != "high" {
 		t.Fatalf("model %+v", got.Model)
 	}
+	if got.Appearance.Theme != "light" {
+		t.Fatalf("appearance %+v", got.Appearance)
+	}
+}
+
+func TestThemeNormalizesOnLoad(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte(`{"appearance":{"theme":"noon"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.EffectiveTheme() != DefaultTheme {
+		t.Fatalf("invalid theme = %q, want %q", got.EffectiveTheme(), DefaultTheme)
+	}
 }
 
 func TestSaveLoadRoundTripWithAgents(t *testing.T) {
@@ -102,7 +123,7 @@ func TestSaveLoadRoundTripWithAgents(t *testing.T) {
 			Enabled:              true,
 			MaxConcurrent:        6,
 			MaxQueued:            50,
-			MaxDepth:             2,
+			MaxDepth:             1,
 			DefaultTimeoutSec:    120,
 			ChildMaxSteps:        20,
 			ModelOverride:        "fast-model",
@@ -154,7 +175,7 @@ func TestCompactionLoadSaveAndMissingBlock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got.Compaction.Auto || got.Compaction.Percent != DefaultCompactPercent || got.Compaction.KeepTokens != DefaultKeepTokens {
+	if !got.Compaction.Auto || got.Compaction.Percent != 80 || got.Compaction.KeepTokens != 15_000 {
 		t.Fatalf("missing block should default: %+v", got.Compaction)
 	}
 	if got.Compaction.ThresholdTokens(1_000_000) != 800_000 {
@@ -182,6 +203,27 @@ func TestLoadPartialMaxStepsKeepsLimitOn(t *testing.T) {
 	}
 	if !got.Agents.Enabled || got.Agents.MaxConcurrent != DefaultMaxConcurrent {
 		t.Fatalf("missing agents should use defaults: %+v", got.Agents)
+	}
+}
+
+func TestLoadAndLoadFileRestoreTheSameDefaults(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte(`{"slot":{"max_steps":4}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loadedFile, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(loaded, loadedFile) {
+		t.Fatalf("Load() = %+v, LoadFile() = %+v", loaded, loadedFile)
+	}
+	if !loaded.Slot.LimitEnabled || !loaded.Agents.Enabled || !loaded.Compaction.Auto {
+		t.Fatalf("partial defaults = %+v", loaded)
 	}
 }
 
@@ -213,6 +255,20 @@ func TestClampMaxConcurrent(t *testing.T) {
 	}
 	if got.Agents.MaxQueued < got.Agents.MaxConcurrent {
 		t.Fatalf("MaxQueued = %d, want >= %d", got.Agents.MaxQueued, got.Agents.MaxConcurrent)
+	}
+}
+
+func TestClampMaxDepthToProductLimit(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte(`{"agents":{"enabled":true,"max_depth":3}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Agents.MaxDepth != MaxMaxDepth || MaxMaxDepth != 1 {
+		t.Fatalf("MaxDepth = %d MaxMaxDepth = %d, want both 1", got.Agents.MaxDepth, MaxMaxDepth)
 	}
 }
 

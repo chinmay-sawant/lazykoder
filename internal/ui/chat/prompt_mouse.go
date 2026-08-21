@@ -292,8 +292,9 @@ func (m Model) mousePressPrompt(mu tea.Mouse) (Model, tea.Cmd, bool) {
 	if mu.Button != tea.MouseLeft {
 		return m, nil, false
 	}
-	if m.confirmMode || m.askMode || m.helpMode || m.usageMode || m.settingsMode || m.filePickerMode ||
-		m.pickerMode || m.sessionPickerMode || m.subagentLogMode {
+	switch m.currentFocus() {
+	case focusConfirm, focusAsk, focusHelp, focusUsage, focusSettings, focusFilePicker,
+		focusPicker, focusSessions, focusSubagentLog:
 		return m, nil, false
 	}
 	w := m.promptContentWidth()
@@ -408,8 +409,8 @@ func (m Model) promptBodyPaint(width, height int) string {
 			if ph == "" {
 				ph = "ask lazykoder"
 			}
-			mute := lipgloss.NewStyle().Background(theme.ColorBg()).Foreground(theme.ColorMute())
-			plain := lipgloss.NewStyle().Background(theme.ColorBg()).Foreground(theme.ColorText())
+			mute := lipgloss.NewStyle().Background(theme.ColorComposer()).Foreground(theme.ColorMute())
+			plain := lipgloss.NewStyle().Background(theme.ColorComposer()).Foreground(theme.ColorText())
 			// Show placeholder on first row; caret at col 0.
 			line := selectionStyle.Render(" ") + mute.Render(ph)
 			pad := width - 1 - lipgloss.Width(ph)
@@ -443,7 +444,7 @@ func (m Model) promptBodyPaint(width, height int) string {
 		caret = promptOffsetFromCursor(m)
 	}
 
-	plain := lipgloss.NewStyle().Background(theme.ColorBg()).Foreground(theme.ColorText())
+	plain := lipgloss.NewStyle().Background(theme.ColorComposer()).Foreground(theme.ColorText())
 	var b strings.Builder
 	for row := 0; row < height; row++ {
 		if row > 0 {

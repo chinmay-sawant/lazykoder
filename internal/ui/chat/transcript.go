@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"image/color"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -37,9 +38,6 @@ const (
 	toolBodyHeadLines = 70
 	toolBodyTailLines = maxToolBodyLines - toolBodyHeadLines - 1
 
-	// estimateCharsPerToken is the rough chars-per-token divisor for the
-	// transcript estimate line.
-	estimateCharsPerToken = 4
 	// transcriptLinearPad is the 2-col inset applied to a transcript line.
 	transcriptLinearPad = 2
 	// diffStatParts is the max "+, -" segments in a diff stat.
@@ -64,83 +62,34 @@ type transcriptItem struct {
 }
 
 const (
-	roleYou          = "you"
-	roleAssistant    = "assistant"
-	thinkingLabel    = "thinking"
-	maxToolTitle     = 72
-	workBracket      = "["
-	workBracketClose = "]"
-	workRail         = "│"
-	workRailCols     = 2
-	streamCursor     = "▌"
+	roleYou       = "you"
+	roleAssistant = "assistant"
+	thinkingLabel = "thinking"
+	maxToolTitle  = 72
+	workBracket   = "["
+	workRail      = "│"
+	workRailCols  = 2
+	streamCursor  = "▌"
 )
 
 func (m *Model) replay(sessionID string) {
-	ctx := context.Background()
-	msgs, err := m.store.ListMessages(ctx, sessionID)
+	res, err := projectSession(m.store, sessionID, projectOpts{
+		CollapseReasoning:   true,
+		SeedInputHistory:    true,
+		IncludeCompactNotes: true,
+		CollectUsage:        true,
+	})
 	if err != nil {
 		m.err = "chat: " + err.Error()
 		return
 	}
-	tcs, err := m.store.ListToolCalls(ctx, sessionID)
-	if err != nil {
-		m.err = "chat: " + err.Error()
-		return
+	m.items = append(m.items, res.items...)
+	m.inputHistory = append(m.inputHistory, res.history...)
+	for _, u := range res.usage {
+		m.applyUsage(u.part, u.modelID)
 	}
-	toolCalls := make(map[string]db.ToolCall, len(tcs))
-	for _, tc := range tcs {
-		toolCalls[tc.PartID] = tc
-	}
-	for _, msg := range msgs {
-		if !msg.Visible {
-			continue
-		}
-		parts, err := m.store.ListParts(ctx, msg.ID)
-		if err != nil {
-			m.err = "chat: " + err.Error()
-			return
-		}
-		for _, p := range parts {
-			switch p.Type {
-			case "text":
-				if p.Text != nil {
-					if msg.Role == "user" {
-						m.inputHistory = append(m.inputHistory, inputHistoryItem{messageID: msg.ID, text: *p.Text})
-						m.items = append(m.items, transcriptItem{kind: itemUser, text: *p.Text, when: itemTime(msg.TimeCreated, p.TimeCreated), part: p})
-					} else {
-						m.items = append(m.items, transcriptItem{kind: itemAssistant, text: *p.Text, when: itemTime(msg.TimeCreated, p.TimeCreated), part: p})
-					}
-				}
-			case "reasoning":
-				if p.Text != nil {
-					m.items = append(m.items, transcriptItem{kind: itemReasoning, text: *p.Text, collapsed: true, when: itemTime(msg.TimeCreated, p.TimeCreated), part: p})
-				}
-			case "tool":
-				tool := db.ToolCall{PartID: p.ID}
-				if stored, ok := toolCalls[p.ID]; ok {
-					tool = stored
-				} else {
-					tool.Tool = "tool"
-					if p.ToolName != nil {
-						tool.Tool = *p.ToolName
-					}
-					if p.ToolStatus != nil {
-						tool.Status = *p.ToolStatus
-					}
-				}
-				when := itemTime(msg.TimeCreated, p.TimeCreated)
-				if tool.TimeStart != nil {
-					when = *tool.TimeStart
-				}
-				// Edit cards stay open so the diff is always visible.
-				collapsed := tool.Tool != "edit"
-				m.items = append(m.items, transcriptItem{kind: itemTool, collapsed: collapsed, when: when, tool: tool, part: p})
-			case "step-finish":
-				m.applyUsage(p, msg.ModelID)
-			case agent.CompactPartType:
-				m.applyCompactNotice(p)
-			}
-		}
+	for _, p := range res.compactMeter {
+		m.applyCompactMeter(p)
 	}
 	m.bumpTokenFloor()
 	m.syncTranscript()
@@ -373,18 +322,17 @@ func cacheMissTokens(input, hit int64) int64 {
 	return 0
 }
 
+// estimateTokens sums agent.EstimateTokens over transcript text (and tool
+// outputs) so the fill meter matches Compaction's chars/4 helper.
 func estimateTokens(items []transcriptItem) int64 {
-	var n int
+	var n int64
 	for _, it := range items {
-		n += len([]rune(it.text))
+		n += agent.EstimateTokens(it.text)
 		if it.kind == itemTool && it.tool.Output != nil {
-			n += len([]rune(*it.tool.Output))
+			n += agent.EstimateTokens(*it.tool.Output)
 		}
 	}
-	if n == 0 {
-		return 0
-	}
-	return int64(n / estimateCharsPerToken)
+	return n
 }
 
 func (m *Model) syncTranscript() {
@@ -452,11 +400,7 @@ func (m Model) buildRenderedItems() []string {
 	}
 	for i, it := range m.items {
 		if i > 0 && (it.kind == itemUser || it.kind == itemAssistant) {
-			if it.kind == itemUser {
-				out = append(out, "")
-			} else {
-				out = append(out, m.railedItem(i, " "))
-			}
+			out = append(out, "")
 		}
 		body := ""
 		if m.renderCache != nil {
@@ -541,9 +485,9 @@ func (m Model) workRailMark() string {
 }
 
 func (m Model) workRailLive(throb bool) string {
-	style := lipgloss.NewStyle().Foreground(theme.ColorAccent())
+	style := lipgloss.NewStyle().Foreground(theme.ColorAssistantBorder())
 	if throb {
-		style = lipgloss.NewStyle().Foreground(theme.PulseAccent(m.pulseT()))
+		style = lipgloss.NewStyle().Foreground(theme.PulseAssistant(m.pulseT()))
 	}
 	return style.Render(workRail)
 }
@@ -610,7 +554,33 @@ func itemTime(messageMS int64, partMS int64) int64 {
 }
 
 func (m Model) roleLine(label string, when int64) string {
-	return m.alignMeta(roleStyle.Render(label), formatClock(when))
+	style := roleStyle
+	switch label {
+	case roleYou:
+		style = userRoleStyle
+	case roleAssistant:
+		style = assistantRoleStyle
+	}
+	return m.alignMeta(style.Render(label), formatClock(when))
+}
+
+// transcriptPanel gives each conversational turn a quiet surface and rounded
+// border. Keeping the role line outside the panel preserves the activity rail
+// and makes the speaker boundary obvious even in a busy transcript.
+func transcriptPanel(body string, width int, background, border color.Color) string {
+	panelBorder := lipgloss.Border{
+		Left:  "│",
+		Right: " ",
+	}
+	body = keepBackground(body, background)
+	return lipgloss.NewStyle().
+		Background(background).
+		Border(panelBorder).
+		BorderForeground(border).
+		BorderBackground(background).
+		PaddingLeft(1).
+		Width(max(1, width)).
+		Render(body)
 }
 
 func (m Model) alignMeta(left, stamp string) string {
@@ -704,7 +674,8 @@ func (m *Model) applyPart(p db.Part) {
 	m.syncTranscript()
 }
 
-func (m *Model) applyCompactNotice(p db.Part) {
+// applyCompactMeter updates fill/cache from a compaction part without painting.
+func (m *Model) applyCompactMeter(p db.Part) {
 	if p.Text == nil {
 		return
 	}
@@ -715,25 +686,20 @@ func (m *Model) applyCompactNotice(p db.Part) {
 	// Cache stats are since the last checkpoint, not the whole session.
 	m.cacheHit = 0
 	m.cacheMiss = 0
-	text := "context compacted"
-	if env.FromWindow > 0 && env.ToWindow > 0 && env.FromWindow != env.ToWindow {
-		text = fmt.Sprintf("context compacted (%s -> %s)", formatTokens(env.FromWindow), formatTokens(env.ToWindow))
-	} else if env.FromModel != "" && env.ToModel != "" && env.FromModel != env.ToModel {
-		text = fmt.Sprintf("context compacted (%s -> %s)", env.FromModel, env.ToModel)
-	}
+}
+
+func (m *Model) applyCompactNotice(p db.Part) {
+	m.applyCompactMeter(p)
+	it := compactNoticeItem(p)
 	for i := range m.items {
 		if m.items[i].part.ID != "" && m.items[i].part.ID == p.ID {
-			m.items[i].text = text
+			m.items[i].text = it.text
 			m.items[i].part = p
 			return
 		}
 	}
-	m.items = append(m.items, transcriptItem{
-		kind: itemNote,
-		text: text,
-		when: itemTime(0, p.TimeCreated),
-		part: p,
-	})
+	it.when = itemTime(0, p.TimeCreated)
+	m.items = append(m.items, it)
 }
 
 func (m *Model) upsertExisting(p db.Part, text string) bool {
@@ -777,29 +743,33 @@ func (m *Model) collapseLiveReasoning() {
 }
 
 func (m *Model) applyTool(ev agent.Event) {
-	if ev.Tool.Tool == "" && ev.Part.ToolName != nil {
-		ev.Tool.Tool = *ev.Part.ToolName
+	tool := ev.Tool
+	part := ev.Part
+	if tool.Name == "" && part.ToolName != "" {
+		tool.Name = part.ToolName
 	}
-	if ev.Tool.Tool == "" {
+	if tool.Name == "" {
 		return
 	}
 	m.collapseLiveReasoning()
-	status := ev.Tool.Status
-	if status == "" && ev.Part.ToolStatus != nil {
-		status = *ev.Part.ToolStatus
-		ev.Tool.Status = status
+	status := tool.Status
+	if status == "" && part.ToolStatus != "" {
+		status = part.ToolStatus
+		tool.Status = status
 	}
 	if status == "" {
 		status = "pending"
-		ev.Tool.Status = status
+		tool.Status = status
 	}
-	when := itemTime(0, ev.Part.TimeCreated)
-	if ev.Tool.TimeStart != nil {
-		when = *ev.Tool.TimeStart
+	when := itemTime(0, part.TimeCreated)
+	if tool.TimeStart != nil {
+		when = *tool.TimeStart
 	}
+	dbTool := dbToolFromDelta(tool)
+	dbPart := dbPartFromDelta(part)
 	// Edit opens by default so the diff is visible; user can collapse with e.
-	collapsed := ev.Tool.Tool != "edit"
-	item := transcriptItem{kind: itemTool, collapsed: collapsed, when: when, tool: ev.Tool, part: ev.Part}
+	collapsed := tool.Name != "edit"
+	item := transcriptItem{kind: itemTool, collapsed: collapsed, when: when, tool: dbTool, part: dbPart}
 	if status == "" || status == "pending" {
 		m.items = append(m.items, item)
 		m.lastTool = len(m.items) - 1
@@ -807,7 +777,7 @@ func (m *Model) applyTool(ev agent.Event) {
 		m.syncTranscript()
 		return
 	}
-	if idx := m.findToolItemIndex(ev.Tool, ev.Part); idx >= 0 {
+	if idx := m.findToolItemIndex(dbTool, dbPart); idx >= 0 {
 		// Keep the user's open/closed choice across status updates.
 		item.collapsed = m.items[idx].collapsed
 		m.items[idx] = item
@@ -856,9 +826,17 @@ func (m Model) renderItem(it transcriptItem, selected bool, streaming bool) stri
 func (m Model) renderItemWithToolMode(it transcriptItem, selected bool, streaming, fullToolOutput bool) string {
 	switch it.kind {
 	case itemUser:
-		return m.roleLine(roleYou, it.when) + "\n" + userStyle.Render(frameUserPrompt(it.text, m.contentWidth(it.when)))
+		// The user frame already provides a clear boundary. Add a subtle wash
+		// without wrapping it in a second border, which keeps selection and
+		// copy coordinates stable.
+		body := lipgloss.NewStyle().Background(theme.ColorUserPanel()).Render(
+			userStyle.Render(frameUserPrompt(it.text, m.contentWidth(it.when))))
+		return m.roleLine(roleYou, it.when) + "\n" + body
 	case itemAssistant:
-		rendered := markdown.Render(it.text, m.contentWidth(it.when))
+		panelWidth := max(1, m.contentWidth(it.when))
+		innerWidth := max(1, panelWidth-cardHorzPad)
+		rendered := markdown.Render(it.text, innerWidth)
+		rendered = transcriptPanel(rendered, panelWidth, theme.ColorAssistantPanel(), theme.ColorAssistantBorder())
 		return m.roleLine(roleAssistant, it.when) + "\n" + rendered
 	case itemReasoning:
 		marker := "▸"
@@ -875,7 +853,7 @@ func (m Model) renderItemWithToolMode(it transcriptItem, selected bool, streamin
 		}
 		return head + "\n" + reasoningStyle.Render(ansi.Wrap(body, m.contentWidth(it.when), " "))
 	case itemTool:
-		return m.renderToolMode(agent.Event{Part: it.part, Tool: it.tool}, it.collapsed, it.when, fullToolOutput)
+		return m.renderToolMode(it.tool, it.part, it.collapsed, it.when, fullToolOutput)
 	case itemNote:
 		return hintStyle.Render(it.text)
 	}
@@ -885,25 +863,25 @@ func (m Model) renderItemWithToolMode(it transcriptItem, selected bool, streamin
 	return it.text
 }
 
-func (m Model) renderTool(ev agent.Event, collapsed bool, when int64) string {
-	return m.renderToolMode(ev, collapsed, when, false)
+func (m Model) renderTool(tool db.ToolCall, part db.Part, collapsed bool, when int64) string {
+	return m.renderToolMode(tool, part, collapsed, when, false)
 }
 
 // renderToolMode renders the main transcript with bounded expanded bodies.
 // The full-body mode is reserved for the full-screen sub-agent audit log.
-func (m Model) renderToolMode(ev agent.Event, collapsed bool, when int64, fullToolOutput bool) string {
-	name := ev.Tool.Tool
-	if name == "" && ev.Part.ToolName != nil {
-		name = *ev.Part.ToolName
+func (m Model) renderToolMode(tool db.ToolCall, part db.Part, collapsed bool, when int64, fullToolOutput bool) string {
+	name := tool.Tool
+	if name == "" && part.ToolName != nil {
+		name = *part.ToolName
 	}
-	status := ev.Tool.Status
-	if status == "" && ev.Part.ToolStatus != nil {
-		status = *ev.Part.ToolStatus
+	status := tool.Status
+	if status == "" && part.ToolStatus != nil {
+		status = *part.ToolStatus
 	}
 	if status == "" {
 		status = "pending"
 	}
-	title := toolCommand(ev.Tool)
+	title := toolCommand(tool)
 	if title == "" {
 		title = name
 	}
@@ -924,41 +902,40 @@ func (m Model) renderToolMode(ev agent.Event, collapsed bool, when int64, fullTo
 	}
 	// Collapsed or open: still show +/− counts on the edit header.
 	if name == "edit" {
-		if add, del := diffStat(m.toolEditDiff(ev.Tool)); add+del > 0 {
+		if add, del := diffStat(m.toolEditDiff(tool)); add+del > 0 {
 			label += "  " + formatDiffStat(add, del)
 		}
 	}
-	diamondColor := theme.StatusColor(status)
-	diamond := lipgloss.NewStyle().Foreground(diamondColor).Render(theme.StatusDiamond)
+	diamond := m.toolDiamond(status)
 	left := diamond + "  " + lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).Render(chevron+"  "+label)
 	header := m.alignMeta(left, formatClock(when))
 	bodyWidth := max(minPaneWidth, m.toolCardWidth())
 
 	// Edit tools: full-width soft green/red panel when expanded.
 	if name == "edit" {
-		return m.renderEditTool(header, ev, collapsed, bodyWidth)
+		return m.renderEditTool(header, tool, collapsed, bodyWidth)
 	}
 
-	card := toolCardStyle.Width(bodyWidth).Background(theme.ColorBg())
+	card := toolCardStyle.Width(bodyWidth).Background(theme.ColorSurface())
 	if collapsed {
 		return card.Render(header)
 	}
 	body := []string{header}
-	switch ev.Tool.Tool {
+	switch tool.Tool {
 	case "write":
-		if ev.Tool.Output != nil && *ev.Tool.Output != "" {
-			preview := strings.TrimSuffix(*ev.Tool.Output, "\n")
+		if tool.Output != nil && *tool.Output != "" {
+			preview := strings.TrimSuffix(*tool.Output, "\n")
 			if !fullToolOutput && len([]rune(preview)) > 400 {
 				preview = string([]rune(preview)[:400]) + "…"
 			}
 			body = append(body, toolOutputStyle.Width(bodyWidth).Render(strings.TrimSuffix(preview, "\n")))
 		}
 	default:
-		if command := toolCommand(ev.Tool); command != "" {
+		if command := toolCommand(tool); command != "" {
 			body = append(body, hintStyle.Width(bodyWidth).Render("  $ "+command))
 		}
-		if ev.Tool.Output != nil && *ev.Tool.Output != "" {
-			output := strings.TrimSuffix(*ev.Tool.Output, "\n")
+		if tool.Output != nil && *tool.Output != "" {
+			output := strings.TrimSuffix(*tool.Output, "\n")
 			if !fullToolOutput {
 				output, _ = truncateToolOutputForView(output)
 			}
@@ -970,19 +947,61 @@ func (m Model) renderToolMode(ev agent.Event, collapsed bool, when int64, fullTo
 	return card.Render(strings.Join(body, "\n"))
 }
 
+// toolInFlight reports whether a tool-run status means the call has not
+// finished yet, so its diamond should throb instead of sitting on a fixed
+// status color.
+func toolInFlight(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "", "pending", "running", "in_progress", "in-progress":
+		return true
+	default:
+		return false
+	}
+}
+
+// toolItemStatus resolves the effective status of a transcript tool item,
+// preferring the live ToolCall status over the part snapshot.
+func toolItemStatus(it transcriptItem) string {
+	if it.tool.Status != "" {
+		return it.tool.Status
+	}
+	if it.part.ToolStatus != nil {
+		return *it.part.ToolStatus
+	}
+	return ""
+}
+
+// toolDiamond is the status mark on a tool card: it throbs with the shared
+// pulse while the call is in flight and locks to the status color (green ok,
+// red failed, text otherwise) once the call is done.
+func (m Model) toolDiamond(status string) string {
+	style := lipgloss.NewStyle()
+	switch {
+	case toolInFlight(status):
+		if m.pulseOn {
+			style = style.Foreground(theme.PulseAccent(m.pulseT()))
+		} else {
+			style = style.Foreground(theme.StatusColor(status))
+		}
+	default:
+		style = style.Foreground(theme.StatusColor(status))
+	}
+	return style.Render(theme.StatusDiamond)
+}
+
 // renderEditTool draws the edit tool as a full-width card with soft green/red
 // row washes. Open by default; collapsed shows only the header (+/− stats).
-func (m Model) renderEditTool(header string, ev agent.Event, collapsed bool, width int) string {
+func (m Model) renderEditTool(header string, tool db.ToolCall, collapsed bool, width int) string {
 	width = max(minPaneWidth, width)
 	panel := editCardStyle.Width(width)
 	head := panel.Render(header)
 	if collapsed {
 		return head
 	}
-	diff := m.toolEditDiff(ev.Tool)
+	diff := m.toolEditDiff(tool)
 	if diff == "" {
-		if ev.Tool.Output != nil && *ev.Tool.Output != "" {
-			out := panel.Foreground(theme.ColorMute()).Render(strings.TrimSuffix(*ev.Tool.Output, "\n"))
+		if tool.Output != nil && *tool.Output != "" {
+			out := panel.Foreground(theme.ColorMute()).Render(strings.TrimSuffix(*tool.Output, "\n"))
 			return head + "\n" + out
 		}
 		pending := panel.Foreground(theme.ColorMute()).Render("applying edit…")

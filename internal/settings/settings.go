@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/chinmay-sawant/lazykoder/internal/roles"
 )
 
 const (
@@ -15,6 +17,8 @@ const (
 	FileName = "settings.json"
 	// DefaultModelID is the built-in chat model when none is configured.
 	DefaultModelID = "deepseek-v4-flash"
+	// DefaultTheme is the initial application palette.
+	DefaultTheme = "dark"
 	// DefaultMaxSteps matches the agent default when no file exists.
 	DefaultMaxSteps = 16
 	// MinMaxSteps is the lowest configurable step budget.
@@ -43,18 +47,19 @@ const (
 	DefaultMaxQueued = 40
 	// DefaultMaxDepth is the default sub-agent nesting depth.
 	DefaultMaxDepth = 1
-	// MaxMaxDepth caps sub-agent nesting depth.
-	MaxMaxDepth = 3
+	// MaxMaxDepth caps sub-agent nesting depth. Product depth is 1 until
+	// nested Host ships; do not advertise editable depth above 1.
+	MaxMaxDepth = 1
 	// maxMaxQueued caps the sub-agent queue size.
 	maxMaxQueued = 100
-	// DefaultCompactPercent is when auto-compact fires (percent of window).
-	DefaultCompactPercent = 80
 	// MinCompactPercent is the lowest selectable auto-compact threshold.
 	MinCompactPercent = 5
 	// MaxCompactPercent is the highest selectable auto-compact threshold.
 	MaxCompactPercent = 99
-	// DefaultKeepTokens is the recent tail kept beside a summary.
-	DefaultKeepTokens = 15_000
+	// defaultCompactPercent / defaultKeepTokens mirror agent.DefaultCompact*
+	// (agent owns the named runtime constants; settings only persists knobs).
+	defaultCompactPercent = 80
+	defaultKeepTokens     = 15_000
 	// settingsDirMode is used when creating parent dirs for settings.json.
 	settingsDirMode = 0o755
 	// settingsFileMode is the on-disk mode for settings.json.
@@ -79,6 +84,12 @@ type Model struct {
 	// Variant is the default reasoning effort (low, medium, high, max).
 	// Empty means the provider default.
 	Variant string `json:"variant"`
+}
+
+// Appearance holds visual preferences for the TUI.
+type Appearance struct {
+	// Theme is "dark" or "light". Unknown values fall back to dark.
+	Theme string `json:"theme"`
 }
 
 // Agents holds multi-agent / sub-agent preferences.
@@ -113,6 +124,7 @@ type Compaction struct {
 
 // Settings is the on-disk project config under .lazykoder/settings.json.
 type Settings struct {
+	Appearance Appearance `json:"appearance"`
 	Slot       Slot       `json:"slot"`
 	Model      Model      `json:"model"`
 	Agents     Agents     `json:"agents"`
@@ -122,6 +134,7 @@ type Settings struct {
 // Default returns the built-in defaults.
 func Default() Settings {
 	return Settings{
+		Appearance: Appearance{Theme: DefaultTheme},
 		Slot: Slot{
 			MaxSteps:     DefaultMaxSteps,
 			LimitEnabled: true,
@@ -145,8 +158,8 @@ func Default() Settings {
 		},
 		Compaction: Compaction{
 			Auto:       true,
-			Percent:    DefaultCompactPercent,
-			KeepTokens: DefaultKeepTokens,
+			Percent:    defaultCompactPercent,
+			KeepTokens: defaultKeepTokens,
 		},
 	}
 }
@@ -156,20 +169,9 @@ func Path(workspaceDir string) string {
 	return filepath.Join(workspaceDir, FileName)
 }
 
-// Load reads path. Missing file returns defaults. Invalid values are clamped.
+// Load reads path and restores defaults omitted by older or partial files.
 func Load(path string) (Settings, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return Default(), nil
-		}
-		return Default(), fmt.Errorf("settings: read %s: %w", path, err)
-	}
-	var s Settings
-	if err := json.Unmarshal(data, &s); err != nil {
-		return Default(), fmt.Errorf("settings: parse %s: %w", path, err)
-	}
-	return s.normalized(), nil
+	return load(path)
 }
 
 // Save writes s to path (creates parent dirs as needed).
@@ -209,6 +211,11 @@ func (s Settings) EffectiveVariant() string {
 	return s.normalized().Model.Variant
 }
 
+// EffectiveTheme returns the selected supported TUI palette.
+func (s Settings) EffectiveTheme() string {
+	return s.normalized().Appearance.Theme
+}
+
 // EffectiveAgents returns normalized multi-agent preferences.
 func (s Settings) EffectiveAgents() Agents {
 	return s.normalized().Agents
@@ -230,19 +237,11 @@ func (a Agents) EffectiveTimeout() time.Duration {
 
 // ToolsForRole returns the tool allow-list for a sub-agent role.
 func (a Agents) ToolsForRole(role string) []string {
-	switch strings.TrimSpace(role) {
-	case "general":
-		return []string{"bash", "read", "grep", "write", "edit", "webfetch"}
-	case "explore", "plan":
-		// Shell for listing; grep for fast content search; no write/edit.
-		// policy.Classify still gates destructive bash (rm, etc.).
-		return []string{"bash", "read", "grep", "webfetch"}
-	default:
-		return []string{"bash", "read", "grep", "webfetch"}
-	}
+	return roles.Tools(role)
 }
 
 func (s Settings) normalized() Settings {
+	s.Appearance.Theme = NormalizeTheme(s.Appearance.Theme)
 	if s.Slot.MaxSteps < MinMaxSteps {
 		s.Slot.MaxSteps = DefaultMaxSteps
 	}
@@ -259,9 +258,19 @@ func (s Settings) normalized() Settings {
 	return s
 }
 
+// NormalizeTheme converts an on-disk theme value to a supported mode.
+func NormalizeTheme(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "light":
+		return "light"
+	default:
+		return DefaultTheme
+	}
+}
+
 func (c Compaction) normalized() Compaction {
 	if c.Percent <= 0 {
-		c.Percent = DefaultCompactPercent
+		c.Percent = defaultCompactPercent
 	}
 	if c.Percent < MinCompactPercent {
 		c.Percent = MinCompactPercent
@@ -270,7 +279,7 @@ func (c Compaction) normalized() Compaction {
 		c.Percent = MaxCompactPercent
 	}
 	if c.KeepTokens < 0 {
-		c.KeepTokens = DefaultKeepTokens
+		c.KeepTokens = defaultKeepTokens
 	}
 	return c
 }
@@ -367,10 +376,10 @@ func NormalizeAfterLoad(s Settings, raw []byte) Settings {
 			s.Compaction.Auto = true
 		}
 		if !jsonHasKey(raw, "compaction", "percent") {
-			s.Compaction.Percent = DefaultCompactPercent
+			s.Compaction.Percent = defaultCompactPercent
 		}
 		if !jsonHasKey(raw, "compaction", "keep_tokens") {
-			s.Compaction.KeepTokens = DefaultKeepTokens
+			s.Compaction.KeepTokens = defaultKeepTokens
 		}
 	}
 	return s.normalized()
@@ -395,8 +404,12 @@ func jsonHasKey(raw []byte, path ...string) bool {
 	return true
 }
 
-// LoadFile is Load with default-true LimitEnabled when the key is omitted.
+// LoadFile is retained for callers that use the older name.
 func LoadFile(path string) (Settings, error) {
+	return load(path)
+}
+
+func load(path string) (Settings, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {

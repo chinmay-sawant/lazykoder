@@ -18,7 +18,6 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/agent"
 	"github.com/chinmay-sawant/lazykoder/internal/db"
 	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
-	"github.com/chinmay-sawant/lazykoder/internal/policy"
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 	"github.com/chinmay-sawant/lazykoder/internal/settings"
 	"github.com/chinmay-sawant/lazykoder/internal/subagent"
@@ -32,8 +31,6 @@ import (
 const confirmQueueSize = 32
 
 const (
-	idleHint      = "enter to send  •  q to quit"
-	busyHint      = "sending..."
 	defaultWidth  = 80
 	defaultHeight = 24
 	cardWidthPct  = 80
@@ -48,9 +45,6 @@ const (
 	// below these sizes, and overlay panes keep a minimum width.
 	minPaneWidth  = 20
 	minPaneHeight = 3
-	minLeftPane   = 4
-	maxLeftPane   = 24
-	minRightPane  = 8
 	pickerMaxRows = 16
 
 	// centerDiv splits the leftover space for centering the overlay card.
@@ -60,12 +54,13 @@ const (
 	// pickerVpDefaultW/H seed the picker viewport before the first resize.
 	pickerVpDefaultW = 58
 	pickerVpDefaultH = 10
-	// eventChanBuffer is the capacity of the per-turn event channel.
-	eventChanBuffer = 64
 	// promptUndoLimit bounds the in-memory prompt edit history.
-	promptUndoLimit = 32
+	promptUndoLimit = 500
 	// copyNoticeDuration controls how long the clipboard confirmation stays visible.
 	copyNoticeDuration = 2 * time.Second
+	// projectInstructionsDuration controls how long the AGENTS.md notice stays
+	// on the alert row before the rotating tips take over.
+	projectInstructionsDuration = 5 * time.Second
 	// jumpDownArrow is the faint centered icon on the alert row above the
 	// input box that returns the transcript to the latest output.
 	jumpDownArrow = "▼"
@@ -103,42 +98,52 @@ const (
 	pulseMinSteps = 2
 	// composerPad is the prompt textarea border/padding width per side.
 	composerPad = 2
+	// sessionTitleMaxRunes prevents generated session titles from dominating
+	// compact pickers and headers.
+	sessionTitleMaxRunes = 60
 )
 
 var (
-	errStyle       = lipgloss.NewStyle().Foreground(theme.ColorDanger())
-	busyStyle      = lipgloss.NewStyle().Foreground(theme.ColorAccent())
-	hintStyle      = lipgloss.NewStyle().Foreground(theme.ColorMute())
-	userStyle      = lipgloss.NewStyle().Foreground(theme.ColorAccent())
-	roleStyle      = lipgloss.NewStyle().Foreground(theme.ColorText()).Bold(true)
-	reasoningStyle = lipgloss.NewStyle().Foreground(theme.ColorMute())
-	toolCardStyle  = lipgloss.NewStyle().
-			Background(theme.ColorBg()).
-			Foreground(theme.ColorText())
-	toolOutputStyle = lipgloss.NewStyle().
-			Background(theme.ColorBg()).
-			Foreground(theme.ColorMute())
-	// editCardStyle: soft greenish chrome for the edit card header/body shell.
-	editCardStyle = lipgloss.NewStyle().
-			Background(theme.ColorEditPanel()).
-			Foreground(theme.ColorText())
-	selectionStyle = lipgloss.NewStyle().
-			Background(theme.ColorAccent()).
-			Foreground(theme.ColorBg())
-	// Full-width soft tints: light greenish + rows, light reddish - rows.
-	diffAddStyle = lipgloss.NewStyle().
-			Foreground(theme.ColorGood()).
-			Background(theme.ColorEditAddBg())
-	diffDelStyle = lipgloss.NewStyle().
-			Foreground(theme.ColorDanger()).
-			Background(theme.ColorEditDelBg())
-	diffMetaStyle = lipgloss.NewStyle().
-			Foreground(theme.ColorEditMeta()).
-			Background(theme.ColorEditPanel())
-	diffCtxStyle = lipgloss.NewStyle().
-			Foreground(theme.ColorMute()).
-			Background(theme.ColorEditPanel())
+	errStyle           lipgloss.Style
+	busyStyle          lipgloss.Style
+	hintStyle          lipgloss.Style
+	userStyle          lipgloss.Style
+	userRoleStyle      lipgloss.Style
+	assistantRoleStyle lipgloss.Style
+	roleStyle          lipgloss.Style
+	reasoningStyle     lipgloss.Style
+	toolCardStyle      lipgloss.Style
+	toolOutputStyle    lipgloss.Style
+	editCardStyle      lipgloss.Style
+	selectionStyle     lipgloss.Style
+	diffAddStyle       lipgloss.Style
+	diffDelStyle       lipgloss.Style
+	diffMetaStyle      lipgloss.Style
+	diffCtxStyle       lipgloss.Style
 )
+
+func configureThemeStyles() {
+	errStyle = lipgloss.NewStyle().Foreground(theme.ColorDanger())
+	busyStyle = lipgloss.NewStyle().Foreground(theme.ColorAccent())
+	hintStyle = lipgloss.NewStyle().Foreground(theme.ColorMute())
+	userStyle = lipgloss.NewStyle().Foreground(theme.ColorAccent())
+	userRoleStyle = lipgloss.NewStyle().Foreground(theme.ColorAccent()).Bold(true)
+	assistantRoleStyle = lipgloss.NewStyle().Foreground(theme.ColorAssistantBorder()).Bold(true)
+	roleStyle = lipgloss.NewStyle().Foreground(theme.ColorText()).Bold(true)
+	reasoningStyle = lipgloss.NewStyle().Foreground(theme.ColorMute())
+	toolCardStyle = lipgloss.NewStyle().Background(theme.ColorSurface()).Foreground(theme.ColorText())
+	toolOutputStyle = lipgloss.NewStyle().Background(theme.ColorDialog()).Foreground(theme.ColorMute())
+	editCardStyle = lipgloss.NewStyle().Background(theme.ColorEditPanel()).Foreground(theme.ColorText())
+	selectionStyle = lipgloss.NewStyle().Background(theme.ColorAccent()).Foreground(theme.ColorBg())
+	diffAddStyle = lipgloss.NewStyle().Foreground(theme.ColorGood()).Background(theme.ColorEditAddBg())
+	diffDelStyle = lipgloss.NewStyle().Foreground(theme.ColorDanger()).Background(theme.ColorEditDelBg())
+	diffMetaStyle = lipgloss.NewStyle().Foreground(theme.ColorEditMeta()).Background(theme.ColorEditPanel())
+	diffCtxStyle = lipgloss.NewStyle().Foreground(theme.ColorMute()).Background(theme.ColorEditPanel())
+	drawerSelectedStyle = lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).Background(theme.ColorBorder())
+	drawerNormalStyle = lipgloss.NewStyle().Foreground(theme.ColorMute())
+	drawerHeaderTitleStyle = hintStyle
+	drawerHeaderMetaStyle = lipgloss.NewStyle().Foreground(theme.ColorText())
+}
 
 // Options configures the chat model.
 type Options struct {
@@ -216,6 +221,8 @@ type Model struct {
 	pendingAsk  *askRequest
 	confirm     confirm.Model
 	confirmMode bool
+	formMode    bool
+	formHost    *formHost
 	askMode     bool
 	askQuestion question.Question
 	askCursor   int
@@ -230,6 +237,7 @@ type Model struct {
 
 	settingsMode      bool
 	settingsCursor    int
+	settingsHover     int
 	settingsEdit      bool
 	settingsEditValue string
 	stepLimitHit      bool // last turn stopped on agent step limit
@@ -295,21 +303,24 @@ type Model struct {
 	subagentLogItems    []transcriptItem
 	subagentLogSelected int
 
-	slashMode       bool
-	slashCursor     int
-	slashItems      []slashCmd
-	slashFromPaste  bool
-	selection       textSelection
-	promptSel       promptSelection
-	copyNotice               string
-	promptSelectAll          bool
-	tipsIndex                int
+	slashMode                 bool
+	slashCursor               int
+	slashItems                []slashCmd
+	slashFromPaste            bool
+	selection                 textSelection
+	promptSel                 promptSelection
+	copyNotice                string
+	promptSelectAll           bool
+	tipsIndex                 int
 	projectInstructionsNotice string // set when workdir AGENTS.md loaded; alert-row only
 
 	dragTarget int // -1 none, 0 transcript, 1 picker
 	dragOn     bool
 
 	renderCache *renderCache
+
+	// layout is the last outer-geometry snapshot (View + mouse share it).
+	layout layoutSnap
 
 	turnSeq    int
 	turnCancel context.CancelFunc
@@ -353,6 +364,8 @@ type textSelection struct {
 
 type copyNoticeMsg struct{}
 
+type projectInstructionsMsg struct{}
+
 type tpsSample struct {
 	at     time.Time
 	tokens int64
@@ -364,6 +377,7 @@ var slashCommands = []slashCmd{
 	{name: "/model", description: "search and switch the live chat model"},
 	{name: "/variant", description: "switch live reasoning effort (low / medium / high / max)"},
 	{name: "/agents", description: "open the sub-agent drawer and logs", aliases: []string{"subs", "subagents"}},
+	{name: "/spawn", description: "spawn a new sub-agent via interactive form", aliases: []string{"agent"}},
 	{name: "/refresh", description: "reload the model list into models.json"},
 	{name: "/usage", description: "show OpenCode Go plan usage (rolling, weekly, monthly)"},
 	{name: "/status", description: "open the status drawer and toggle details"},
@@ -379,25 +393,6 @@ type modelsMsg struct {
 	err       error
 	fromCache bool
 	notice    string
-}
-
-type confirmRequest struct {
-	dec     policy.Decision
-	subject string
-	resp    chan bool
-}
-
-type confirmRequestMsg struct {
-	req confirmRequest
-}
-
-type askRequest struct {
-	q    question.Question
-	resp chan int
-}
-
-type askRequestMsg struct {
-	req askRequest
 }
 
 type eventMsg struct {
@@ -423,6 +418,8 @@ func New(opts Options) Model {
 		cfg.Slot.MaxSteps = opts.MaxSteps
 		cfg.Slot.LimitEnabled = true
 	}
+	theme.SetMode(cfg.EffectiveTheme())
+	configureThemeStyles()
 	// Effective* helpers normalize clamps and empty model ids.
 	eff := cfg.EffectiveMaxSteps()
 	m := Model{
@@ -443,6 +440,7 @@ func New(opts Options) Model {
 		selectedItem:        -1,
 		historyCursor:       -1,
 		pendingHistoryIndex: -1,
+		settingsHover:       -1,
 		userNavHover:        -1,
 		userNavTip:          -1,
 		cachePath:           opts.CachePath,
@@ -451,21 +449,8 @@ func New(opts Options) Model {
 		prompt:              newPromptArea(defaultWidth),
 		renderCache:         &renderCache{},
 	}
-	m.subMgr = subagent.NewManager(subagent.ConfigFromSettings(cfg), subagent.AgentRunner{
-		Store:  opts.Store,
-		Client: opts.Client,
-	})
-	m.subMgr.SetStore(opts.Store)
-	// Workdir is known at construction; model/confirm are refreshed per turn.
-	m.subMgr.SetRuntime(subagent.Runtime{
-		Workdir: opts.Workdir,
-		Model:   cfg.EffectiveModel(),
-		Variant: cfg.EffectiveVariant(),
-	})
-	// Recover open jobs from a previous process crash/exit.
-	if opts.Store != nil {
-		_ = m.subMgr.Recover(context.Background())
-	}
+	// Manager boot + recover; model/confirm refreshed per turn via wireSubMgrRuntime.
+	m = m.attachSubMgr(cfg, opts.Store != nil)
 	if m.cachePath != "" {
 		if infos, _, err := modelscache.Load(m.cachePath, time.Now(), 0); err == nil && len(infos) > 0 {
 			m.modelInfos = infos
@@ -494,7 +479,11 @@ func New(opts Options) Model {
 
 // Init starts the fetch and watcher commands.
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(m.confirmWatch(), m.askWatch(), m.fetchModels, tipsTick())
+	cmds := []tea.Cmd{m.confirmWatch(), m.askWatch(), m.fetchModels, tipsTick()}
+	if m.projectInstructionsNotice != "" {
+		cmds = append(cmds, clearProjectInstructionsNotice())
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m Model) fetchModels() tea.Msg {
@@ -579,13 +568,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			qualifier = "rm -rf"
 		}
 		m.confirm = confirm.New(msg.req.subject, qualifier)
-		m.confirmMode = true
+		m = m.setFocus(focusConfirm)
 		return m, m.confirmWatch()
 	case askRequestMsg:
 		m.pendingAsk = &msg.req
 		m.askQuestion = msg.req.q
 		m.askCursor = 0
-		m.askMode = true
+		m = m.setFocus(focusAsk)
 		return m, m.askWatch()
 	case eventMsg:
 		if msg.seq != m.turnSeq {
@@ -657,6 +646,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case copyNoticeMsg:
 		m.copyNotice = ""
 		return m, nil
+	case projectInstructionsMsg:
+		m.projectInstructionsNotice = ""
+		return m, nil
 	case userNavTipExpireMsg:
 		if msg.gen != m.userNavTipGen {
 			return m, nil
@@ -721,9 +713,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.slashFromPaste = strings.HasPrefix(m.prompt.Value(), "/")
 		return m, cmd
 	case tea.KeyPressMsg:
-		if msg.Mod.Contains(tea.ModCtrl) && msg.Code == 'c' {
-			if m.promptEditing() && m.prompt.Value() != "" {
-				// Fall through to updateKey: copy the input box content.
+		if msg.Mod.Contains(tea.ModCtrl) && (msg.Code == 'c' || msg.Code == 'C') {
+			if m.promptEditing() && (m.prompt.Value() != "" || m.promptSelectAll || m.promptSel.hasRange() || m.selection.hasRange()) {
+				// Fall through to updateKey: copy if text is selected, or clear the input box if not selected.
 			} else if m.quitConfirm {
 				return m.closeDone(), tea.Quit
 			} else {
@@ -737,43 +729,36 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		if msg.Mod.Contains(tea.ModCtrl) && msg.Code == 'z' && !m.confirmMode && !m.pickerMode && !m.sessionPickerMode && !m.subagentPickerMode {
+		if isUndoKey(msg) && !m.confirmMode && !m.pickerMode && !m.sessionPickerMode && !m.subagentPickerMode {
 			return m.undoPrompt(), nil
 		}
 		if msg.Mod.Contains(tea.ModCtrl) && msg.Code == 's' && !m.confirmMode && !m.pickerMode && !m.sessionPickerMode && !m.subagentPickerMode && !m.busy {
 			return m.openSessionPicker(), nil
 		}
-		if m.confirmMode {
+		switch m.currentFocus() {
+		case focusForm:
+			return m.updateFormKey(msg)
+		case focusConfirm:
 			return m.updateConfirmKey(msg)
-		}
-		if m.askMode {
+		case focusAsk:
 			return m.updateAskKey(msg)
-		}
-		if m.helpMode {
+		case focusHelp:
 			return m.updateHelpKey(msg)
-		}
-		if m.usageMode {
+		case focusUsage:
 			return m.updateUsageKey(msg)
-		}
-		if m.settingsMode {
+		case focusSettings:
 			return m.updateSettingsKey(msg)
-		}
-		if m.statusMode {
+		case focusStatus:
 			return m.updateStatusKey(msg)
-		}
-		if m.filePickerMode {
+		case focusFilePicker:
 			return m.updateFilePickerKey(msg)
-		}
-		if m.pickerMode {
+		case focusPicker:
 			return m.updatePickerKey(msg)
-		}
-		if m.sessionPickerMode {
+		case focusSessions:
 			return m.updateSessionPickerKey(msg)
-		}
-		if m.subagentPickerMode {
+		case focusSubagents, focusSubagentLog:
 			return m.updateSubagentPickerKey(msg)
-		}
-		if m.slashMode {
+		case focusSlash:
 			return m.updateSlashKey(msg)
 		}
 		return m.updateKey(msg)
@@ -817,6 +802,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.mousePress(msg)
 	case tea.MouseMotionMsg:
 		if m.askMode {
+			return m, nil
+		}
+		if m.settingsMode {
+			prev := m.settingsHover
+			m.settingsHover = -1
+			if row, ok := m.settingsRowAtScreenY(msg.Mouse().Y); ok {
+				m.settingsHover = row
+			}
+			if m.settingsHover != prev {
+				m.layout.settingsPaint = ""
+				return m, nil
+			}
 			return m, nil
 		}
 		if m.sessionPickerMode {
@@ -880,6 +877,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.copyNotice = "Text copied"
 		return m, tea.Batch(tea.SetClipboard(text), clearCopyNotice())
+	default:
+		if m.formMode && m.formHost != nil {
+			return m.updateFormMsg(msg)
+		}
 	}
 	return m, nil
 }
@@ -894,18 +895,19 @@ func (m Model) applyEvent(ev agent.Event) Model {
 			m.pendingHistoryIndex = -1
 		}
 	case agent.EventPart:
-		m.applyPart(ev.Part)
+		part := dbPartFromDelta(ev.Part)
+		m.applyPart(part)
 		m = m.noteActivityFromPart(ev.Part)
 	case agent.EventTool:
 		m.applyTool(ev)
 		m.activity = toolActivity(ev.Tool)
 		// On task tool events: open drawer only when a new job appears.
-		if ev.Tool.Tool == "task" || strings.HasPrefix(ev.Tool.Tool, "task_") {
+		if ev.Tool.Name == "task" || strings.HasPrefix(ev.Tool.Name, "task_") {
 			m = m.openSubagentDrawerIfNew()
 			m.pulseOn = m.busy || m.hasLiveSubagents()
 		}
-		if ev.Tool.Tool == "todowrite" {
-			m = m.applyTodosFromTool(ev.Tool)
+		if ev.Tool.Name == "todowrite" {
+			m = m.applyTodosFromTool(dbToolFromDelta(ev.Tool))
 		}
 	case agent.EventTokenDelta:
 		if ev.TokenDelta > 0 {
@@ -945,7 +947,7 @@ func (m Model) applyEvent(ev agent.Event) Model {
 		m.cacheMiss = 0
 		m.pendingCompactReason = ""
 		m.compactHint = ""
-		m.applyCompactNotice(ev.Part)
+		m.applyCompactNotice(dbPartFromDelta(ev.Part))
 	}
 	return m
 }
@@ -963,6 +965,34 @@ func (m Model) adoptSession(id string) Model {
 	// Load child rows for the footer chip; do not force-open the drawer.
 	m = m.loadTodos()
 	return m.syncSubagentDrawer()
+}
+
+func (m Model) ensureSession(title string) Model {
+	if m.session != nil || m.store == nil {
+		return m
+	}
+	title = strings.TrimSpace(title)
+	if title == "" {
+		title = "Sub-agent run"
+	}
+	if len([]rune(title)) > sessionTitleMaxRunes {
+		title = string([]rune(title)[:sessionTitleMaxRunes])
+	}
+	var variantPtr *string
+	if m.variant != "" {
+		variantPtr = &m.variant
+	}
+	sess, err := m.store.CreateSession(context.Background(), db.Session{
+		Title:     title,
+		Directory: m.workdir,
+		Model:     m.model,
+		Variant:   variantPtr,
+	})
+	if err == nil {
+		m.session = &sess
+		m.wireSubMgrRuntime()
+	}
+	return m
 }
 
 func (m Model) finishTurn(err error) Model {
@@ -986,8 +1016,8 @@ func (m Model) finishTurn(err error) Model {
 	m.pendingUser = ""
 	m.pending = nil
 	m.pendingAsk = nil
-	m.confirmMode = false
-	m.askMode = false
+	m = m.clearFocus(focusConfirm)
+	m = m.clearFocus(focusAsk)
 	m.eventCh = nil
 	m.errCh = nil
 	m.activity = ""
@@ -1012,7 +1042,7 @@ func (m Model) finishTurn(err error) Model {
 }
 
 func isStepLimitErr(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "step limit reached")
+	return errors.Is(err, agent.ErrStepLimit)
 }
 
 func tokensPerSec(generated int64, elapsed time.Duration) float64 {
@@ -1072,19 +1102,19 @@ func (m Model) generatedThisTurn() int64 {
 	return 0
 }
 
-func (m Model) noteActivityFromPart(p db.Part) Model {
-	switch p.Type {
-	case "reasoning":
-		if p.Text != nil && *p.Text != "" {
-			m.activity = "thinking  " + firstLine(*p.Text, activityMaxRunes)
+func (m Model) noteActivityFromPart(p agent.PartDelta) Model {
+	switch p.Kind {
+	case agent.PartDeltaReasoning:
+		if p.Text != "" {
+			m.activity = "thinking  " + firstLine(p.Text, activityMaxRunes)
 		} else {
 			m.activity = "thinking"
 		}
-	case "text":
-		if p.Text != nil && *p.Text != "" {
-			m.activity = "writing  " + firstLine(*p.Text, activityMaxRunes)
+	case agent.PartDeltaText:
+		if p.Text != "" {
+			m.activity = "writing  " + firstLine(p.Text, activityMaxRunes)
 		}
-	case "step-start":
+	case agent.PartDeltaStepStart:
 		if m.activity == "" {
 			m.activity = "thinking"
 		}
@@ -1092,12 +1122,12 @@ func (m Model) noteActivityFromPart(p db.Part) Model {
 	return m
 }
 
-func toolActivity(tc db.ToolCall) string {
-	name := tc.Tool
+func toolActivity(tc agent.ToolDelta) string {
+	name := tc.Name
 	if name == "" {
 		name = "tool"
 	}
-	cmd := toolCommand(tc)
+	cmd := toolCommand(dbToolFromDelta(tc))
 	switch tc.Status {
 	case "completed":
 		if cmd != "" {
@@ -1141,6 +1171,10 @@ func tipsTick() tea.Cmd {
 	return tea.Tick(tips.Rotation, func(time.Time) tea.Msg { return tipsTickMsg{} })
 }
 
+func clearProjectInstructionsNotice() tea.Cmd {
+	return tea.Tick(projectInstructionsDuration, func(time.Time) tea.Msg { return projectInstructionsMsg{} })
+}
+
 func (m Model) pulseT() float64 {
 	step := m.pulse
 	if step > pulseSteps/pulseMinSteps {
@@ -1179,9 +1213,15 @@ func newPromptArea(width int) textarea.Model {
 	ta.KeyMap.WordForward = key.NewBinding(key.WithKeys("alt+right", "ctrl+right", "alt+f"))
 	ta.KeyMap.LinePrevious = key.NewBinding(key.WithKeys("up", "ctrl+p", "ctrl+up"))
 	ta.KeyMap.LineNext = key.NewBinding(key.WithKeys("down", "ctrl+n", "ctrl+down"))
-	plain := lipgloss.NewStyle().Background(theme.ColorBg()).Foreground(theme.ColorText())
-	mute := lipgloss.NewStyle().Background(theme.ColorBg()).Foreground(theme.ColorMute())
-	ta.SetStyles(textarea.Styles{
+	ta.SetStyles(promptStyles())
+	ta.Focus()
+	return ta
+}
+
+func promptStyles() textarea.Styles {
+	plain := lipgloss.NewStyle().Background(theme.ColorComposer()).Foreground(theme.ColorText())
+	mute := lipgloss.NewStyle().Background(theme.ColorComposer()).Foreground(theme.ColorMute())
+	return textarea.Styles{
 		Focused: textarea.StyleState{
 			Base:        plain,
 			Text:        plain,
@@ -1199,9 +1239,7 @@ func newPromptArea(width int) textarea.Model {
 			EndOfBuffer: plain,
 		},
 		Cursor: textarea.CursorStyle{Color: theme.ColorText(), Blink: true},
-	})
-	ta.Focus()
-	return ta
+	}
 }
 
 func (m Model) promptHeight() int {
@@ -1330,25 +1368,7 @@ func (m Model) updateAskKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 func (m Model) updateHelpKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 	switch key.Code {
 	case tea.KeyEscape, 'q', 'Q', '?':
-		m.helpMode = false
+		m = m.clearFocus(focusHelp)
 	}
 	return m, nil
-}
-
-func (m Model) resolveAskIndex(idx int) Model {
-	if idx < 0 {
-		// Deny-equivalent: do not invent an answer when the user cancels.
-		// Esc cancels; a returned error denies the tool. Use -1 and let
-		// askHook map cancel to error.
-		idx = 0
-	}
-	if m.pendingAsk != nil {
-		select {
-		case m.pendingAsk.resp <- idx:
-		default:
-		}
-	}
-	m.pendingAsk = nil
-	m.askMode = false
-	return m
 }

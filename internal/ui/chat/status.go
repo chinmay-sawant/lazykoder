@@ -10,7 +10,6 @@ import (
 
 	"github.com/chinmay-sawant/lazykoder/internal/db"
 	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
-	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
 
 type statusDrawerRow struct {
@@ -146,39 +145,20 @@ func (m Model) statusDrawerView() string {
 			enabled++
 		}
 	}
-	header := hintStyle.Render("status  ·  ") +
-		lipgloss.NewStyle().Foreground(theme.ColorText()).Render(fmt.Sprintf("%d/%d enabled", enabled, len(rows)))
-	if lipgloss.Width(header) > width {
-		header = truncateRunes(header, width)
-	}
+	meta := fmt.Sprintf("%d/%d enabled", enabled, len(rows))
 
-	lines := make([]string, 0, len(rows)+statusDrawerExtraRows)
-	lines = append(lines, header)
+	bodyLines := make([]string, 0, len(rows))
 	for i, row := range rows {
 		state := "off"
 		if m.statusSegmentEnabled(row.name) {
 			state = "on"
 		}
-		prefix := "  "
-		if i == m.statusCursor {
-			prefix = "▸ "
-		}
 		right := row.value + "  " + state
-		leftWidth := max(1, width-lipgloss.Width(right)-statusDrawerLeftPad)
-		left := truncateRunes(prefix+row.label, leftWidth)
-		gap := max(1, width-lipgloss.Width(left)-lipgloss.Width(right))
-		line := left + strings.Repeat(" ", gap) + right
-		if i == m.statusCursor {
-			line = lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).Background(theme.ColorBorder()).Width(width).Render(line)
-		} else {
-			line = hintStyle.Width(width).Render(line)
-		}
-		lines = append(lines, line)
+		bodyLines = append(bodyLines, drawerRowLine(row.label, right, i == m.statusCursor, width, statusDrawerLeftPad))
 	}
-	lines = append(lines, hintStyle.Width(width).Render(
-		truncateRunes("↑/↓ select  •  enter toggle  •  ←/esc close", width),
-	))
-	return lipgloss.NewStyle().Width(width).MaxWidth(width).Render(strings.Join(lines, "\n"))
+	body := strings.Join(bodyLines, "\n")
+	hint := "↑/↓ select  •  enter toggle  •  ←/esc close"
+	return drawerChrome("status", meta, body, hint, width)
 }
 
 func (m Model) statusDrawerTop() int {
@@ -209,25 +189,15 @@ func (m Model) statusChipLabel() string {
 }
 
 func (m Model) openStatusDrawer() Model {
-	m.statusMode = true
+	m = m.setFocus(focusStatus)
 	m.statusCursor = 0
-	m.slashMode = false
-	m.slashCursor = 0
-	m.pickerMode = false
-	m.sessionPickerMode = false
-	m.usageMode = false
-	m.usageLoading = false
-	m.settingsMode = false
-	m.subagentPickerMode = false
-	m.subagentLogMode = false
 	return m
 }
 
 func (m Model) updateStatusKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 	switch key.Code {
 	case tea.KeyEscape, tea.KeyLeft, 'q', 'Q', 's', 'S':
-		m.statusMode = false
-		return m, nil
+		return m.clearFocus(focusStatus), nil
 	case tea.KeyUp:
 		if m.statusCursor > 0 {
 			m.statusCursor--

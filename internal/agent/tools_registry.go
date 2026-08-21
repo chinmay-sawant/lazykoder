@@ -2,6 +2,7 @@ package agent
 
 import (
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
+	"github.com/chinmay-sawant/lazykoder/internal/tools/task"
 )
 
 // Base tool names advertised to parent and child agents (role allowlists filter further).
@@ -208,12 +209,7 @@ func toolSpecsFor(names []string, host SubagentHost) []opencode.ToolSpec {
 }
 
 func isTaskToolName(name string) bool {
-	switch name {
-	case toolTask, toolTaskList, toolTaskStatus, toolTaskWait, toolTaskCancel:
-		return true
-	default:
-		return false
-	}
+	return task.IsTaskTool(name)
 }
 
 func toolAllowed(names []string, name string) bool {

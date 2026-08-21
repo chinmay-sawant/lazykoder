@@ -3,6 +3,8 @@ package subagent
 import (
 	"strings"
 	"time"
+
+	"github.com/chinmay-sawant/lazykoder/internal/roles"
 )
 
 const (
@@ -18,7 +20,7 @@ const (
 	DefaultTimeout = 600 * time.Second
 	// DefaultChildMaxSteps is the child agent step budget.
 	// Keep in sync with settings.DefaultChildMaxSteps.
-	DefaultChildMaxSteps = 32
+	DefaultChildMaxSteps = 1000
 	// DefaultRole is used when Spec.Role is empty.
 	DefaultRole = RoleExplore
 	// BashConfirmParent asks the parent UI to confirm child bash.
@@ -73,6 +75,10 @@ func (c Config) Normalize() Config {
 	if c.MaxDepth < 1 {
 		c.MaxDepth = DefaultMaxDepth
 	}
+	// Product nesting is depth 1 until a nested Host ships; clamp extras.
+	if c.MaxDepth > DefaultMaxDepth {
+		c.MaxDepth = DefaultMaxDepth
+	}
 	if c.Timeout <= 0 {
 		c.Timeout = DefaultTimeout
 	}
@@ -92,17 +98,5 @@ func (c Config) Normalize() Config {
 }
 
 func normalizeRole(role, fallback string) string {
-	switch strings.ToLower(strings.TrimSpace(role)) {
-	case RoleExplore:
-		return RoleExplore
-	case RolePlan:
-		return RolePlan
-	case RoleGeneral:
-		return RoleGeneral
-	default:
-		if fallback == "" {
-			return DefaultRole
-		}
-		return normalizeRole(fallback, DefaultRole)
-	}
+	return roles.Normalize(role, fallback)
 }

@@ -3,8 +3,6 @@ package agent
 import (
 	"strings"
 	"testing"
-
-	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 )
 
 func TestNeedsCompactUnknownWindowSkips(t *testing.T) {
@@ -64,7 +62,7 @@ func TestPickSummarizerFitsIncomingKeepsIncoming(t *testing.T) {
 func TestPruneEnoughToSkipLLM(t *testing.T) {
 	oldBody := strings.Repeat("x", 80_000)
 	tailBody := "recent-tool-output"
-	msgs := []opencode.Message{
+	msgs := []ChatMessage{
 		{Role: "user", Content: "first"},
 		{Role: "assistant", Content: "ok"},
 		{Role: "tool", ToolCallID: "t1", Content: oldBody},

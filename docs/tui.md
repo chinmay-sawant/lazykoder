@@ -21,7 +21,9 @@ pickers are centered cards.
   `ctrl+p` applies the same rule to all thinking blocks. Plain `t` and `e`
   always type into the composer. Tool-card header clicks toggle their body;
   thinking headers select rows without toggling them.
-- Composer: a rounded input box on the solid black layer. Long prompts
+- Composer: a rounded input box on the near-black graphite canvas. Its charcoal input
+  surface fills the complete box, including the footer labels and status chips, and
+  receives a muted sage focus border while editing. Long prompts
   grow up to six rows and scroll inside the box. Up/down move the
   cursor through that text first; at the top of a multi-line draft, up
   stays there instead of jumping to a previous message. After browsing
@@ -31,9 +33,11 @@ pickers are centered cards.
   even when it spans several lines. A light vertical line then runs
   from thinking through the assistant reply. It throbs while that
   turn is running and stays as a static line after the turn ends and
-  when the session is reopened. Typed text uses
-  the same black background as the rest of the screen (no cursor-line
-  highlight). The footer left side stays idle (`enter send`). The right side
+  when the session is reopened. Assistant replies fill a muted sky-blue panel
+  across every rendered row, including Markdown code. Typed text stays on the
+  composer surface without a cursor-line highlight. The footer left side stays
+  idle (`enter send`).
+  The right side
   stays compact as a clickable `status ▾` control. Use `/status` to open the
   drawer with the current model, variant, token window, cache hit/miss, cost,
   tokens/sec, sub-agent count, model count, scroll state, and prompt hint.
@@ -265,10 +269,12 @@ as `reasoning_effort` on later turns.
 `/settings` (alias `/slot`) opens a **centered full-screen card** in the
 same family as `/resume` and `/help`: a bordered panel over the chat with
 a `SETTINGS` header and a clickable `[x]` on the top right. Changes
-persist in `<cwd>/.lazykoder/settings.json`.
+persist in `<cwd>/.lazykoder/settings.json`. Card content, selected controls,
+and keyboard hint rows keep the card's opaque neutral-charcoal background.
 
 | Row | What it controls |
 | --- | --- |
+| theme | `dark` or `light` application palette. Switching it redraws the current chat and keeps the card open. Dark is the default. |
 | new-session model | model for new sessions (default `deepseek-v4-flash`) |
 | new-session variant | default reasoning effort (`default` / low / medium / high / max) |
 | child model override | model every child inherits (empty = inherit parent) |
@@ -288,9 +294,13 @@ persist in `<cwd>/.lazykoder/settings.json`.
 | parent bash allowlist | on/off; parent-only, children are not filtered |
 | allowed executables | chip/count editor for the parent allowlist |
 
-The settings card also displays the latest OpenCode Go rolling, weekly, and
-monthly usage percentages. Opening `/settings` loads usage when it has not
-already been fetched; `/usage` can be used for an explicit refresh.
+On terminals at least 42 rows high, the settings card also displays the
+latest OpenCode Go rolling, weekly, and monthly usage percentages. On a
+shorter terminal, use `/usage` for the same information. Opening `/settings`
+loads usage when it has not already been fetched; `/usage` can refresh it.
+
+At 24 rows, the settings card keeps its header, footer, and focused row on
+screen. Use `j` and `k` to move through the remaining rows.
 
 When sub-agents are running, the footer may show `subs:N/M` (active / max
 concurrent). Cancelling the parent turn also cancels child jobs.
@@ -298,7 +308,7 @@ concurrent). Cancelling the parent turn also cancels child jobs.
 | Control | Action |
 | --- | --- |
 | `j`/`k` or arrows | move between rows |
-| `←`/`→` or `h`/`l` | adjust the focused control (cycle model/variant, toggle limit, nudge steps) |
+| `←`/`→` or `h`/`l` | adjust the focused control (cycle theme/model/variant, toggle limit, nudge steps) |
 | enter | open the model or variant picker for that row; toggle/bump for slot rows |
 | space | toggle limit or cycle model/variant |
 | click `[x]` | close |
@@ -410,4 +420,4 @@ If you quit before the first send (no session row yet), the same logo prints
 with `lk (no session)` and `resume older runs with /resume or ctrl+s`. An
 empty title prints as `session name: untitled`.
 
-`ctrl+c` with text in the composer still copies and does not quit.
+`ctrl+c` with unselected text in the composer clears the prompt; `ctrl+a` then `ctrl+c` copies the draft.

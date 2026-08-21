@@ -7,7 +7,6 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/chinmay-sawant/lazykoder/internal/agent"
 	"github.com/chinmay-sawant/lazykoder/internal/db"
 )
 
@@ -182,9 +181,9 @@ func TestExpandedBashOutputCapped(t *testing.T) {
 	}
 	out := strings.Join(lines, "\n")
 	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
-	body := stripANSI(m.renderTool(agent.Event{Tool: db.ToolCall{
+	body := stripANSI(m.renderTool(db.ToolCall{
 		Tool: "bash", Status: "completed", Output: &out,
-	}}, false, 0))
+	}, db.Part{}, false, 0))
 	if !strings.Contains(body, "lines omitted") || !strings.Contains(body, "bash-line-499") {
 		t.Fatalf("capped body missing truncation evidence: %q", body)
 	}

@@ -79,7 +79,7 @@ func TestSendStreamingReasoningAndText(t *testing.T) {
 	}
 	var reasonEvents int
 	for _, ev := range events {
-		if ev.Kind == EventPart && ev.Part.Type == "reasoning" {
+		if ev.Kind == EventPart && ev.Part.Kind == PartDeltaReasoning {
 			reasonEvents++
 		}
 	}

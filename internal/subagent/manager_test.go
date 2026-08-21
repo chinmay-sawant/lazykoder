@@ -2,6 +2,7 @@ package subagent
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/chinmay-sawant/lazykoder/internal/db"
+	"github.com/chinmay-sawant/lazykoder/internal/tools/task"
 )
 
 // blockingRunner holds each Run until release is closed (or ctx done).
@@ -238,6 +240,63 @@ func TestDisabled(t *testing.T) {
 	}
 }
 
+func TestSpawnDoesNotStartWhenInitialPersistFails(t *testing.T) {
+	st := openSubagentTestStore(t)
+	parent, err := st.CreateSession(context.Background(), db.Session{Directory: t.TempDir(), Title: "parent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := newBlockingRunner("must not run")
+	m := NewManager(NewConfig(), r)
+	m.SetStore(st)
+	m.writeJob = func(context.Context, db.SubagentJob) error { return errors.New("store write failed") }
+	_, err = m.Spawn(context.Background(), parent.ID, "", Spec{Prompt: "durable", Background: true})
+	if err == nil || !strings.Contains(err.Error(), "persist queued job") {
+		t.Fatalf("Spawn() error = %v", err)
+	}
+	select {
+	case <-r.started:
+		t.Fatal("runner started before the queued row was durable")
+	case <-time.After(50 * time.Millisecond):
+	}
+	if persistErr := m.TakePersistenceError(); persistErr == nil {
+		t.Fatal("persistence failure was not exposed by Manager")
+	}
+}
+
+func TestRecoverSurfacesRecoveryWriteFailure(t *testing.T) {
+	ctx := context.Background()
+	st := openSubagentTestStore(t)
+	parent, err := st.CreateSession(ctx, db.Session{Directory: t.TempDir(), Title: "parent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UnixMilli()
+	if err := st.UpsertSubagentJob(ctx, db.SubagentJob{
+		ID:              "sub_recovery_write",
+		ParentSessionID: parent.ID,
+		Name:            "recover",
+		Role:            RoleExplore,
+		Status:          string(StatusQueued),
+		Prompt:          "resume",
+		MaxSteps:        2,
+		TimeCreated:     now,
+		TimeUpdated:     now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	m := NewManager(NewConfig(), newBlockingRunner("must not run"))
+	m.SetStore(st)
+	m.writeJob = func(context.Context, db.SubagentJob) error { return errors.New("store write failed") }
+	err = m.Recover(ctx)
+	if err == nil || !strings.Contains(err.Error(), "persist recovery failure") {
+		t.Fatalf("Recover() error = %v", err)
+	}
+	if persistErr := m.TakePersistenceError(); persistErr == nil || !strings.Contains(persistErr.Error(), "persist recovery failure") {
+		t.Fatalf("TakePersistenceError() = %v", persistErr)
+	}
+}
+
 func TestHostTaskWaitAndList(t *testing.T) {
 	r := newBlockingRunner("host-sum")
 	// Hold briefly so background status is observable, then complete.
@@ -301,7 +360,7 @@ func TestHostUnknownToolDenied(t *testing.T) {
 }
 
 func TestConfigNormalize(t *testing.T) {
-	c := Config{MaxConcurrent: 100, MaxQueued: 0, Timeout: 0, DefaultRole: "nope"}.Normalize()
+	c := Config{MaxConcurrent: 100, MaxQueued: 0, Timeout: 0, DefaultRole: "nope", MaxDepth: 3, ChildMaxSteps: 0}.Normalize()
 	if c.MaxConcurrent != HardMaxConcurrent {
 		t.Fatalf("MaxConcurrent=%d", c.MaxConcurrent)
 	}
@@ -316,6 +375,81 @@ func TestConfigNormalize(t *testing.T) {
 	}
 	if c.BashConfirm != BashConfirmParent {
 		t.Fatalf("BashConfirm=%q", c.BashConfirm)
+	}
+	if c.MaxDepth != DefaultMaxDepth || DefaultMaxDepth != 1 {
+		t.Fatalf("MaxDepth=%d, want product depth 1", c.MaxDepth)
+	}
+	if c.ChildMaxSteps != DefaultChildMaxSteps || DefaultChildMaxSteps != 1000 {
+		t.Fatalf("ChildMaxSteps=%d, want 1000", c.ChildMaxSteps)
+	}
+}
+
+func TestIsTerminalStatus(t *testing.T) {
+	for _, s := range []string{
+		string(StatusCompleted), string(StatusFailed),
+		string(StatusCancelled), string(StatusTimedOut),
+	} {
+		if !IsTerminalStatus(s) {
+			t.Fatalf("IsTerminalStatus(%q) = false", s)
+		}
+	}
+	for _, s := range []string{"", string(StatusQueued), string(StatusRunning), "success", "done"} {
+		if IsTerminalStatus(s) {
+			t.Fatalf("IsTerminalStatus(%q) = true", s)
+		}
+	}
+}
+
+func TestManagerBootRecovers(t *testing.T) {
+	ctx := context.Background()
+	st := openSubagentTestStore(t)
+	parent, err := st.CreateSession(ctx, db.Session{Directory: t.TempDir(), Title: "p"})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	now := time.Now().UnixMilli()
+	row := db.SubagentJob{
+		ID:              "sub_boot",
+		ParentSessionID: parent.ID,
+		Name:            "boot",
+		Role:            RoleExplore,
+		Status:          string(StatusRunning),
+		Prompt:          "continue",
+		MaxSteps:        4,
+		TimeoutMS:       60_000,
+		TimeCreated:     now,
+		TimeUpdated:     now,
+		TimeStarted:     now,
+	}
+	if err := st.UpsertSubagentJob(ctx, row); err != nil {
+		t.Fatalf("UpsertSubagentJob: %v", err)
+	}
+	r := newBlockingRunner("boot-ok")
+	close(r.release)
+	m := NewManager(NewConfig(), nil)
+	if err := m.Boot(ctx, st, Runtime{Workdir: t.TempDir()}, r); err != nil {
+		t.Fatalf("Boot: %v", err)
+	}
+	res, err := m.Wait(ctx, "sub_boot")
+	if err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if res.Status != string(StatusCompleted) || res.Summary != "boot-ok" {
+		t.Fatalf("result = %+v", res)
+	}
+}
+
+func TestHostSpecsMatchTaskPackage(t *testing.T) {
+	h := NewHost(NewManager(NewConfig(), newBlockingRunner("x")))
+	got := h.Specs()
+	want := task.Specs()
+	if len(got) != len(want) {
+		t.Fatalf("Specs len = %d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i].Name != want[i].Name {
+			t.Fatalf("Specs[%d].Name = %q, want %q", i, got[i].Name, want[i].Name)
+		}
 	}
 }
 

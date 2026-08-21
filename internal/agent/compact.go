@@ -3,8 +3,6 @@ package agent
 import (
 	"encoding/json"
 	"strings"
-
-	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 )
 
 const (
@@ -73,7 +71,7 @@ func EstimateTokens(text string) int64 {
 }
 
 // EstimateMessages sums a conservative token estimate for a request body.
-func EstimateMessages(msgs []opencode.Message) int64 {
+func EstimateMessages(msgs []ChatMessage) int64 {
 	var n int64
 	for _, msg := range msgs {
 		n += messageTokens(msg)
@@ -121,9 +119,9 @@ func PickSummarizer(outgoing, incoming ModelRef, estimate, reserve int64) ModelR
 // PruneToolOutputs replaces tool bodies older than the last two user turns
 // and outside the keep-tokens tail with a short placeholder. Other roles
 // are left intact. The slice is copied; callers can reuse the input.
-func PruneToolOutputs(msgs []opencode.Message, keepTokens int64) []opencode.Message {
+func PruneToolOutputs(msgs []ChatMessage, keepTokens int64) []ChatMessage {
 	if len(msgs) == 0 {
-		return []opencode.Message{}
+		return []ChatMessage{}
 	}
 	if keepTokens < 0 {
 		keepTokens = 0
@@ -131,7 +129,7 @@ func PruneToolOutputs(msgs []opencode.Message, keepTokens int64) []opencode.Mess
 	protected := make([]bool, len(msgs))
 	protectUserTail(msgs, protected)
 	protectTokenTail(msgs, keepTokens, protected)
-	out := make([]opencode.Message, len(msgs))
+	out := make([]ChatMessage, len(msgs))
 	copy(out, msgs)
 	for i := range out {
 		if protected[i] || out[i].Role != "tool" {
@@ -168,7 +166,7 @@ func ParseCompactText(text string) CompactEnvelope {
 	return env
 }
 
-func messageTokens(msg opencode.Message) int64 {
+func messageTokens(msg ChatMessage) int64 {
 	n := EstimateTokens(msg.Content) + EstimateTokens(msg.ToolCallID)
 	for _, tc := range msg.ToolCalls {
 		n += EstimateTokens(tc.ID) + EstimateTokens(tc.Name) + EstimateTokens(tc.Arguments)
@@ -176,7 +174,7 @@ func messageTokens(msg opencode.Message) int64 {
 	return n
 }
 
-func protectUserTail(msgs []opencode.Message, protected []bool) {
+func protectUserTail(msgs []ChatMessage, protected []bool) {
 	seen := 0
 	start := -1
 	for i := len(msgs) - 1; i >= 0; i-- {
@@ -197,7 +195,7 @@ func protectUserTail(msgs []opencode.Message, protected []bool) {
 	}
 }
 
-func protectTokenTail(msgs []opencode.Message, keepTokens int64, protected []bool) {
+func protectTokenTail(msgs []ChatMessage, keepTokens int64, protected []bool) {
 	var acc int64
 	for i := len(msgs) - 1; i >= 0; i-- {
 		size := messageTokens(msgs[i])

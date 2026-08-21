@@ -13,6 +13,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/chinmay-sawant/lazykoder/internal/agent"
+	"github.com/chinmay-sawant/lazykoder/internal/subagent"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
 
@@ -50,12 +51,12 @@ func (m Model) openFilePicker() Model {
 		m.filePickerAt = len(m.prompt.Value())
 	}
 	m.filePickerItems = m.listAtPickItems("")
-	m.filePickerMode = true
+	m = m.setFocus(focusFilePicker)
 	return m
 }
 
 func (m Model) closeFilePicker() Model {
-	m.filePickerMode = false
+	m = m.clearFocus(focusFilePicker)
 	m.filePickerItems = nil
 	m.filePickerFilter = ""
 	return m
@@ -120,10 +121,12 @@ func (m Model) filePickerOverlay() string {
 	foot := hintStyle.Width(contentW).MaxWidth(contentW).
 		Render(truncateRunes("↑/↓ select  •  enter insert  •  esc close", contentW))
 	content := lipgloss.JoinVertical(lipgloss.Left, head, body, foot)
+	content = keepBackground(content, theme.ColorSurface())
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(theme.ColorBorder()).
-		Background(theme.ColorBg()).
+		BorderBackground(theme.ColorSurface()).
+		Background(theme.ColorSurface()).
 		Padding(1, cardPad).
 		Width(boxW).
 		Render(content)
@@ -194,7 +197,7 @@ func atPickerItemRow(it atPickItem, selected bool, width int, sel, dim lipgloss.
 			rightStyle = liveSt
 		} else if isFailedSubStatus(st) {
 			rightStyle = badSt
-		} else if isTerminalSubStatus(st) {
+		} else if subagent.IsTerminalStatus(st) {
 			rightStyle = goodSt
 		}
 	}
@@ -239,6 +242,10 @@ func joinAtPickerRow(left, right string, width int) string {
 }
 
 func (m Model) updateFilePickerKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
+	if isUndoKey(key) {
+		m = m.closeFilePicker()
+		return m.undoPrompt(), nil
+	}
 	switch key.Code {
 	case tea.KeyEscape:
 		return m.closeFilePicker(), nil

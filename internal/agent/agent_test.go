@@ -4,10 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,15 +21,12 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/tools/question"
 )
 
-type agentWebfetchTransport struct{ srv *httptest.Server }
-
-func (t agentWebfetchTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	copy := r.Clone(r.Context())
-	u := *copy.URL
-	target, _ := url.Parse(t.srv.URL)
-	u.Scheme, u.Host = target.Scheme, target.Host
-	copy.URL = &u
-	return t.srv.Client().Transport.RoundTrip(copy)
+func agentWebfetchTransport(srv *httptest.Server) *http.Transport {
+	return &http.Transport{
+		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, network, srv.Listener.Addr().String())
+		},
+	}
 }
 
 type wireMessage struct {
@@ -317,7 +315,7 @@ func TestSendToolDispatch(t *testing.T) {
 	writeArgs, _ := json.Marshal(map[string]any{"filePath": "new.txt", "contents": "hello new"})
 	editArgs, _ := json.Marshal(map[string]any{"filePath": "fixture.txt", "oldString": "line one", "newString": "line uno"})
 	grepArgs, _ := json.Marshal(map[string]any{"pattern": "line two", "glob": "*.txt"})
-	webArgs, _ := json.Marshal(map[string]any{"url": "http://example.test/", "format": "text"})
+	webArgs, _ := json.Marshal(map[string]any{"url": "http://203.0.113.11/", "format": "text"})
 	qArgs, _ := json.Marshal(map[string]any{"questions": []any{
 		map[string]any{"question": "pick one?", "header": "choice", "options": []string{"alpha", "beta"}},
 	}})
@@ -337,7 +335,7 @@ func TestSendToolDispatch(t *testing.T) {
 	asks := 0
 	a := New(st, newClient(t, fake.srv), workdir, Options{
 		Confirm:        func(policy.Decision, string) (bool, error) { return true, nil },
-		WebfetchClient: &http.Client{Transport: agentWebfetchTransport{srv: webSrv}},
+		WebfetchClient: &http.Client{Transport: agentWebfetchTransport(webSrv)},
 		Ask: func(q question.Question) (int, error) {
 			asks++
 			return 1, nil
@@ -811,6 +809,9 @@ func TestSendMaxSteps(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "agent: step limit reached (max 3)") {
 		t.Errorf("error = %q, want step limit reached (max 3)", err)
+	}
+	if !errors.Is(err, ErrStepLimit) {
+		t.Errorf("errors.Is(%v, ErrStepLimit) = false", err)
 	}
 	if !hasEventKind(events, EventError) {
 		t.Errorf("events missing EventError: %+v", events)

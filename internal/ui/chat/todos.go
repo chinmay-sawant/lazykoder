@@ -9,6 +9,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/chinmay-sawant/lazykoder/internal/db"
+	"github.com/chinmay-sawant/lazykoder/internal/subagent"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
 
@@ -152,13 +153,17 @@ func (m Model) todoPanelView() string {
 	}
 	head := m.todoPanelHead(w, done, total, cancelled)
 	if !m.todosExpanded {
-		return head
+		return lipgloss.JoinVertical(lipgloss.Left, head, "")
 	}
 
 	m = m.resizeTodoPanel()
 	body := withScrollbar(m.todoVp.View(), m.todoVp.Width(), m.todoVp.Height(),
 		m.todoVp.ScrollPercent(), m.todoVp.TotalLineCount() > m.todoVp.Height())
-	return lipgloss.JoinVertical(lipgloss.Left, head, body)
+	// Trailing blank row keeps a breathing gap between the checklist and the
+	// first transcript row. Height consumers (transcriptRenderHeight,
+	// transcriptTop) read lipgloss.Height of the whole panel, so they track
+	// this row without extra math.
+	return lipgloss.JoinVertical(lipgloss.Left, head, body, "")
 }
 
 func (m Model) todoPanelBodyHeight() int {
@@ -255,15 +260,12 @@ func (m Model) todoAgentSummary() string {
 	}
 	ok, failed, live := 0, 0, 0
 	for _, r := range rows {
-		st := strings.ToLower(strings.TrimSpace(r.Status))
 		switch {
 		case r.Live:
 			live++
 		case isFailedSubStatus(r.Status):
 			failed++
-		case st == "completed" || st == "success" || st == "done":
-			ok++
-		case isTerminalSubStatus(r.Status):
+		case subagent.IsTerminalStatus(r.Status):
 			ok++
 		default:
 			// Still queued/running without Live set, or unknown in-flight.

@@ -11,7 +11,6 @@ import (
 
 	"github.com/chinmay-sawant/lazykoder/internal/agent"
 	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
-	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
 
 // pickerRowMinLeftW is the minimum width left for the model label when a
@@ -40,10 +39,7 @@ func (m Model) pickerView() string {
 	if m.pickerKind == pickerKindVariant {
 		kind = "reasoning"
 	}
-	header := hintStyle.Render(kind+"  ·  ") + lipgloss.NewStyle().Foreground(theme.ColorText()).Render(m.pickerSelectedLabel())
-	if lipgloss.Width(header) > cardW {
-		header = truncateRunes(header, cardW)
-	}
+	meta := m.pickerSelectedLabel()
 
 	vpH := m.pickerVPHeight()
 	body := ""
@@ -78,16 +74,11 @@ func (m Model) pickerView() string {
 	} else if m.pickerFilter != "" {
 		filter = "filter: " + m.pickerFilter + "  •  enter select"
 	}
-	footer := hintStyle.Width(cardW).Render(filter)
-	return lipgloss.NewStyle().Width(cardW).Render(
-		lipgloss.JoinVertical(lipgloss.Left, header, body, footer),
-	)
+	return drawerChrome(kind, meta, body, filter, cardW)
 }
 
 // pickerContent renders the filtered model list with the cursor marker.
 func (m Model) pickerContent(width int) string {
-	sel := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).Background(theme.ColorBorder())
-	normal := lipgloss.NewStyle().Foreground(theme.ColorMute())
 	var b strings.Builder
 	for i, id := range m.pickerItems {
 		if i > 0 {
@@ -95,10 +86,10 @@ func (m Model) pickerContent(width int) string {
 		}
 		line := m.pickerRow(id, i == m.pickerCursor, width)
 		if i == m.pickerCursor {
-			b.WriteString(sel.MaxWidth(width).Width(width).Render(line))
+			b.WriteString(drawerSelectedStyle.MaxWidth(width).Width(width).Render(line))
 			continue
 		}
-		b.WriteString(normal.Render(line))
+		b.WriteString(drawerNormalStyle.Render(line))
 	}
 	return b.String()
 }
@@ -288,9 +279,7 @@ func (m Model) finishPickerSelection() Model {
 
 func (m Model) closePicker() Model {
 	reopenSettings := m.settingsPickDefault
-	m.pickerMode = false
-	m.pickerFiltering = false
-	m.pickerFromPrompt = false
+	m = m.clearFocus(focusPicker)
 	m.pickerKind = pickerKindModel
 	m.dragOn = false
 	m.settingsPickDefault = false
@@ -381,7 +370,7 @@ func (m Model) openKindPicker(kind string) Model {
 	} else {
 		m.pickerVp.EnsureVisible(m.pickerCursor, 0, 1)
 	}
-	m.pickerMode = true
+	m = m.setFocus(focusPicker)
 	return m
 }
 

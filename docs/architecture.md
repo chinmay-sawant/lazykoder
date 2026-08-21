@@ -173,8 +173,10 @@ hit/miss reset to 0 at compact, then grow again. Cost uses
 `parts.cost` when set, otherwise `messages.model_id` plus
 `.lazykoder/models.json` prices.
 
-**Children.** Child agents get `CompactAuto: true` but no catalog
-window, so percent auto never runs for them. Overflow retry still can.
+**Children.** The chat model boundary passes the selected child model's ID,
+endpoint, supported variants, and known context window to `subagent.Job`.
+When the cache has a window, child auto-compaction can use it. Unknown windows
+still skip percent preflight. Overflow retry remains available.
 
 ## Sub-agents
 
@@ -183,6 +185,8 @@ concurrency (default 4, hard max 20), runs each child as `agent.Agent` on a
 hidden child session (`kind=subagent`), and returns only a final summary to
 the parent model. Settings live under `agents` in
 `.lazykoder/settings.json`. Depth is 1: children cannot spawn further tasks.
+The manager stores the queued job before starting its runner. A later store or
+recovery failure is surfaced through the manager and the TUI.
 
 ## Module identity
 

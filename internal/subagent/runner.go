@@ -2,6 +2,7 @@ package subagent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -97,19 +98,21 @@ func (r AgentRunner) Run(ctx context.Context, job Job) (Result, error) {
 		}
 	}
 
+	// The selected child profile supplies context metadata when the cache knows it.
 	ag := agent.New(r.Store, r.Client, workdir, agent.Options{
 		Session:          &sess,
 		MaxSteps:         job.MaxSteps,
 		Model:            job.Model,
 		Endpoint:         job.Endpoint,
 		Variant:          job.Variant,
+		ContextWindow:    job.ContextWindow,
 		Confirm:          job.Confirm,
 		Ask:              ask,
-		Host:             nil, // depth 1: children cannot spawn
+		Host:             childSubagentHost(job),
 		ToolNames:        job.Tools,
 		AgentName:        job.Name,
 		DisableStreaming: true,
-		CompactAuto:      true,
+		CompactAuto:      job.ContextWindow > 0,
 	})
 	// Nudge the child to emit a final text answer inside its step budget.
 	// Without this, multi-tool explores often burn every step on tools and
@@ -176,7 +179,7 @@ func (r AgentRunner) finishedSummary(ctx context.Context, sessionID string) (str
 }
 
 func isStepLimitErr(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "step limit reached")
+	return errors.Is(err, agent.ErrStepLimit)
 }
 
 func withStepLimitNote(summary string, err error) string {
@@ -197,4 +200,14 @@ func strPtr(s string) *string {
 		return nil
 	}
 	return &s
+}
+
+// childSubagentHost returns a nested Host only when Depth is still below
+// MaxDepth. Product MaxMaxDepth is 1, so this is always nil today. Nested
+// Host construction is reserved for when nesting ships.
+func childSubagentHost(job Job) agent.SubagentHost {
+	if job.Depth >= job.MaxDepth {
+		return nil
+	}
+	return nil
 }

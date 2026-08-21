@@ -42,10 +42,16 @@ const (
 	subagentLogFooterRows = 1
 	maxSubagentActivity   = 48
 	maxSubagentDrawerRows = 8
-	// subagentRowMinLeftW is the floor width for a sub-agent row label.
-	subagentRowMinLeftW = 6
 	// subagentLogRowFactor estimates the two log lines per item.
 	subagentLogRowFactor = 2
+
+	subagentDrawerRowChrome      = 4
+	subagentDrawerColumnGap      = 2
+	subagentDrawerMinLeftWidth   = 24
+	subagentDrawerMinMetaWidth   = 20
+	subagentDrawerCompactWidth   = 60
+	subagentCompactActivityShare = 4
+	subagentCompactMetadataShare = 3
 )
 
 // openSubagentPicker opens the model-style drawer above the prompt and
@@ -54,19 +60,9 @@ func (m Model) openSubagentPicker() Model {
 	// Remember whether the transcript was following latest output so shrinking
 	// the viewport for the drawer does not leave the background stuck mid-scroll.
 	follow := m.transcript.AtBottom()
-	m.subagentPickerMode = true
+	m = m.setFocus(focusSubagents)
 	m.subagentDrawerCompact = false
-	m.subagentLogMode = false
 	m.subagentHover = -1
-	m.slashMode = false
-	m.slashCursor = 0
-	m.pickerMode = false
-	m.helpMode = false
-	m.usageMode = false
-	m.usageLoading = false
-	m.filePickerMode = false
-	m.sessionPickerMode = false
-	m.settingsMode = false
 	m.prompt.SetValue("")
 	m.promptUndo = nil
 	m = m.ensureSubagentBuilt()
@@ -92,9 +88,8 @@ func (m Model) collapseSubagentDrawerToSummary() Model {
 		return m.closeSubagentPicker()
 	}
 	follow := m.transcript.AtBottom()
-	m.subagentPickerMode = true
+	m = m.setFocus(focusSubagents)
 	m.subagentDrawerCompact = true
-	m.subagentLogMode = false
 	m.subagentHover = -1
 	m = m.resizeSubagentDrawer()
 	m.syncTranscript()
@@ -110,8 +105,8 @@ func (m Model) expandSubagentDrawer() Model {
 		return m.openSubagentPicker()
 	}
 	follow := m.transcript.AtBottom()
+	m = m.setFocus(focusSubagents)
 	m.subagentDrawerCompact = false
-	m.subagentLogMode = false
 	m = m.reloadSubagentRows()
 	m = m.resizeSubagentDrawer()
 	m.syncTranscript()
@@ -124,9 +119,7 @@ func (m Model) expandSubagentDrawer() Model {
 // closeSubagentPicker closes the drawer and the full-screen log card.
 func (m Model) closeSubagentPicker() Model {
 	follow := m.transcript.AtBottom()
-	m.subagentPickerMode = false
-	m.subagentDrawerCompact = false
-	m.subagentLogMode = false
+	m = m.clearFocus(focusSubagents)
 	m.subagentHover = -1
 	m.subagentLogItems = nil
 	m.subagentLogSelected = -1
@@ -156,6 +149,11 @@ func (m Model) ensureSubagentBuilt() Model {
 // openSubagentDrawerIfNew) or the user reopens via /agents or the subs:N chip.
 func (m Model) syncSubagentDrawer() Model {
 	m = m.ensureSubagentBuilt()
+	if m.subMgr != nil {
+		if err := m.subMgr.TakePersistenceError(); err != nil {
+			m.err = "subagent state was not saved: " + err.Error()
+		}
+	}
 	m = m.reloadSubagentRows()
 	if len(m.subagentItems) == 0 {
 		return m
@@ -191,9 +189,8 @@ func (m Model) openSubagentDrawerIfNew() Model {
 	}
 	// New spawn: show the full list so live agents are visible again.
 	follow := m.transcript.AtBottom()
-	m.subagentPickerMode = true
+	m = m.setFocus(focusSubagents)
 	m.subagentDrawerCompact = false
-	m.subagentLogMode = false
 	m = m.resizeSubagentDrawer()
 	m.syncTranscript()
 	if follow {
@@ -240,7 +237,7 @@ func (m Model) refreshSubagentDrawerLive() Model {
 		row := m.subagentItems[i]
 		if snap, ok := byJob[row.ID]; ok {
 			row.Status = snap.Status
-			row.Live = !isTerminalSubStatus(snap.Status)
+			row.Live = !subagent.IsTerminalStatus(snap.Status)
 			if snap.ChildSessionID != "" {
 				row.ChildSessionID = snap.ChildSessionID
 			}
@@ -269,8 +266,8 @@ func (m Model) refreshSubagentDrawerLive() Model {
 		// Job left the manager map; keep the row but freeze as terminal.
 		if row.Live {
 			row.Live = false
-			if !isTerminalSubStatus(row.Status) {
-				row.Status = "completed"
+			if !subagent.IsTerminalStatus(row.Status) {
+				row.Status = string(subagent.StatusCompleted)
 			}
 		}
 		row.Activity = m.subagentActivityLine(row)
@@ -300,7 +297,7 @@ func (m Model) refreshSubagentDrawerLive() Model {
 				Summary:        snap.Summary,
 				Err:            snap.Err,
 				StartedAt:      snap.StartedAt,
-				Live:           !isTerminalSubStatus(snap.Status),
+				Live:           !subagent.IsTerminalStatus(snap.Status),
 			}
 			row.Activity = m.subagentActivityLine(row)
 			newcomers = append(newcomers, row)
@@ -355,7 +352,7 @@ func (m Model) collectSubagentRows() []subagentRow {
 				Summary:        snap.Summary,
 				Err:            snap.Err,
 				StartedAt:      snap.StartedAt,
-				Live:           !isTerminalSubStatus(snap.Status),
+				Live:           !subagent.IsTerminalStatus(snap.Status),
 			}
 			byKey[key] = row
 			order = append(order, key)
@@ -382,7 +379,7 @@ func (m Model) collectSubagentRows() []subagentRow {
 					Name:           sess.Title,
 					Model:          sess.Model,
 					Variant:        childVariants[sess.ID],
-					Status:         "completed",
+					Status:         string(subagent.StatusCompleted),
 					ChildSessionID: sess.ID,
 					StartedAt:      sess.TimeCreated,
 					Live:           false,
@@ -424,19 +421,9 @@ func (m Model) collectSubagentRows() []subagentRow {
 	return rows
 }
 
-func isTerminalSubStatus(s string) bool {
-	switch subagent.Status(s) {
-	case subagent.StatusCompleted, subagent.StatusFailed, subagent.StatusCancelled, subagent.StatusTimedOut:
-		return true
-	default:
-		return false
-	}
-}
-
 func isFailedSubStatus(s string) bool {
-	switch strings.ToLower(s) {
-	case string(subagent.StatusFailed), string(subagent.StatusCancelled), string(subagent.StatusTimedOut),
-		"error", "denied", "crashed":
+	switch subagent.Status(strings.ToLower(s)) {
+	case subagent.StatusFailed, subagent.StatusCancelled, subagent.StatusTimedOut:
 		return true
 	default:
 		return false
@@ -466,7 +453,7 @@ func (m Model) subagentActivityLine(row subagentRow) string {
 	if row.Status != "" {
 		return row.Status
 	}
-	return "done"
+	return string(subagent.StatusCompleted)
 }
 
 func (m Model) latestToolActivity(sessionID string) string {
@@ -662,39 +649,32 @@ func (m Model) subagentDrawerView() string {
 	if m.liveStatusInSubagentDrawer() {
 		parts = append(parts, m.liveStatusInDrawerView())
 	}
-	header := hintStyle.Render("sub-agents  ·  ")
+
+	meta := ""
 	if m.subagentDrawerCompact {
-		header += lipgloss.NewStyle().Foreground(theme.ColorText()).Render(fmt.Sprintf("%d", total))
+		meta = fmt.Sprintf("%d", total)
 		if live > 0 {
-			header += hintStyle.Render("  ·  ")
-			header += lipgloss.NewStyle().Foreground(theme.ColorAccent()).Render(fmt.Sprintf("%d live", live))
+			meta += fmt.Sprintf("  ·  %d live", live)
 		}
 		if ok > 0 {
-			header += hintStyle.Render("  ·  ")
-			header += lipgloss.NewStyle().Foreground(theme.ColorGood()).Render(fmt.Sprintf("%d ok", ok))
+			meta += fmt.Sprintf("  ·  %d ok", ok)
 		}
 		if failed > 0 {
-			header += hintStyle.Render("  ·  ")
-			header += lipgloss.NewStyle().Foreground(theme.ColorDanger()).Render(fmt.Sprintf("%d failed", failed))
+			meta += fmt.Sprintf("  ·  %d failed", failed)
 		}
-		if lipgloss.Width(header) > cardW {
-			header = truncateRunes(header, cardW)
+		footer := "enter/click expand  •  esc close"
+		body := ""
+		drawer := drawerChrome("sub-agents", meta, body, footer, cardW)
+		if len(parts) > 0 {
+			return lipgloss.JoinVertical(lipgloss.Left, append(parts, drawer)...)
 		}
-		footer := hintStyle.Width(cardW).Render(
-			truncateRunes("enter/click expand  •  esc close", cardW),
-		)
-		parts = append(parts, header, footer)
-		return lipgloss.NewStyle().Width(cardW).Render(lipgloss.JoinVertical(lipgloss.Left, parts...))
+		return drawer
 	}
 
 	if live > 0 {
-		header += lipgloss.NewStyle().Foreground(theme.ColorAccent()).Render(fmt.Sprintf("%d live", live))
-		header += hintStyle.Render(fmt.Sprintf("  ·  %d total", total))
+		meta = fmt.Sprintf("%d live  ·  %d total", live, total)
 	} else {
-		header += hintStyle.Render(fmt.Sprintf("%d", total))
-	}
-	if lipgloss.Width(header) > cardW {
-		header = truncateRunes(header, cardW)
+		meta = fmt.Sprintf("%d", total)
 	}
 
 	body := hintStyle.Render("no sub-agents for this session")
@@ -702,24 +682,24 @@ func (m Model) subagentDrawerView() string {
 		body = withScrollbar(m.subagentVp.View(), m.subagentVp.Width(), m.subagentVp.Height(),
 			m.subagentVp.ScrollPercent(), m.subagentVp.TotalLineCount() > m.subagentVp.Height())
 	}
-	footer := hintStyle.Width(cardW).Render(
-		truncateRunes("↑/↓ select  •  → logs  •  d cancel live  •  esc close", cardW),
-	)
-	parts = append(parts, header, body, footer)
-	return lipgloss.NewStyle().Width(cardW).Render(lipgloss.JoinVertical(lipgloss.Left, parts...))
+	footer := "↑/↓ select  •  → logs  •  d cancel live  •  esc close"
+	drawer := drawerChrome("sub-agents", meta, body, footer, cardW)
+	if len(parts) > 0 {
+		return lipgloss.JoinVertical(lipgloss.Left, append(parts, drawer)...)
+	}
+	return drawer
 }
 
 // subagentDrawerCounts returns live / ok / failed / total for drawer chrome.
 func (m Model) subagentDrawerCounts() (live, ok, failed, total int) {
 	total = len(m.subagentItems)
 	for _, r := range m.subagentItems {
-		st := strings.ToLower(strings.TrimSpace(r.Status))
 		switch {
 		case r.Live:
 			live++
 		case isFailedSubStatus(r.Status):
 			failed++
-		case st == "completed" || st == "success" || st == "done" || isTerminalSubStatus(r.Status):
+		case subagent.IsTerminalStatus(r.Status):
 			ok++
 		default:
 			live++
@@ -744,33 +724,71 @@ func (m Model) subagentDrawerRow(row subagentRow, selected bool, width int) stri
 	if selected {
 		prefix = "▸ "
 	}
-	diamond := m.subagentDiamond(row)
-	name := row.Name
-	if name == "" {
-		name = row.ID
-	}
-	st := strings.TrimSpace(row.Status)
-	if st == "" {
-		st = "unknown"
-	}
+	name := firstNonEmptyStr(row.Name, row.ID)
 	if row.Role != "" {
-		name = name + "  ·  " + row.Role
+		name += "  ·  " + row.Role
 	}
-	left := prefix + diamond + "  " + st + "  " + name
-	right := m.subagentRowRight(row, max(1, width-lipgloss.Width(left)-1))
-	gap := width - lipgloss.Width(left) - lipgloss.Width(right)
-	if gap < 1 {
-		left = truncateRunes(left, max(subagentRowMinLeftW, width-lipgloss.Width(right)-1))
-		gap = width - lipgloss.Width(left) - lipgloss.Width(right)
+	status := firstNonEmptyStr(strings.TrimSpace(row.Status), "unknown")
+	leftText := status + "  " + name
+	meta := m.subagentRowMetadata(row)
+	if row.Model != "" || row.Variant != "" {
+		meta = "thinking: " + firstNonEmptyStr(row.Variant, "?") + "  " + firstNonEmptyStr(row.Model, "model?") + "  " + formatCost(row.Cost)
 	}
-	if gap < 1 {
-		gap = 1
+	meta = singleLine(meta)
+
+	available := max(1, width-subagentDrawerRowChrome)
+	leftNeeded := lipgloss.Width(prefix) +
+		lipgloss.Width(theme.StatusDiamond) +
+		subagentDrawerColumnGap +
+		lipgloss.Width(leftText)
+	metaNeeded := lipgloss.Width(meta)
+
+	leftWidth := min(
+		leftNeeded,
+		max(subagentDrawerMinLeftWidth, available-subagentDrawerMinMetaWidth),
+	)
+	metaWidth := min(
+		metaNeeded,
+		max(
+			subagentDrawerMinMetaWidth,
+			available-leftWidth-subagentDrawerRowChrome-subagentDrawerColumnGap,
+		),
+	)
+	if leftWidth+metaWidth > available {
+		metaWidth = max(subagentDrawerMinMetaWidth, available-leftWidth)
 	}
-	line := left + strings.Repeat(" ", gap) + hintStyle.Render(right)
+	activityWidth := max(0, available-leftWidth-metaWidth)
+	if width < subagentDrawerCompactWidth {
+		activityWidth = max(1, width/subagentCompactActivityShare)
+		metaWidth = max(1, width/subagentCompactMetadataShare)
+		leftWidth = max(1, width-metaWidth-activityWidth-subagentDrawerColumnGap)
+	}
+
+	leftBudget := max(1, leftWidth-lipgloss.Width(prefix)-lipgloss.Width(theme.StatusDiamond)-subagentDrawerColumnGap)
+	left := prefix + m.subagentDiamond(row) + "  " + truncateRunes(status+"  "+name, leftBudget)
+	metaStr := truncateRunes(meta, metaWidth)
+	activity := truncateRunes(singleLine(firstNonEmptyStr(strings.TrimSpace(row.Activity), "·")), activityWidth)
+
+	// Build a line whose measured width is exactly the drawer width. This is
+	// important: lipgloss wraps a row when its styled content exceeds Width.
+	line := padRight(left, leftWidth) + "  " + padRight(metaStr, metaWidth) + "  " + padRight(activity, activityWidth)
 	if selected {
-		return lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).MaxWidth(width).Render(line)
+		return drawerSelectedStyle.Width(width).MaxWidth(width).Render(line)
 	}
-	return lipgloss.NewStyle().MaxWidth(width).Render(line)
+	return lipgloss.NewStyle().Width(width).MaxWidth(width).Render(line)
+}
+
+func singleLine(value string) string {
+	return strings.Join(strings.Fields(value), " ")
+}
+
+func (m Model) subagentRowMetadata(row subagentRow) string {
+	return formatCost(row.Cost) + "  " + formatCache(row.CacheHit, row.CacheMiss) + "  " +
+		firstNonEmptyStr(row.Model, "model?") + "  " + firstNonEmptyStr(row.Variant, "thinking?")
+}
+
+func padRight(value string, width int) string {
+	return value + strings.Repeat(" ", max(0, width-lipgloss.Width(value)))
 }
 
 // subagentRowRight keeps the actual resolved child model and thinking level
@@ -798,7 +816,7 @@ func (m Model) subagentRowRight(row subagentRow, available int) string {
 func (m Model) subagentDiamond(row subagentRow) string {
 	style := lipgloss.NewStyle()
 	switch {
-	case row.Live || row.Status == string(subagent.StatusQueued) || row.Status == string(subagent.StatusRunning) || row.Status == "pending":
+	case row.Live || row.Status == string(subagent.StatusQueued) || row.Status == string(subagent.StatusRunning):
 		if m.pulseOn {
 			style = style.Foreground(theme.PulseAccent(m.pulseT()))
 		} else {
@@ -1173,10 +1191,10 @@ func (m Model) updateSubagentLogKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 // closeSubagentLogToDrawer returns from a full-screen child log without
 // closing the sub-agent drawer, so another child can be selected immediately.
 func (m Model) closeSubagentLogToDrawer() Model {
-	m.subagentLogMode = false
+	m = m.setFocus(focusSubagents)
 	m.subagentLogItems = nil
 	m.subagentLogSelected = -1
-	m.subagentPickerMode = true
+	m.subagentDrawerCompact = false
 	m = m.reloadSubagentRows()
 	return m.resizeSubagentDrawer()
 }
@@ -1189,8 +1207,7 @@ func (m Model) openSelectedSubagentLog() (Model, tea.Cmd) {
 	m.subagentSelected = row
 	m.subagentLogItems = m.loadSubagentLogItems(row)
 	m.subagentLogSelected = m.lastSubagentLogMetaIndex()
-	m.subagentLogMode = true
-	m.subagentPickerMode = true // keep mode for key routing
+	m = m.setFocus(focusSubagentLog)
 	// A newly opened log starts from a clean viewport so resizeSubagentLogCard
 	// follows the live tail even if the previous agent log was scrolled up.
 	m.subagentLogVp.SetContent("")
@@ -1209,86 +1226,20 @@ func (m Model) loadSubagentLogItems(row subagentRow) []transcriptItem {
 		}
 		return []transcriptItem{{kind: itemNote, text: note}}
 	}
-	ctx := context.Background()
-	msgs, err := m.store.ListMessages(ctx, sessID)
+	res, err := projectSession(m.store, sessID, projectOpts{
+		CollapseReasoning: false,
+		SkipEmptyText:     true,
+	})
 	if err != nil {
 		return []transcriptItem{{kind: itemNote, text: "failed to load messages: " + err.Error()}}
 	}
-	tcs, err := m.store.ListToolCalls(ctx, sessID)
-	if err != nil {
-		return []transcriptItem{{kind: itemNote, text: "failed to load tools: " + err.Error()}}
-	}
-	byPart := make(map[string]db.ToolCall, len(tcs))
-	for _, tc := range tcs {
-		byPart[tc.PartID] = tc
-	}
-	var items []transcriptItem
-	for _, msg := range msgs {
-		if !msg.Visible {
-			continue
-		}
-		parts, err := m.store.ListParts(ctx, msg.ID)
-		if err != nil {
-			continue
-		}
-		for _, p := range parts {
-			switch p.Type {
-			case "text":
-				if p.Text == nil || *p.Text == "" {
-					continue
-				}
-				if msg.Role == "user" {
-					items = append(items, transcriptItem{
-						kind: itemUser, text: *p.Text,
-						when: itemTime(msg.TimeCreated, p.TimeCreated), part: p,
-					})
-				} else {
-					items = append(items, transcriptItem{
-						kind: itemAssistant, text: *p.Text,
-						when: itemTime(msg.TimeCreated, p.TimeCreated), part: p,
-					})
-				}
-			case "reasoning":
-				if p.Text == nil || *p.Text == "" {
-					continue
-				}
-				// Expanded by default in the sub-agent log view.
-				items = append(items, transcriptItem{
-					kind: itemReasoning, text: *p.Text, collapsed: false,
-					when: itemTime(msg.TimeCreated, p.TimeCreated), part: p,
-				})
-			case "tool":
-				tool := db.ToolCall{PartID: p.ID}
-				if stored, ok := byPart[p.ID]; ok {
-					tool = stored
-				} else {
-					tool.Tool = "tool"
-					if p.ToolName != nil {
-						tool.Tool = *p.ToolName
-					}
-					if p.ToolStatus != nil {
-						tool.Status = *p.ToolStatus
-					}
-				}
-				when := itemTime(msg.TimeCreated, p.TimeCreated)
-				if tool.TimeStart != nil {
-					when = *tool.TimeStart
-				}
-				// Edit cards stay open so the diff is always visible.
-				collapsed := tool.Tool != "edit"
-				items = append(items, transcriptItem{
-					kind: itemTool, collapsed: collapsed, when: when, tool: tool, part: p,
-				})
-			}
-		}
-	}
-	if len(items) == 0 {
+	if len(res.items) == 0 {
 		if row.Summary != "" {
 			return []transcriptItem{{kind: itemNote, text: row.Summary}}
 		}
 		return []transcriptItem{{kind: itemNote, text: "empty sub-agent transcript"}}
 	}
-	return items
+	return res.items
 }
 
 // renderSubagentLogContent paints log items with the same thinking, tool

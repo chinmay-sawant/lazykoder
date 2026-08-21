@@ -1,56 +1,176 @@
-// Package theme holds the single dark palette used by the chat TUI.
+// Package theme provides the color tokens shared by the chat TUI.
 package theme
 
 import (
 	"fmt"
 	"image/color"
 	"strconv"
+	"strings"
+	"sync"
 
 	"charm.land/lipgloss/v2"
 )
 
-// Hex values for the default theme. Bg is solid black so the terminal
-// profile color cannot show through empty cells.
+// Mode identifies one of the application color palettes.
+type Mode string
+
 const (
-	Bg      = "#000000"
-	Surface = "#000000"
-	Dialog  = "#111111"
-	Text    = "#eceae6"
-	Mute    = "#8a8680"
-	Accent  = "#d4a0c7"
-	Danger  = "#e06c75"
-	Border  = "#2a2a2a"
-	Good    = "#9ece6a"
-	// Edit diff row tints: solid soft washes on black (terminals rarely blend
-	// true alpha). Tuned like Grok Build / GitHub dark: very light greenish
-	// and reddish so the row is tinted, not painted neon.
-	EditPanel = "#0c120e"
-	EditAddBg = "#102418"
-	EditDelBg = "#241014"
-	EditMeta  = "#7a8574"
+	// ModeDark is the default high-contrast palette for coding work.
+	ModeDark Mode = "dark"
+	// ModeLight is the bright palette for daytime use.
+	ModeLight Mode = "light"
 )
 
-func ColorBg() color.Color      { return lipgloss.Color(Bg) }
-func ColorSurface() color.Color { return lipgloss.Color(Surface) }
-func ColorDialog() color.Color  { return lipgloss.Color(Dialog) }
-func ColorText() color.Color    { return lipgloss.Color(Text) }
-func ColorMute() color.Color    { return lipgloss.Color(Mute) }
-func ColorAccent() color.Color  { return lipgloss.Color(Accent) }
-func ColorDanger() color.Color  { return lipgloss.Color(Danger) }
-func ColorBorder() color.Color  { return lipgloss.Color(Border) }
-func ColorGood() color.Color    { return lipgloss.Color(Good) }
+// Palette contains semantic color tokens. Callers should use the Color*
+// helpers so a settings change updates the full interface together.
+type Palette struct {
+	Bg              string
+	Surface         string
+	Dialog          string
+	Composer        string
+	UserPanel       string
+	AssistantPanel  string
+	UserBorder      string
+	AssistantBorder string
+	Text            string
+	Mute            string
+	Accent          string
+	Danger          string
+	Border          string
+	Good            string
+	EditPanel       string
+	EditAddBg       string
+	EditDelBg       string
+	EditMeta        string
+}
 
-// ColorEditPanel is the soft greenish chrome behind the edit card header /
-// context lines (barely lighter than pure black).
-func ColorEditPanel() color.Color { return lipgloss.Color(EditPanel) }
+// The exported constants retain the default palette for integrations that
+// need a stable color literal. The Color* helpers follow the selected mode.
+const (
+	Bg              = "#050505"
+	Surface         = "#0d0d0d"
+	Dialog          = "#141414"
+	Composer        = "#101010"
+	UserPanel       = "#121412"
+	AssistantPanel  = "#102832"
+	UserBorder      = "#758576"
+	AssistantBorder = "#7aaec2"
+	Text            = "#e9e7e2"
+	Mute            = "#a6a29a"
+	Accent          = "#a3b18a"
+	Danger          = "#d17a7a"
+	Border          = "#30302e"
+	Good            = "#8fbf8f"
+	EditPanel       = "#151a15"
+	EditAddBg       = "#203021"
+	EditDelBg       = "#311e1e"
+	EditMeta        = "#b2baa9"
+)
 
-// ColorEditAddBg is a very light greenish full-row wash for + lines.
-func ColorEditAddBg() color.Color { return lipgloss.Color(EditAddBg) }
+var darkPalette = Palette{
+	Bg:              Bg,
+	Surface:         Surface,
+	Dialog:          Dialog,
+	Composer:        Composer,
+	UserPanel:       UserPanel,
+	AssistantPanel:  AssistantPanel,
+	UserBorder:      UserBorder,
+	AssistantBorder: AssistantBorder,
+	Text:            Text,
+	Mute:            Mute,
+	Accent:          Accent,
+	Danger:          Danger,
+	Border:          Border,
+	Good:            Good,
+	EditPanel:       EditPanel,
+	EditAddBg:       EditAddBg,
+	EditDelBg:       EditDelBg,
+	EditMeta:        EditMeta,
+}
 
-// ColorEditDelBg is a very light reddish full-row wash for - lines.
-func ColorEditDelBg() color.Color { return lipgloss.Color(EditDelBg) }
+var lightPalette = Palette{
+	Bg:              "#f7f8fc",
+	Surface:         "#ffffff",
+	Dialog:          "#edf2ff",
+	Composer:        "#ffffff",
+	UserPanel:       "#f5e8ff",
+	AssistantPanel:  "#e4f7fb",
+	UserBorder:      "#a855f7",
+	AssistantBorder: "#0891b2",
+	Text:            "#152033",
+	Mute:            "#52637a",
+	Accent:          "#7c3aed",
+	Danger:          "#dc2626",
+	Border:          "#b8c4d8",
+	Good:            "#15803d",
+	EditPanel:       "#edf8f0",
+	EditAddBg:       "#d9f5e4",
+	EditDelBg:       "#ffe5e9",
+	EditMeta:        "#54725a",
+}
 
-func ColorEditMeta() color.Color { return lipgloss.Color(EditMeta) }
+var selected = struct {
+	sync.RWMutex
+	mode Mode
+}{mode: ModeDark}
+
+// NormalizeMode returns a supported mode. Unknown and empty values use dark.
+func NormalizeMode(value string) Mode {
+	switch Mode(strings.ToLower(strings.TrimSpace(value))) {
+	case ModeLight:
+		return ModeLight
+	default:
+		return ModeDark
+	}
+}
+
+// SetMode changes the process-wide palette and returns the applied mode.
+func SetMode(value string) Mode {
+	mode := NormalizeMode(value)
+	selected.Lock()
+	selected.mode = mode
+	selected.Unlock()
+	return mode
+}
+
+// CurrentMode returns the selected palette mode.
+func CurrentMode() Mode {
+	selected.RLock()
+	defer selected.RUnlock()
+	return selected.mode
+}
+
+// Current returns a copy of the selected palette.
+func Current() Palette {
+	if CurrentMode() == ModeLight {
+		return lightPalette
+	}
+	return darkPalette
+}
+
+func ColorBg() color.Color              { return lipgloss.Color(Current().Bg) }
+func ColorSurface() color.Color         { return lipgloss.Color(Current().Surface) }
+func ColorDialog() color.Color          { return lipgloss.Color(Current().Dialog) }
+func ColorComposer() color.Color        { return lipgloss.Color(Current().Composer) }
+func ColorUserPanel() color.Color       { return lipgloss.Color(Current().UserPanel) }
+func ColorAssistantPanel() color.Color  { return lipgloss.Color(Current().AssistantPanel) }
+func ColorUserBorder() color.Color      { return lipgloss.Color(Current().UserBorder) }
+func ColorAssistantBorder() color.Color { return lipgloss.Color(Current().AssistantBorder) }
+func ColorText() color.Color            { return lipgloss.Color(Current().Text) }
+func ColorMute() color.Color            { return lipgloss.Color(Current().Mute) }
+func ColorAccent() color.Color          { return lipgloss.Color(Current().Accent) }
+func ColorDanger() color.Color          { return lipgloss.Color(Current().Danger) }
+func ColorBorder() color.Color          { return lipgloss.Color(Current().Border) }
+func ColorGood() color.Color            { return lipgloss.Color(Current().Good) }
+func ColorEditPanel() color.Color       { return lipgloss.Color(Current().EditPanel) }
+func ColorEditAddBg() color.Color       { return lipgloss.Color(Current().EditAddBg) }
+func ColorEditDelBg() color.Color       { return lipgloss.Color(Current().EditDelBg) }
+func ColorEditMeta() color.Color        { return lipgloss.Color(Current().EditMeta) }
+
+func TextHex() string   { return Current().Text }
+func BgHex() string     { return Current().Bg }
+func AccentHex() string { return Current().Accent }
+func MuteHex() string   { return Current().Mute }
 
 // StatusDiamond is the persistent status mark on every tool run card.
 const StatusDiamond = "◆"
@@ -71,18 +191,28 @@ func StatusColor(status string) color.Color {
 // PulseAccent returns a color between Border and Accent for thinking glow.
 // t is 0..1; values outside are clamped.
 func PulseAccent(t float64) color.Color {
+	return interpolate(Current().Border, Current().Accent, t)
+}
+
+// PulseAssistant returns a color between Border and AssistantBorder for the
+// assistant work rail. t is clamped to 0..1.
+func PulseAssistant(t float64) color.Color {
+	return interpolate(Current().Border, Current().AssistantBorder, t)
+}
+
+func interpolate(from, to string, t float64) color.Color {
 	if t < 0 {
 		t = 0
 	}
 	if t > 1 {
 		t = 1
 	}
-	br, bg, bb := hexRGB(Border)
-	ar, ag, ab := hexRGB(Accent)
+	fr, fg, fb := hexRGB(from)
+	tr, tg, tb := hexRGB(to)
 	return lipgloss.Color(fmt.Sprintf("#%02x%02x%02x",
-		br+int(float64(ar-br)*t),
-		bg+int(float64(ag-bg)*t),
-		bb+int(float64(ab-bb)*t),
+		fr+int(float64(tr-fr)*t),
+		fg+int(float64(tg-fg)*t),
+		fb+int(float64(tb-fb)*t),
 	))
 }
 
@@ -90,14 +220,12 @@ func hexRGB(hex string) (r, g, b int) {
 	if len(hex) != 7 || hex[0] != '#' {
 		return 0, 0, 0
 	}
-	// Parse each 2-hex-char channel into a uint8-sized value so the result
-	// always fits a signed int (avoids uint64->int overflow, satisfies G115).
-	ch := func(s string) int {
-		v, err := strconv.ParseUint(s, 16, 8)
+	channel := func(s string) int {
+		value, err := strconv.ParseUint(s, 16, 8)
 		if err != nil {
 			return 0
 		}
-		return int(v)
+		return int(value)
 	}
-	return ch(hex[1:3]), ch(hex[3:5]), ch(hex[5:7])
+	return channel(hex[1:3]), channel(hex[3:5]), channel(hex[5:7])
 }

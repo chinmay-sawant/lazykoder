@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>lazykoder architecture review - 2026-08-21</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --canvas: #090909;
+      --panel: #121212;
+      --panel-2: #181818;
+      --line: #343432;
+      --text: #ece9e2;
+      --muted: #ada9a0;
+      --accent: #a3b18a;
+      --blue: #8bb7c8;
+      --danger: #df8686;
+      --warn: #d7b274;
+      --code: #0d0d0d;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--canvas);
+      color: var(--text);
+      font: 16px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    main { max-width: 1120px; margin: 0 auto; padding: 42px 26px 72px; }
+    h1, h2, h3 { line-height: 1.2; margin: 0; }
+    h1 { font-size: clamp(2rem, 5vw, 3.8rem); letter-spacing: -0.06em; }
+    h2 { font-size: 1.35rem; margin-top: 42px; }
+    h3 { font-size: 1rem; color: var(--blue); margin-top: 26px; }
+    p { margin: 12px 0; }
+    a { color: var(--accent); }
+    .kicker { color: var(--accent); font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+    .lede { color: var(--muted); font-size: 1.05rem; max-width: 78ch; }
+    .meta, .summary, .finding, .note { border: 1px solid var(--line); background: var(--panel); }
+    .meta { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 28px 0; }
+    .meta div { min-width: 0; padding: 14px 16px; border-right: 1px solid var(--line); }
+    .meta div:last-child { border-right: 0; }
+    .meta code { overflow-wrap: anywhere; word-break: break-word; }
+    .label { display: block; color: var(--muted); font-size: 0.76rem; text-transform: uppercase; letter-spacing: 0.06em; }
+    .summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-top: 20px; }
+    .metric { padding: 16px; border-right: 1px solid var(--line); }
+    .metric:last-child { border-right: 0; }
+    .metric strong { display: block; font-size: 2rem; line-height: 1; margin-bottom: 7px; }
+    .metric span { color: var(--muted); font-size: 0.82rem; }
+    .finding { margin-top: 14px; padding: 18px; }
+    .finding h3 { margin: 0; }
+    .finding p { color: var(--muted); }
+    .tags { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+    .tag { border: 1px solid var(--line); color: var(--muted); padding: 2px 8px; font-size: 0.78rem; }
+    .p0 { color: var(--danger); border-color: var(--danger); }
+    .p1 { color: var(--warn); border-color: var(--warn); }
+    .p2 { color: var(--blue); border-color: var(--blue); }
+    pre { margin: 14px 0; padding: 13px; overflow-x: auto; background: var(--code); border-left: 3px solid var(--line); color: #d8d5cc; }
+    code { color: #d8d5cc; }
+    table { width: 100%; border-collapse: collapse; margin-top: 16px; background: var(--panel); }
+    th, td { text-align: left; vertical-align: top; padding: 12px; border: 1px solid var(--line); }
+    th { color: var(--muted); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em; }
+    td:first-child { white-space: nowrap; }
+    .note { border-left: 3px solid var(--accent); padding: 14px 16px; margin-top: 18px; color: var(--muted); }
+    ul { padding-left: 1.2rem; }
+    li { margin: 7px 0; }
+    footer { border-top: 1px solid var(--line); color: var(--muted); font-size: 0.86rem; margin-top: 48px; padding-top: 18px; }
+    @media (max-width: 720px) {
+      main { padding: 28px 16px 50px; }
+      .meta, .summary { grid-template-columns: 1fr; }
+      .meta div, .metric { border-right: 0; border-bottom: 1px solid var(--line); }
+      .meta div:last-child, .metric:last-child { border-bottom: 0; }
+      table { display: block; overflow-x: auto; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <p class="kicker">review only / improve-codebase</p>
+    <h1>Architecture review follow-up</h1>
+    <p class="lede">A current-source review of lazykoder after the completed v0.0.9 architecture track. The work now concentrates on safe outbound fetches, durable and parallel subagent behavior, and repeated policies with two owners.</p>
+
+    <section class="meta" aria-label="review metadata">
+      <div><span class="label">Frozen revision</span><code>7e29f271da5c56aa4d3be0e27d30ea4f666b034a</code></div>
+      <div><span class="label">Branch</span><code>chore/009-improve-architecture-withstyle</code></div>
+      <div><span class="label">Review date</span>2026-08-21</div>
+    </section>
+
+    <section>
+      <h2>What changed in the review picture</h2>
+      <p>The earlier v0.0.9 C1-C9 work remains closed. This review does not relabel it as unfinished. The new findings come from current paths that cross a real contract: a network connection, a durable job, concurrent tool calls, or a policy table used by multiple callers.</p>
+      <div class="summary" aria-label="finding summary">
+        <div class="metric"><strong>15</strong><span>candidate findings</span></div>
+        <div class="metric"><strong>12</strong><span>active checklist rows</span></div>
+        <div class="metric"><strong>1 / 6 / 5</strong><span>P0 / P1 / P2 rows</span></div>
+        <div class="metric"><strong>4</strong><span>refused or filtered items</span></div>
+      </div>
+      <div class="note">Three independent read-only passes inspected architecture, extension seams, and Go practice. They did not change code or run build, test, lint, or performance commands. The closure gates in the checklist remain unchecked.</div>
+    </section>
+
+    <section>
+      <h2>Phase order</h2>
+      <table>
+        <thead><tr><th>Phase</th><th>Purpose</th><th>Rows</th><th>Why it comes first</th></tr></thead>
+        <tbody>
+          <tr><td>P0</td><td>Egress integrity</td><td>EXT-03</td><td>A private address can be reached after a hostname passed preflight validation.</td></tr>
+          <tr><td>P1</td><td>Runtime contracts</td><td>PRAC-01, EXT-02, PRAC-04, EXT-01, PRAC-03, ARC-01</td><td>Subagent work must stay correctly scoped, typed, durable, and routed.</td></tr>
+          <tr><td>P2</td><td>Repeated policies</td><td>EXT-05, EXT-06, EXT-07, PRAC-05, ARC-03</td><td>Each change removes a real two-owner rule before the next feature makes it drift.</td></tr>
+          <tr><td>P3</td><td>Closure</td><td>Focused proof, race checks, full Go gates, terminal acceptance</td><td>Close rows from evidence, not from intent.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Priority findings</h2>
+
+      <article class="finding">
+        <div class="tags"><span class="tag p0">P0</span><span class="tag">EXT-03</span><span class="tag">defect</span></div>
+        <h3>Webfetch approves DNS before the actual connection</h3>
+        <p><code>webfetch.Run</code> resolves a hostname and checks the result before <code>client.Do</code>. The transport resolves again when it dials. A hostname can therefore move from a public address to loopback after approval. The same function overwrites a supplied client's redirect callback and never restores it.</p>
+        <pre><code>if isPrivateHost(u.Hostname()) { ... }
+client.CheckRedirect = func(req *http.Request, via []*http.Request) error { ... }
+resp, err := client.Do(req)</code></pre>
+        <p><strong>Change:</strong> one per-call egress client that shallow-copies caller configuration, preserves the original redirect callback, and validates every resolved peer IP immediately before dialing.</p>
+        <p><strong>Proof:</strong> inject a resolver or dialer that changes a hostname to loopback at dial time. Assert no connection, correct redirect validation, and unchanged caller-client behavior under <code>go test -race ./internal/tools/webfetch -count=1</code>.</p>
+      </article>
+
+      <article class="finding">
+        <div class="tags"><span class="tag p1">P1</span><span class="tag">PRAC-01</span><span class="tag">defect</span></div>
+        <h3>Parallel task calls share a mutable parent session binding</h3>
+        <p>Agent task calls run in separate goroutines. Each call then writes its parent session ID to <code>Host.ParentSessionID</code> before task handlers read it. Parallel calls can associate a job with the wrong parent.</p>
+        <pre><code>// Host.Execute
+h.ParentSessionID = parentSessionID
+
+// Agent.runTools
+go func() { results &lt;- a.executeTool(...) }()</code></pre>
+        <p><strong>Change:</strong> treat the parent session as invocation data and pass it to Host handlers. Do not add a mutex that serializes intended task parallelism.</p>
+      </article>
+
+      <article class="finding">
+        <div class="tags"><span class="tag p1">P1</span><span class="tag">EXT-02</span><span class="tag">defect</span></div>
+        <h3>Declared task result types do not govern Host responses</h3>
+        <p><code>internal/tools/task</code> defines and encodes result types, but <code>subagent.Host</code> returns a mix of Snapshot, Result, and map-shaped values. One-task and all-task waits differ even though the tool package already owns the response contract.</p>
+        <p><strong>Change:</strong> map Host values to task result structs and call the task encoders for each successful operation.</p>
+      </article>
+
+      <article class="finding">
+        <div class="tags"><span class="tag p1">P1</span><span class="tag">PRAC-04</span><span class="tag">defect</span></div>
+        <h3>Subagent jobs can start after durable persistence failed</h3>
+        <p>Manager persistence retries a reduced row and discards the final write error. Spawn can then start the runner even though restart, list, wait, cancel, and recovery have no durable job to find.</p>
+        <p><strong>Change:</strong> return the initial persistence error and do not launch the runner until its queued row exists. Surface later write failures to chat instead of claiming the job is restart-safe.</p>
+      </article>
+
+      <article class="finding">
+        <div class="tags"><span class="tag p1">P1</span><span class="tag">EXT-01</span><span class="tag">defect</span></div>
+        <h3>Child model selection can inherit the wrong endpoint or variant</h3>
+        <p>Manager chooses a child model ID from a spec or role override, then chooses endpoint and variant independently from runtime defaults. A Zen child can therefore be sent to a parent Go route, or inherit a variant that the child model does not support.</p>
+        <p><strong>Change:</strong> resolve child model ID, endpoint, valid variant, and context window as one profile at the chat and model-cache boundary.</p>
+      </article>
+
+      <article class="finding">
+        <div class="tags"><span class="tag p1">P1</span><span class="tag">PRAC-03</span><span class="tag">defect</span></div>
+        <h3>Agent retains caller-owned tool and bash policy slices</h3>
+        <p><code>agent.New</code> retains Options directly. A caller can mutate <code>ToolNames</code> or <code>BashAllowlist</code> after construction and change a live Agent's capabilities during a turn.</p>
+        <p><strong>Change:</strong> clone both slices at construction and prove post-construction mutation has no effect.</p>
+      </article>
+
+      <article class="finding">
+        <div class="tags"><span class="tag p1">P1</span><span class="tag">ARC-01</span><span class="tag">friction</span></div>
+        <h3>Database session creation selects a user-facing model default</h3>
+        <p><code>db.CreateSession</code> imports settings to fill a missing model, even though Agent, chat, and subagent callers own session identity. Persistence should store the chosen model, not choose one.</p>
+        <pre><code>if sess.Model == "" {
+    sess.Model = settings.DefaultModelID
+}</code></pre>
+      </article>
+    </section>
+
+    <section>
+      <h2>Repeated-policy work</h2>
+      <table>
+        <thead><tr><th>ID</th><th>Current duplication</th><th>Owning change</th><th>Smallest proof</th></tr></thead>
+        <tbody>
+          <tr><td>EXT-05</td><td><code>Load</code> and <code>LoadFile</code> restore omitted default-true fields differently.</td><td>One parsing and default-restoration path in settings.</td><td>Load the same partial JSON through both exports and compare Settings.</td></tr>
+          <tr><td>EXT-06</td><td>Settings and Manager keep independent role-to-tool tables.</td><td>One dependency-neutral role capability table.</td><td>Each public role result equals effective <code>Job.Tools</code>.</td></tr>
+          <tr><td>EXT-07</td><td>Read, write, and edit each repeat lexical and symlink containment checks.</td><td>One dependency-free workspace path resolver.</td><td>Shared allow, escape, symlink, and nonexistent-leaf cases.</td></tr>
+          <tr><td>PRAC-05</td><td>Runner and chat detect step limits by matching error text.</td><td>An Agent-owned step-limit sentinel or typed error.</td><td><code>errors.Is</code>, partial child completion, and <code>/continue</code> tests.</td></tr>
+          <tr><td>ARC-03</td><td>Model cache and OpenCode client each own Go/Zen routing rules.</td><td>One pure route helper in the concrete provider package.</td><td>Shared Go, Zen, and free-model route table test.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Items intentionally not planned</h2>
+      <ul>
+        <li>A Provider interface remains refused. There is one production OpenCode provider.</li>
+        <li>Replay continues to use durable db rows while live updates use agent deltas. They are different lifecycles.</li>
+        <li>Subagent depth remains one. No child exposes a nested task host or recovery contract.</li>
+        <li>Child preflight compaction remains disabled until child routing resolves a real context window.</li>
+        <li>The direct session-usage rollup does not reopen the completed SessionGraph work without current contract regression.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Handoff</h2>
+      <p>The matching execution ledger is <a href="phase-wise-checklist.md">phase-wise-checklist.md</a>. Start with <code>EXT-03</code>. Then implement named P1 rows in package-owned slices. Do not add a provider registry, plugin framework, virtual filesystem, second settings system, performance pass, or broad deletion work to this plan.</p>
+    </section>
+
+    <footer>
+      Generated from current source by three read-only review passes. This report records review evidence, not a claim that any listed fix has shipped.
+    </footer>
+  </main>
+</body>
+</html>

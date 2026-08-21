@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 )
 
 func TestParseModelsDevReadsPricesAndVariants(t *testing.T) {
@@ -56,10 +58,10 @@ func TestParseModelsDevReadsPricesAndVariants(t *testing.T) {
 	if !free.Free || !containsID(free.Variants, "max") {
 		t.Fatalf("free model = %+v", free)
 	}
-	if free.Endpoint != catalogZenChatURL {
+	if free.Endpoint != opencode.RouteForModel(opencode.DefaultBaseURL, free.ID).Endpoint {
 		t.Fatalf("free endpoint = %q, want zen chat URL", free.Endpoint)
 	}
-	if glm.Endpoint != catalogGoChatURL {
+	if glm.Endpoint != opencode.RouteForModel(opencode.DefaultBaseURL, glm.ID).Endpoint {
 		t.Fatalf("glm endpoint = %q, want go chat URL", glm.Endpoint)
 	}
 	if free.Provider != ProviderOpenCodeZen || glm.Provider != ProviderOpenCodeGo {
@@ -82,10 +84,10 @@ func TestMergeLiveFillsMissingOnly(t *testing.T) {
 
 func TestMergeLiveFillsMissingEndpoint(t *testing.T) {
 	live := map[string]Info{
-		"deepseek-v4-flash-free": {Endpoint: catalogZenChatURL},
+		"deepseek-v4-flash-free": {Endpoint: opencode.RouteForModel(opencode.DefaultBaseURL, "deepseek-v4-flash-free").Endpoint},
 	}
 	got := MergeLive(Info{ID: "deepseek-v4-flash-free"}, live)
-	if got.Endpoint != catalogZenChatURL {
+	if got.Endpoint != opencode.RouteForModel(opencode.DefaultBaseURL, "deepseek-v4-flash-free").Endpoint {
 		t.Fatalf("endpoint = %q", got.Endpoint)
 	}
 	kept := MergeLive(Info{ID: "deepseek-v4-flash-free", Endpoint: "https://custom.example/v1/chat/completions"}, live)

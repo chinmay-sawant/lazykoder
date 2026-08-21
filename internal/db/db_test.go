@@ -79,7 +79,7 @@ func TestPersistAndReopen(t *testing.T) {
 	if !strings.HasPrefix(sess.ID, "ses_") {
 		t.Fatalf("session id %q does not start with ses_", sess.ID)
 	}
-	if sess.Provider != "opencode-go" || sess.Model != "deepseek-v4-flash" || sess.Status != "active" {
+	if sess.Provider != "opencode-go" || sess.Model != "" || sess.Status != "active" {
 		t.Fatalf("defaults not applied: %+v", sess)
 	}
 	if sess.TimeCreated == 0 || sess.TimeUpdated == 0 {

@@ -16,17 +16,22 @@ import (
 // jumpBarRow is the screen row of the jump-to-latest icon above the input
 // box: the row right after the transcript lines.
 func (m Model) jumpBarRow() int {
+	m = m.ensureLayout()
+	if m.layout.jumpBarRow > 0 || m.layout.key.h > 0 {
+		return m.layout.jumpBarRow
+	}
 	return m.transcriptTop() + m.transcriptRenderHeight()
 }
 
 // mousePress starts a scrollbar drag when the click lands on a scrollbar
 // column, and jumps the viewport to the clicked position.
 func (m Model) mousePress(msg tea.MouseClickMsg) (Model, tea.Cmd) {
+	m = m.ensureLayout()
 	mu := msg.Mouse()
 	m.copyNotice = ""
 	// Questions are modal: only an option row may consume a click, and all
 	// other clicks stay inside the dialog instead of hitting the chat below.
-	if m.askMode {
+	if m.currentFocus() == focusAsk {
 		if mu.Button == tea.MouseLeft {
 			if idx, ok := m.askIndexAtScreen(mu.X, mu.Y); ok {
 				return m.resolveAskIndex(idx), nil
@@ -37,7 +42,8 @@ func (m Model) mousePress(msg tea.MouseClickMsg) (Model, tea.Cmd) {
 	// Model / variant chips live on the composer footer. Handle them before
 	// the prompt and sub-agent drawer so those never swallow chip clicks
 	// (including while the sub-agent strip is open).
-	if mu.Button == tea.MouseLeft && !m.pickerMode && !m.usageMode && !m.settingsMode && !m.sessionPickerMode && !m.subagentLogMode && !m.statusMode {
+	focus := m.currentFocus()
+	if mu.Button == tea.MouseLeft && focus != focusPicker && focus != focusUsage && focus != focusSettings && focus != focusSessions && focus != focusSubagentLog && focus != focusStatus {
 		if hit, which := m.footerChipHit(mu.X, mu.Y); hit {
 			m = m.clearTextSelection()
 			m = m.clearPromptSelection()
@@ -296,8 +302,13 @@ func (m Model) transcriptPosition(mu tea.Mouse) (textPosition, bool) {
 	if m.subagentPickerMode && !m.subagentLogMode && m.pointerInSubagentDrawer(mu.Y) {
 		return textPosition{}, false
 	}
-	top := m.transcriptTop()
-	height := m.transcriptRenderHeight()
+	m = m.ensureLayout()
+	top := m.layout.transcriptTop
+	height := m.layout.transcriptH
+	if height == 0 {
+		top = m.transcriptTop()
+		height = m.transcriptRenderHeight()
+	}
 	if mu.Y < top || mu.Y >= top+height || mu.X < 0 || mu.X >= m.transcript.Width() {
 		return textPosition{}, false
 	}
@@ -512,13 +523,23 @@ func (m Model) selectedText() (string, bool) {
 // stripTranscriptChrome removes left layout markers (work rail, user frame
 // curls) from a copied transcript slice. The markers stay visible in the TUI.
 func stripTranscriptChrome(line string) string {
-	for _, p := range []string{workRail + " ", "╭ ", "╰ "} {
+	line = ansi.Strip(line)
+	for _, p := range []string{"╭ ", "╰ "} {
 		if strings.HasPrefix(line, p) {
 			return strings.TrimPrefix(line, p)
 		}
 	}
+	if strings.HasPrefix(line, workRail+" ") && !strings.Contains(line[2:], workRail) {
+		return strings.TrimPrefix(line, workRail+" ")
+	}
 	if line == workRail {
 		return ""
+	}
+	// A selected row may include the panel's fixed-width right border. Strip
+	// border-only padding while preserving ordinary indentation in content.
+	if strings.Contains(line, "│") {
+		line = strings.ReplaceAll(line, "│", "")
+		line = strings.TrimRight(line, " ")
 	}
 	return line
 }

@@ -32,6 +32,8 @@ func TestUsageSlashCommandAndModal(t *testing.T) {
 
 func TestSettingsDisplaysOpenCodeUsage(t *testing.T) {
 	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 48})
+	m = mm.(Model)
 	m.usage = opencode.BillingUsage{
 		Rolling: opencode.BillingWindow{Percent: 26, Status: "ok"},
 		Weekly:  opencode.BillingWindow{Percent: 10, Status: "ok"},

@@ -38,7 +38,7 @@ func (m Model) openSessionPicker() Model {
 		m.sessionItems = nil
 		m.sessionCursor = 0
 		m.sessionHover = -1
-		m.sessionPickerMode = true
+		m = m.setFocus(focusSessions)
 		return m.refreshSessionPicker()
 	}
 	sessions, err := m.store.ListSessionsByDir(context.Background(), m.workdir)
@@ -60,12 +60,12 @@ func (m Model) openSessionPicker() Model {
 		m.sessionVp.FillHeight = true
 		m.sessionBuilt = true
 	}
-	m.sessionPickerMode = true
+	m = m.setFocus(focusSessions)
 	return m.resizeSessionPicker().refreshSessionPicker()
 }
 
 func (m Model) closeSessionPicker() Model {
-	m.sessionPickerMode = false
+	m = m.clearFocus(focusSessions)
 	m.sessionHover = -1
 	return m
 }
@@ -107,10 +107,12 @@ func (m Model) sessionPickerView() string {
 	}
 	footer := hintStyle.Width(innerW).Render("j/k select  •  enter open  •  esc/[x] cancel")
 	content := lipgloss.JoinVertical(lipgloss.Left, header, "", body, footer)
+	content = keepBackground(content, theme.ColorSurface())
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(theme.ColorBorder()).
-		Background(theme.ColorBg()).
+		BorderBackground(theme.ColorSurface()).
+		Background(theme.ColorSurface()).
 		Padding(1, cardPad).
 		Width(cardW).
 		Render(content)
