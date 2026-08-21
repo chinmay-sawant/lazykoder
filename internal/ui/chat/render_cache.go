@@ -179,6 +179,10 @@ func (m Model) itemRenderKey(index int, it transcriptItem) uint64 {
 		w.b(m.busy && m.pulseOn)
 		w.i(m.pulse)
 	}
+	// In-flight tool cards repaint their diamond every pulse tick.
+	if it.kind == itemTool && m.busy && m.pulseOn && toolInFlight(toolItemStatus(it)) {
+		w.i(m.pulse)
+	}
 	return w.h.Sum64()
 }
 

@@ -153,13 +153,17 @@ func (m Model) todoPanelView() string {
 	}
 	head := m.todoPanelHead(w, done, total, cancelled)
 	if !m.todosExpanded {
-		return head
+		return lipgloss.JoinVertical(lipgloss.Left, head, "")
 	}
 
 	m = m.resizeTodoPanel()
 	body := withScrollbar(m.todoVp.View(), m.todoVp.Width(), m.todoVp.Height(),
 		m.todoVp.ScrollPercent(), m.todoVp.TotalLineCount() > m.todoVp.Height())
-	return lipgloss.JoinVertical(lipgloss.Left, head, body)
+	// Trailing blank row keeps a breathing gap between the checklist and the
+	// first transcript row. Height consumers (transcriptRenderHeight,
+	// transcriptTop) read lipgloss.Height of the whole panel, so they track
+	// this row without extra math.
+	return lipgloss.JoinVertical(lipgloss.Left, head, body, "")
 }
 
 func (m Model) todoPanelBodyHeight() int {

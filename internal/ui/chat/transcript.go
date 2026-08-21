@@ -875,8 +875,7 @@ func (m Model) renderToolMode(tool db.ToolCall, part db.Part, collapsed bool, wh
 			label += "  " + formatDiffStat(add, del)
 		}
 	}
-	diamondColor := theme.StatusColor(status)
-	diamond := lipgloss.NewStyle().Foreground(diamondColor).Render(theme.StatusDiamond)
+	diamond := m.toolDiamond(status)
 	left := diamond + "  " + lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).Render(chevron+"  "+label)
 	header := m.alignMeta(left, formatClock(when))
 	bodyWidth := max(minPaneWidth, m.toolCardWidth())
@@ -915,6 +914,48 @@ func (m Model) renderToolMode(tool db.ToolCall, part db.Part, collapsed bool, wh
 		}
 	}
 	return card.Render(strings.Join(body, "\n"))
+}
+
+// toolInFlight reports whether a tool-run status means the call has not
+// finished yet, so its diamond should throb instead of sitting on a fixed
+// status color.
+func toolInFlight(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "", "pending", "running", "in_progress", "in-progress":
+		return true
+	default:
+		return false
+	}
+}
+
+// toolItemStatus resolves the effective status of a transcript tool item,
+// preferring the live ToolCall status over the part snapshot.
+func toolItemStatus(it transcriptItem) string {
+	if it.tool.Status != "" {
+		return it.tool.Status
+	}
+	if it.part.ToolStatus != nil {
+		return *it.part.ToolStatus
+	}
+	return ""
+}
+
+// toolDiamond is the status mark on a tool card: it throbs with the shared
+// pulse while the call is in flight and locks to the status color (green ok,
+// red failed, text otherwise) once the call is done.
+func (m Model) toolDiamond(status string) string {
+	style := lipgloss.NewStyle()
+	switch {
+	case toolInFlight(status):
+		if m.pulseOn {
+			style = style.Foreground(theme.PulseAccent(m.pulseT()))
+		} else {
+			style = style.Foreground(theme.StatusColor(status))
+		}
+	default:
+		style = style.Foreground(theme.StatusColor(status))
+	}
+	return style.Render(theme.StatusDiamond)
 }
 
 // renderEditTool draws the edit tool as a full-width card with soft green/red
