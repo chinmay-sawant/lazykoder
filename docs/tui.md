@@ -410,4 +410,4 @@ If you quit before the first send (no session row yet), the same logo prints
 with `lk (no session)` and `resume older runs with /resume or ctrl+s`. An
 empty title prints as `session name: untitled`.
 
-`ctrl+c` with text in the composer still copies and does not quit.
+`ctrl+c` with unselected text in the composer clears the prompt; `ctrl+a` then `ctrl+c` copies the draft.

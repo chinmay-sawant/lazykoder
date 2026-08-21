@@ -55,7 +55,7 @@ const (
 	pickerVpDefaultW = 58
 	pickerVpDefaultH = 10
 	// promptUndoLimit bounds the in-memory prompt edit history.
-	promptUndoLimit = 32
+	promptUndoLimit = 500
 	// copyNoticeDuration controls how long the clipboard confirmation stays visible.
 	copyNoticeDuration = 2 * time.Second
 	// projectInstructionsDuration controls how long the AGENTS.md notice stays
@@ -696,9 +696,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.slashFromPaste = strings.HasPrefix(m.prompt.Value(), "/")
 		return m, cmd
 	case tea.KeyPressMsg:
-		if msg.Mod.Contains(tea.ModCtrl) && msg.Code == 'c' {
-			if m.promptEditing() && m.prompt.Value() != "" {
-				// Fall through to updateKey: copy the input box content.
+		if msg.Mod.Contains(tea.ModCtrl) && (msg.Code == 'c' || msg.Code == 'C') {
+			if m.promptEditing() && (m.prompt.Value() != "" || m.promptSelectAll || m.promptSel.hasRange() || m.selection.hasRange()) {
+				// Fall through to updateKey: copy if text is selected, or clear the input box if not selected.
 			} else if m.quitConfirm {
 				return m.closeDone(), tea.Quit
 			} else {
@@ -712,7 +712,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		if msg.Mod.Contains(tea.ModCtrl) && msg.Code == 'z' && !m.confirmMode && !m.pickerMode && !m.sessionPickerMode && !m.subagentPickerMode {
+		if isUndoKey(msg) && !m.confirmMode && !m.pickerMode && !m.sessionPickerMode && !m.subagentPickerMode {
 			return m.undoPrompt(), nil
 		}
 		if msg.Mod.Contains(tea.ModCtrl) && msg.Code == 's' && !m.confirmMode && !m.pickerMode && !m.sessionPickerMode && !m.subagentPickerMode && !m.busy {

@@ -36,6 +36,21 @@ func isPromptNewline(key tea.KeyPressMsg) bool {
 	return false
 }
 
+func isUndoKey(key tea.KeyPressMsg) bool {
+	if key.Mod.Contains(tea.ModCtrl) && (key.Code == 'z' || key.Code == 'Z' || key.Code == 26) {
+		return true
+	}
+	switch strings.ToLower(key.String()) {
+	case "ctrl+z", "ctrl+shift+z":
+		return true
+	}
+	switch strings.ToLower(key.Keystroke()) {
+	case "ctrl+z", "ctrl+shift+z":
+		return true
+	}
+	return false
+}
+
 func (m Model) updateKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 	m.copyNotice = ""
 	// Keep composer mouse selection only for ctrl+c / ctrl+a; any other key clears it.
@@ -106,16 +121,33 @@ func (m Model) updateKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 			return m, nil
 		case 'c', 'C':
 			m.quitConfirm = false
-			// Prefer an active mouse/range selection, then select-all / whole draft.
+			// Only copy when text is actively selected (via ctrl+a, mouse drag in composer,
+			// transcript selection, or history browsing).
 			if text, ok := m.selectedPromptText(); ok {
 				m.copyNotice = "Text copied"
 				return m, tea.Batch(tea.SetClipboard(text), clearCopyNotice())
 			}
-			if m.prompt.Value() == "" {
-				return m, nil
+			if text, ok := m.selectedText(); ok {
+				m.copyNotice = "Text copied"
+				return m, tea.Batch(tea.SetClipboard(text), clearCopyNotice())
 			}
-			m.copyNotice = "Text copied"
-			return m, tea.Batch(tea.SetClipboard(m.prompt.Value()), clearCopyNotice())
+			if item, ok := m.selectedHistoryItem(); ok {
+				m.copyNotice = "Text copied"
+				return m, tea.Batch(tea.SetClipboard(item.text), clearCopyNotice())
+			}
+			// When text is not selected, ctrl+c clears the composer draft.
+			if m.prompt.Value() != "" {
+				m = m.rememberPrompt()
+				m.prompt.SetValue("")
+				m.prompt.SetHeight(m.promptHeight())
+				m.historyCursor = -1
+				m.historyDraft = ""
+				m.slashFromPaste = false
+				m.promptSelectAll = false
+				m = m.clearPromptSelection()
+				return m.syncPromptSlash(), nil
+			}
+			return m, nil
 		case 'e', 'E':
 			// Toggle last tool card (including edit) even while the prompt has text.
 			m.quitConfirm = false
@@ -123,6 +155,9 @@ func (m Model) updateKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 		case 'p', 'P':
 			m.quitConfirm = false
 			return m.toggleAllReasoning(), nil
+		case 'z', 'Z':
+			m.quitConfirm = false
+			return m.undoPrompt(), nil
 		}
 		var cmd tea.Cmd
 		m.prompt, cmd = m.prompt.Update(key)
@@ -461,6 +496,8 @@ func (m Model) undoPrompt() Model {
 	state := m.promptUndo[len(m.promptUndo)-1]
 	m.promptUndo = m.promptUndo[:len(m.promptUndo)-1]
 	m.prompt.SetValue(state.value)
+	m.prompt.CursorEnd()
+	m.prompt.SetHeight(m.promptHeight())
 	m.slashFromPaste = state.slashFromPaste
 	m.slashMode = false
 	m.slashCursor = 0
@@ -468,7 +505,7 @@ func (m Model) undoPrompt() Model {
 	m.historyCursor = -1
 	m.historyDraft = ""
 	m.promptSelectAll = false
-	return m
+	return m.syncPromptSlash()
 }
 
 func (m Model) selectedHistoryItem() (inputHistoryItem, bool) {

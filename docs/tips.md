@@ -35,7 +35,7 @@ the readable reference; keep the two in sync when adding or editing a tip.
 
 - type `@` to mention a project file
 - `ctrl+a` selects the whole input
-- `ctrl+c` copies the input, twice quits and prints `lk <session>`
+- `ctrl+c` clears input, `ctrl+a` then `ctrl+c` copies, twice quits and prints `lk <session>`
 - `up`/`down` browse your previous prompts
 
 ## Transcript and mouse

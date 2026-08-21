@@ -2,6 +2,7 @@ package chat
 
 import (
 	"fmt"
+	"image/color"
 	"path/filepath"
 	"strings"
 
@@ -16,6 +17,11 @@ import (
 )
 
 const composerFooterDetailGap = 2
+
+// composerFocusGlow is the static border glow strength while the user is
+// editing the draft: a dim step on the same border-to-accent ramp the pulse
+// uses, so focus reads as "lit" without competing with the busy throb.
+const composerFocusGlow = 0.3
 
 // lazykoderLogo is shown when /new clears the transcript, so a fresh session
 // gets the same LazyKoder identity as the quit screen.
@@ -395,10 +401,21 @@ func (m Model) promptLine() string {
 		text = withScrollbar(text, contentW, h, percent, true)
 	}
 	body := lipgloss.JoinVertical(lipgloss.Left, text, m.composerFooter(contentW))
+	// Lifted-panel look: the Dialog tint reads as translucent against the
+	// black transcript (terminals cannot blend true alpha). The border
+	// carries state: it throbs with the shared pulse while the agent works,
+	// holds a dim accent glow while the user edits, and stays muted idle.
+	var border color.Color = theme.ColorBorder()
+	switch {
+	case m.busy && m.pulseOn:
+		border = theme.PulseAccent(m.pulseT())
+	case m.promptEditing():
+		border = theme.PulseAccent(composerFocusGlow)
+	}
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(theme.ColorBorder()).
-		Background(theme.ColorSurface()).
+		BorderForeground(border).
+		Background(theme.ColorDialog()).
 		Width(max(minPaneWidth, m.width)).
 		Render(body)
 }
@@ -778,7 +795,7 @@ func (m Model) helpOverlay() string {
 		{"ctrl+a", "select all"},
 		{"ctrl+z", "undo prompt"},
 		{"c", "copy selection"},
-		{"ctrl+c", "copy; empty: quit twice"},
+		{"ctrl+c", "copy selected / clear / quit"},
 	}
 	keyStyle := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText())
 	actStyle := hintStyle

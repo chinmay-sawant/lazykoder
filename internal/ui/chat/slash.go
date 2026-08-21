@@ -148,6 +148,9 @@ func slashCommandRow(cmd slashCmd, selected, compact bool, cardW, nameW int, sel
 // updateSlash handles keys while the slash menu is open.
 func (m Model) updateSlashKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 	m = m.clearTextSelection()
+	if isUndoKey(key) {
+		return m.undoPrompt(), nil
+	}
 	switch key.Code {
 	case tea.KeyEscape:
 		m.slashMode = false

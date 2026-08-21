@@ -403,17 +403,23 @@ func TestPromptCtrlCAndCtrlA(t *testing.T) {
 	m := New(Options{Store: st, Client: deadClient(), Workdir: t.TempDir()})
 	m = typeText(m, "hello world")
 
+	// ctrl+c with unselected text in the input box clears the prompt (no copy).
 	m, cmd := updCmd(m, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
-	if !copyCmdContains(cmd, "hello world") {
-		t.Fatalf("ctrl+c in the input box did not copy the prompt: %v", cmd)
+	if cmd != nil {
+		t.Fatalf("ctrl+c on unselected text returned a command: %v", cmd)
 	}
-	if m.copyNotice != "Text copied" {
-		t.Fatalf("copyNotice = %q, want %q", m.copyNotice, "Text copied")
+	if got := m.prompt.Value(); got != "" {
+		t.Fatalf("ctrl+c did not clear the prompt: %q", got)
+	}
+	if m.copyNotice != "" {
+		t.Fatalf("copyNotice = %q, want empty", m.copyNotice)
 	}
 	if m.quitConfirm {
 		t.Fatal("ctrl+c with text in the input box triggered quit confirmation")
 	}
 
+	// Re-enter text and select all with ctrl+a.
+	m = typeText(m, "hello world")
 	m, cmd = updCmd(m, tea.KeyPressMsg{Code: 'a', Mod: tea.ModCtrl})
 	if cmd != nil {
 		t.Fatal("ctrl+a returned a command")
@@ -428,9 +434,16 @@ func TestPromptCtrlCAndCtrlA(t *testing.T) {
 		t.Fatalf("select-all highlight missing from view: %q", viewText(m))
 	}
 
+	// ctrl+c after ctrl+a copies the prompt and keeps the text.
 	m, cmd = updCmd(m, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	if !copyCmdContains(cmd, "hello world") {
 		t.Fatal("ctrl+c after ctrl+a did not copy the prompt")
+	}
+	if m.copyNotice != "Text copied" {
+		t.Fatalf("copyNotice = %q, want %q", m.copyNotice, "Text copied")
+	}
+	if got := m.prompt.Value(); got != "hello world" {
+		t.Fatalf("ctrl+c after ctrl+a mutated prompt value = %q", got)
 	}
 
 	// Select-all then type replaces the whole draft.
@@ -545,9 +558,10 @@ func TestScrollPositionPreservedOnNewContent(t *testing.T) {
 func TestAlertRowCopyNotice(t *testing.T) {
 	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
 	m = typeText(m, "hello world")
+	m, _ = updCmd(m, tea.KeyPressMsg{Code: 'a', Mod: tea.ModCtrl})
 	m, cmd := updCmd(m, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	if !copyCmdContains(cmd, "hello world") {
-		t.Fatalf("ctrl+c did not copy the prompt: %v", cmd)
+		t.Fatalf("ctrl+c after ctrl+a did not copy the prompt: %v", cmd)
 	}
 	v := viewText(m)
 	if !strings.Contains(v, "38;2;158;206;106") {
@@ -593,6 +607,7 @@ func TestTipsShowWhenIdle(t *testing.T) {
 	m.busy = false
 
 	m = typeText(m, "hello world")
+	m, _ = updCmd(m, tea.KeyPressMsg{Code: 'a', Mod: tea.ModCtrl})
 	m, cmd := updCmd(m, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	if !copyCmdContains(cmd, "hello world") {
 		t.Fatal("copy failed")
@@ -762,6 +777,7 @@ func TestAlertRowHoldsJumpBarAndAlert(t *testing.T) {
 	mm, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 	m = mm.(Model)
 	m = typeText(m, "hello")
+	m, _ = updCmd(m, tea.KeyPressMsg{Code: 'a', Mod: tea.ModCtrl})
 	m, _ = updCmd(m, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	if !m.jumpBarVisible() {
 		t.Fatal("jump bar should still be visible while scrolled up")
@@ -2856,5 +2872,112 @@ func TestSessionPickerEmptyList(t *testing.T) {
 	m = upd(m, tea.KeyPressMsg{Code: tea.KeyEscape})
 	if m.sessionPickerMode {
 		t.Fatal("empty picker not dismissible")
+	}
+}
+
+func TestCtrlCPastedTextClearedUnlessSelected(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+
+	// Simulate pasted text
+	mm, _ := m.Update(tea.PasteMsg{Content: "pasted multi-line\ncode snippet"})
+	m = mm.(Model)
+	if got := m.prompt.Value(); got != "pasted multi-line\ncode snippet" {
+		t.Fatalf("pasted text = %q", got)
+	}
+
+	// Pressing Ctrl+C without selection should clear the text and NOT copy to clipboard
+	m, cmd := updCmd(m, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	if cmd != nil {
+		t.Fatalf("ctrl+c without selection returned command: %v", cmd)
+	}
+	if got := m.prompt.Value(); got != "" {
+		t.Fatalf("ctrl+c did not clear pasted text, got %q", got)
+	}
+	if m.copyNotice != "" {
+		t.Fatalf("copyNotice = %q, want empty", m.copyNotice)
+	}
+	if m.quitConfirm {
+		t.Fatal("first ctrl+c with text should not arm quit confirm")
+	}
+
+	// Now that prompt is empty, next Ctrl+C arms quit confirmation
+	m, cmd = updCmd(m, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	if cmd != nil {
+		t.Fatalf("ctrl+c on empty prompt returned command: %v", cmd)
+	}
+	if !m.quitConfirm {
+		t.Fatal("ctrl+c on empty prompt should arm quit confirm")
+	}
+
+	// Subsequent Ctrl+C quits
+	m, cmd = updCmd(m, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	if cmd == nil || cmd() != (tea.QuitMsg{}) {
+		t.Fatalf("ctrl+c when armed did not quit: %v", cmd)
+	}
+
+	// Test Ctrl+A selection enables Ctrl+C copying
+	m = New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	mm, _ = m.Update(tea.PasteMsg{Content: "pasted code"})
+	m = mm.(Model)
+
+	m, _ = updCmd(m, tea.KeyPressMsg{Code: 'a', Mod: tea.ModCtrl})
+	if !m.promptSelectAll {
+		t.Fatal("ctrl+a did not set promptSelectAll")
+	}
+
+	m, cmd = updCmd(m, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	if !copyCmdContains(cmd, "pasted code") {
+		t.Fatalf("ctrl+c with ctrl+a did not copy text: %v", cmd)
+	}
+	if m.copyNotice != "Text copied" {
+		t.Fatalf("copyNotice = %q, want %q", m.copyNotice, "Text copied")
+	}
+	if got := m.prompt.Value(); got != "pasted code" {
+		t.Fatalf("ctrl+c with ctrl+a should preserve text, got %q", got)
+	}
+}
+
+func TestCtrlZUndoesLastKeys(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+
+	m = typeText(m, "hello")
+	if got := m.prompt.Value(); got != "hello" {
+		t.Fatalf("prompt value = %q, want %q", got, "hello")
+	}
+
+	// First Ctrl+Z undoes last typed character 'o' -> "hell"
+	m, _ = updCmd(m, tea.KeyPressMsg{Code: 'z', Mod: tea.ModCtrl})
+	if got := m.prompt.Value(); got != "hell" {
+		t.Fatalf("after first ctrl+z = %q, want %q", got, "hell")
+	}
+
+	// Second Ctrl+Z undoes 'l' -> "hel"
+	m, _ = updCmd(m, tea.KeyPressMsg{Code: 'z', Mod: tea.ModCtrl})
+	if got := m.prompt.Value(); got != "hel" {
+		t.Fatalf("after second ctrl+z = %q, want %q", got, "hel")
+	}
+
+	// Typing a new character 'p' after undo appends at cursor end -> "help"
+	m = typeText(m, "p")
+	if got := m.prompt.Value(); got != "help" {
+		t.Fatalf("typing after undo = %q, want %q", got, "help")
+	}
+
+	// Ctrl+Z undoes 'p' -> "hel"
+	m, _ = updCmd(m, tea.KeyPressMsg{Code: 'z', Mod: tea.ModCtrl})
+	if got := m.prompt.Value(); got != "hel" {
+		t.Fatalf("ctrl+z after typing = %q, want %q", got, "hel")
+	}
+
+	// Test undo in slash mode
+	m2 := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	m2 = typeRune(m2, '/')
+	m2 = typeText(m2, "sett")
+	if got := m2.prompt.Value(); got != "/sett" {
+		t.Fatalf("prompt value = %q, want %q", got, "/sett")
+	}
+	m2, _ = updCmd(m2, tea.KeyPressMsg{Code: 'z', Mod: tea.ModCtrl})
+	if got := m2.prompt.Value(); got != "/set" {
+		t.Fatalf("ctrl+z in slash mode = %q, want %q", got, "/set")
 	}
 }

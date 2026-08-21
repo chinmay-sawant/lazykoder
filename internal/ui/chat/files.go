@@ -240,6 +240,10 @@ func joinAtPickerRow(left, right string, width int) string {
 }
 
 func (m Model) updateFilePickerKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
+	if isUndoKey(key) {
+		m = m.closeFilePicker()
+		return m.undoPrompt(), nil
+	}
 	switch key.Code {
 	case tea.KeyEscape:
 		return m.closeFilePicker(), nil
