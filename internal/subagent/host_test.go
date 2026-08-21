@@ -3,9 +3,13 @@ package subagent
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/chinmay-sawant/lazykoder/internal/settings"
+	"github.com/chinmay-sawant/lazykoder/internal/tools/task"
 )
 
 func TestTaskSpecOmitsTimeoutFields(t *testing.T) {
@@ -35,6 +39,11 @@ type captureRunner struct {
 	timeout  time.Duration
 	depth    int
 	maxDepth int
+	endpoint string
+	variant  string
+	window   int64
+	tools    []string
+	ran      bool
 	release  chan struct{}
 }
 
@@ -43,6 +52,11 @@ func (r *captureRunner) Run(ctx context.Context, job Job) (Result, error) {
 	r.timeout = job.Timeout
 	r.depth = job.Depth
 	r.maxDepth = job.MaxDepth
+	r.endpoint = job.Endpoint
+	r.variant = job.Variant
+	r.window = job.ContextWindow
+	r.tools = append([]string{}, job.Tools...)
+	r.ran = true
 	r.mu.Unlock()
 	select {
 	case <-r.release:
@@ -86,7 +100,7 @@ func TestHostIgnoresModelTimeoutMS(t *testing.T) {
 	if status != "completed" {
 		t.Fatalf("status = %q result = %s", status, result)
 	}
-	var snap Snapshot
+	var snap task.SpawnResult
 	if err := json.Unmarshal([]byte(result), &snap); err != nil {
 		t.Fatalf("result json: %v %s", err, result)
 	}
@@ -194,14 +208,177 @@ func TestSnapshotReportsResolvedChildModel(t *testing.T) {
 	if status != "queued" && status != "running" && status != "completed" {
 		t.Fatalf("status = %q", status)
 	}
-	var snap Snapshot
-	if err := json.Unmarshal([]byte(result), &snap); err != nil {
+	var spawned task.SpawnResult
+	if err := json.Unmarshal([]byte(result), &spawned); err != nil {
 		t.Fatalf("result json: %v %s", err, result)
+	}
+	snap, ok := m.Status(spawned.ID)
+	if !ok {
+		t.Fatalf("status missing for %q", spawned.ID)
 	}
 	if snap.Model != "configured-child-model" {
 		t.Fatalf("snapshot model = %q, want resolved configured-child-model", snap.Model)
 	}
 	if snap.Variant != "high" {
 		t.Fatalf("snapshot variant = %q, want resolved high", snap.Variant)
+	}
+}
+
+func TestBuildJobUsesSelectedChildModelProfile(t *testing.T) {
+	r := &captureRunner{release: make(chan struct{})}
+	close(r.release)
+	cfg := NewConfig()
+	cfg.Model = "zen-child"
+	cfg.Variant = "high"
+	m := NewManager(cfg, r)
+	m.SetRuntime(Runtime{
+		Workdir:  t.TempDir(),
+		Model:    "go-parent",
+		Endpoint: "https://opencode.ai/zen/go/v1/chat/completions",
+		Variant:  "medium",
+		Profiles: []ModelProfile{{
+			ID:            "zen-child",
+			Endpoint:      "https://opencode.ai/zen/v1/chat/completions",
+			ContextWindow: 200_000,
+			Variants:      []string{"low", "high"},
+		}},
+	})
+	if _, err := m.Spawn(context.Background(), "ses_parent", "prt_1", Spec{Prompt: "inspect", Background: true}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		r.mu.Lock()
+		endpoint, variant, window := r.endpoint, r.variant, r.window
+		r.mu.Unlock()
+		if endpoint != "" {
+			if endpoint != "https://opencode.ai/zen/v1/chat/completions" || variant != "high" || window != 200_000 {
+				t.Fatalf("child profile = %q / %q / %d", endpoint, variant, window)
+			}
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("runner did not receive the child profile")
+}
+
+func TestManagerUsesSharedRoleCapabilities(t *testing.T) {
+	for _, role := range []string{RoleExplore, RolePlan, RoleGeneral} {
+		t.Run(role, func(t *testing.T) {
+			r := &captureRunner{release: make(chan struct{})}
+			close(r.release)
+			m := NewManager(NewConfig(), r)
+			if _, err := m.Spawn(context.Background(), "ses_parent", "", Spec{Prompt: "work", Role: role, Background: true}); err != nil {
+				t.Fatal(err)
+			}
+			deadline := time.Now().Add(2 * time.Second)
+			for time.Now().Before(deadline) {
+				r.mu.Lock()
+				got := append([]string{}, r.tools...)
+				ran := r.ran
+				r.mu.Unlock()
+				if ran {
+					want := (settings.Agents{}).ToolsForRole(role)
+					if strings.Join(got, ",") != strings.Join(want, ",") {
+						t.Fatalf("Job.Tools = %v, settings tools = %v", got, want)
+					}
+					return
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+			t.Fatal("runner did not receive role tools")
+		})
+	}
+}
+
+func TestHostKeepsParentSessionStateInvocationLocal(t *testing.T) {
+	r := newBlockingRunner("done")
+	m := NewManager(NewConfig(), r)
+	h := NewHost(m)
+	h.ParentSessionID = "ses_default"
+
+	type result struct {
+		parent string
+		err    error
+	}
+	results := make(chan result, 2)
+	for _, parent := range []string{"ses_a", "ses_b"} {
+		go func(parent string) {
+			_, _, _, err := h.Execute(context.Background(), parent, task.ToolTask, `{"prompt":"work","background":true}`, "prt_1")
+			results <- result{parent: parent, err: err}
+		}(parent)
+	}
+	for range 2 {
+		got := <-results
+		if got.err != nil {
+			t.Fatalf("Execute(%q): %v", got.parent, got.err)
+		}
+	}
+	if h.ParentSessionID != "ses_default" {
+		t.Fatalf("Host.ParentSessionID = %q, want unchanged default", h.ParentSessionID)
+	}
+	for _, parent := range []string{"ses_a", "ses_b"} {
+		if jobs := m.List(parent); len(jobs) != 1 || jobs[0].ParentSessionID != parent {
+			t.Fatalf("List(%q) = %+v", parent, jobs)
+		}
+	}
+	close(r.release)
+	for _, parent := range []string{"ses_a", "ses_b"} {
+		if _, err := m.WaitAll(context.Background(), parent); err != nil {
+			t.Fatalf("WaitAll(%q): %v", parent, err)
+		}
+	}
+}
+
+func TestHostEncodesDeclaredTaskResults(t *testing.T) {
+	r := newBlockingRunner("finished")
+	close(r.release)
+	m := NewManager(NewConfig(), r)
+	h := NewHost(m)
+	parentID := "ses_parent"
+
+	spawnJSON, _, status, err := h.Execute(context.Background(), parentID, task.ToolTask, `{"prompt":"inspect","background":true}`, "prt_1")
+	if err != nil || status != "completed" {
+		t.Fatalf("task: status=%q err=%v", status, err)
+	}
+	var spawn task.SpawnResult
+	if err := json.Unmarshal([]byte(spawnJSON), &spawn); err != nil || spawn.ID == "" {
+		t.Fatalf("spawn result = %s, err=%v", spawnJSON, err)
+	}
+
+	listJSON, _, _, err := h.Execute(context.Background(), parentID, task.ToolTaskList, `{}`, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var list task.ListResult
+	if err := json.Unmarshal([]byte(listJSON), &list); err != nil || len(list.Tasks) != 1 {
+		t.Fatalf("list result = %s, err=%v", listJSON, err)
+	}
+
+	statusJSON, _, _, err := h.Execute(context.Background(), parentID, task.ToolTaskStatus, `{"id":"`+spawn.ID+`"}`, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var taskStatus task.StatusResult
+	if err := json.Unmarshal([]byte(statusJSON), &taskStatus); err != nil || taskStatus.Task.ID != spawn.ID {
+		t.Fatalf("status result = %s, err=%v", statusJSON, err)
+	}
+
+	waitJSON, _, _, err := h.Execute(context.Background(), parentID, task.ToolTaskWait, `{}`, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wait task.WaitResult
+	if err := json.Unmarshal([]byte(waitJSON), &wait); err != nil || len(wait.Tasks) != 1 {
+		t.Fatalf("wait result = %s, err=%v", waitJSON, err)
+	}
+
+	cancelJSON, _, _, err := h.Execute(context.Background(), parentID, task.ToolTaskCancel, `{"id":"`+spawn.ID+`"}`, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cancel task.CancelResult
+	if err := json.Unmarshal([]byte(cancelJSON), &cancel); err != nil || cancel.ID != spawn.ID {
+		t.Fatalf("cancel result = %s, err=%v", cancelJSON, err)
 	}
 }

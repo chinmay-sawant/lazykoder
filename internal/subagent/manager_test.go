@@ -2,6 +2,7 @@ package subagent
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -236,6 +237,63 @@ func TestDisabled(t *testing.T) {
 	_, err := m.Spawn(context.Background(), "s", "p", Spec{Prompt: "nope"})
 	if err == nil {
 		t.Fatal("expected disabled error")
+	}
+}
+
+func TestSpawnDoesNotStartWhenInitialPersistFails(t *testing.T) {
+	st := openSubagentTestStore(t)
+	parent, err := st.CreateSession(context.Background(), db.Session{Directory: t.TempDir(), Title: "parent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := newBlockingRunner("must not run")
+	m := NewManager(NewConfig(), r)
+	m.SetStore(st)
+	m.writeJob = func(context.Context, db.SubagentJob) error { return errors.New("store write failed") }
+	_, err = m.Spawn(context.Background(), parent.ID, "", Spec{Prompt: "durable", Background: true})
+	if err == nil || !strings.Contains(err.Error(), "persist queued job") {
+		t.Fatalf("Spawn() error = %v", err)
+	}
+	select {
+	case <-r.started:
+		t.Fatal("runner started before the queued row was durable")
+	case <-time.After(50 * time.Millisecond):
+	}
+	if persistErr := m.TakePersistenceError(); persistErr == nil {
+		t.Fatal("persistence failure was not exposed by Manager")
+	}
+}
+
+func TestRecoverSurfacesRecoveryWriteFailure(t *testing.T) {
+	ctx := context.Background()
+	st := openSubagentTestStore(t)
+	parent, err := st.CreateSession(ctx, db.Session{Directory: t.TempDir(), Title: "parent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UnixMilli()
+	if err := st.UpsertSubagentJob(ctx, db.SubagentJob{
+		ID:              "sub_recovery_write",
+		ParentSessionID: parent.ID,
+		Name:            "recover",
+		Role:            RoleExplore,
+		Status:          string(StatusQueued),
+		Prompt:          "resume",
+		MaxSteps:        2,
+		TimeCreated:     now,
+		TimeUpdated:     now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	m := NewManager(NewConfig(), newBlockingRunner("must not run"))
+	m.SetStore(st)
+	m.writeJob = func(context.Context, db.SubagentJob) error { return errors.New("store write failed") }
+	err = m.Recover(ctx)
+	if err == nil || !strings.Contains(err.Error(), "persist recovery failure") {
+		t.Fatalf("Recover() error = %v", err)
+	}
+	if persistErr := m.TakePersistenceError(); persistErr == nil || !strings.Contains(persistErr.Error(), "persist recovery failure") {
+		t.Fatalf("TakePersistenceError() = %v", persistErr)
 	}
 }
 

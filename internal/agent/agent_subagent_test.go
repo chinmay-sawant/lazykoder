@@ -9,6 +9,24 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 )
 
+func TestNewCopiesCapabilityPolicySlices(t *testing.T) {
+	tools := []string{"read", "bash"}
+	allowlist := []string{"git", "go"}
+	a := New(nil, nil, t.TempDir(), Options{ToolNames: tools, BashAllowlist: allowlist})
+	tools[0] = "write"
+	allowlist[0] = "rm"
+	if got := a.opts.ToolNames[0]; got != "read" {
+		t.Fatalf("ToolNames changed through caller slice: %q", got)
+	}
+	if got := a.opts.BashAllowlist[0]; got != "git" {
+		t.Fatalf("BashAllowlist changed through caller slice: %q", got)
+	}
+	withoutPolicy := New(nil, nil, t.TempDir(), Options{})
+	if withoutPolicy.opts.ToolNames != nil || withoutPolicy.opts.BashAllowlist != nil {
+		t.Fatal("nil policy slices should stay nil")
+	}
+}
+
 // TestAdvertiseBaseTools ensures the provider sees more than bash.
 func TestAdvertiseBaseTools(t *testing.T) {
 	specs := toolSpecsFor(nil, nil)

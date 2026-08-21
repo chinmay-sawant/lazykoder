@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/chinmay-sawant/lazykoder/internal/roles"
 )
 
 const (
@@ -167,20 +169,9 @@ func Path(workspaceDir string) string {
 	return filepath.Join(workspaceDir, FileName)
 }
 
-// Load reads path. Missing file returns defaults. Invalid values are clamped.
+// Load reads path and restores defaults omitted by older or partial files.
 func Load(path string) (Settings, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return Default(), nil
-		}
-		return Default(), fmt.Errorf("settings: read %s: %w", path, err)
-	}
-	var s Settings
-	if err := json.Unmarshal(data, &s); err != nil {
-		return Default(), fmt.Errorf("settings: parse %s: %w", path, err)
-	}
-	return s.normalized(), nil
+	return load(path)
 }
 
 // Save writes s to path (creates parent dirs as needed).
@@ -246,16 +237,7 @@ func (a Agents) EffectiveTimeout() time.Duration {
 
 // ToolsForRole returns the tool allow-list for a sub-agent role.
 func (a Agents) ToolsForRole(role string) []string {
-	switch strings.TrimSpace(role) {
-	case "general":
-		return []string{"bash", "read", "grep", "write", "edit", "webfetch"}
-	case "explore", "plan":
-		// Shell for listing; grep for fast content search; no write/edit.
-		// policy.Classify still gates destructive bash (rm, etc.).
-		return []string{"bash", "read", "grep", "webfetch"}
-	default:
-		return []string{"bash", "read", "grep", "webfetch"}
-	}
+	return roles.Tools(role)
 }
 
 func (s Settings) normalized() Settings {
@@ -422,8 +404,12 @@ func jsonHasKey(raw []byte, path ...string) bool {
 	return true
 }
 
-// LoadFile is Load with default-true LimitEnabled when the key is omitted.
+// LoadFile is retained for callers that use the older name.
 func LoadFile(path string) (Settings, error) {
+	return load(path)
+}
+
+func load(path string) (Settings, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {

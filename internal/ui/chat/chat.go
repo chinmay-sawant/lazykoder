@@ -1042,7 +1042,7 @@ func (m Model) finishTurn(err error) Model {
 }
 
 func isStepLimitErr(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "step limit reached")
+	return errors.Is(err, agent.ErrStepLimit)
 }
 
 func tokensPerSec(generated int64, elapsed time.Duration) float64 {

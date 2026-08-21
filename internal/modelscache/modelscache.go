@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 )
 
 // DefaultTTL is how long a cached model list stays fresh.
@@ -22,8 +24,8 @@ const cacheMode = 0o600
 
 // Known OpenCode provider labels stored on each model row.
 const (
-	ProviderOpenCodeGo  = "opencode go"
-	ProviderOpenCodeZen = "opencode zen"
+	ProviderOpenCodeGo  = opencode.ProviderGo
+	ProviderOpenCodeZen = opencode.ProviderZen
 )
 
 // Info is one cached model: context window, USD per million tokens,
@@ -79,7 +81,7 @@ func ContextOf(infos []Info, id string) int {
 	return 0
 }
 
-// EndpointOf returns the stored chat-completions URL for id, or "".
+// EndpointOf returns the stored chat-completions URL for id, or an empty value.
 func EndpointOf(infos []Info, id string) string {
 	if info, ok := InfoOf(infos, id); ok {
 		return info.Endpoint
@@ -101,15 +103,16 @@ func ProviderOf(infos []Info, id string) string {
 
 // ProviderFromEndpoint maps a chat URL or free-model id to a provider label.
 func ProviderFromEndpoint(endpoint, id string) string {
+	if endpoint == "" {
+		return opencode.RouteForModel(opencode.DefaultBaseURL, id).Provider
+	}
 	switch {
 	case strings.Contains(endpoint, "/zen/go/"):
 		return ProviderOpenCodeGo
 	case strings.Contains(endpoint, "/zen/"):
 		return ProviderOpenCodeZen
-	case isFreeID(id):
-		return ProviderOpenCodeZen
 	case id != "":
-		return ProviderOpenCodeGo
+		return opencode.RouteForModel(opencode.DefaultBaseURL, id).Provider
 	default:
 		return ""
 	}

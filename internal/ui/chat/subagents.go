@@ -149,6 +149,11 @@ func (m Model) ensureSubagentBuilt() Model {
 // openSubagentDrawerIfNew) or the user reopens via /agents or the subs:N chip.
 func (m Model) syncSubagentDrawer() Model {
 	m = m.ensureSubagentBuilt()
+	if m.subMgr != nil {
+		if err := m.subMgr.TakePersistenceError(); err != nil {
+			m.err = "subagent state was not saved: " + err.Error()
+		}
+	}
 	m = m.reloadSubagentRows()
 	if len(m.subagentItems) == 0 {
 		return m

@@ -67,6 +67,10 @@ fallback otherwise). Prefer this over reading many files to find symbols.
 - Input: `{"url": "...", "format": "markdown"|"text"}`.
 - http/https only (file:// and other schemes rejected). 30s timeout, 5 MiB
   body cap, `truncated` + `content_type` in metadata.
+- Local, private, link-local, multicast, and metadata destinations are
+  rejected before the request and again at dial time. Redirects use the same
+  check. `webfetch` copies a supplied client and never changes its redirect
+  callback.
 
 ## Task tools (parent only)
 
@@ -97,6 +101,8 @@ lifecycle is `internal/subagent.Manager` + `AgentRunner`. Job handles are
 persisted in SQLite (`subagent_jobs`): after a crash or app restart,
 `task_list` / `task_status` / `task_wait` still return finished summaries,
 and open jobs are resumed (same child session when possible).
+Task responses use declared `SpawnResult`, `ListResult`, `StatusResult`,
+`WaitResult`, and `CancelResult` JSON shapes.
 
 ### Child roles
 

@@ -431,7 +431,7 @@ func TestModelInfosStampsGoEndpoint(t *testing.T) {
 	if len(infos) != 1 || infos[0].Endpoint != srv.URL+"/chat/completions" {
 		t.Fatalf("infos = %+v", infos)
 	}
-	if infos[0].Provider != providerGo {
+	if infos[0].Provider != ProviderGo {
 		t.Fatalf("go provider = %q", infos[0].Provider)
 	}
 }
@@ -479,7 +479,7 @@ func TestFreeModelInfosStampsZenEndpointAndAuth(t *testing.T) {
 	if zenModels[0].Endpoint != srv.URL+"/zen/v1/chat/completions" {
 		t.Fatalf("zen endpoint = %q", zenModels[0].Endpoint)
 	}
-	if zenModels[0].Provider != providerZen {
+	if zenModels[0].Provider != ProviderZen {
 		t.Fatalf("zen provider = %q", zenModels[0].Provider)
 	}
 }
@@ -528,6 +528,28 @@ func TestChatURLHelpers(t *testing.T) {
 	}
 	if got := ChatURLForModel(goBase, "deepseek-v4-flash"); got != goBase+"/chat/completions" {
 		t.Fatalf("go model URL = %q", got)
+	}
+}
+
+func TestRouteForModel(t *testing.T) {
+	goBase := "https://opencode.ai/zen/go/v1"
+	tests := []struct {
+		name     string
+		id       string
+		endpoint string
+		provider string
+	}{
+		{name: "go", id: "deepseek-v4-flash", endpoint: goBase + "/chat/completions", provider: ProviderGo},
+		{name: "zen free", id: "deepseek-v4-flash-free", endpoint: "https://opencode.ai/zen/v1/chat/completions", provider: ProviderZen},
+		{name: "big pickle", id: "big-pickle", endpoint: "https://opencode.ai/zen/v1/chat/completions", provider: ProviderZen},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			route := RouteForModel(goBase, tt.id)
+			if route.Endpoint != tt.endpoint || route.Provider != tt.provider {
+				t.Fatalf("RouteForModel(%q) = %+v", tt.id, route)
+			}
+		})
 	}
 }
 

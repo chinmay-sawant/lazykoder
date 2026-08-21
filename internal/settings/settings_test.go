@@ -206,6 +206,27 @@ func TestLoadPartialMaxStepsKeepsLimitOn(t *testing.T) {
 	}
 }
 
+func TestLoadAndLoadFileRestoreTheSameDefaults(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte(`{"slot":{"max_steps":4}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loadedFile, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(loaded, loadedFile) {
+		t.Fatalf("Load() = %+v, LoadFile() = %+v", loaded, loadedFile)
+	}
+	if !loaded.Slot.LimitEnabled || !loaded.Agents.Enabled || !loaded.Compaction.Auto {
+		t.Fatalf("partial defaults = %+v", loaded)
+	}
+}
+
 func TestClampMaxSteps(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.json")
 	if err := os.WriteFile(path, []byte(`{"slot":{"max_steps":9999,"limit_enabled":true}}`), 0o600); err != nil {

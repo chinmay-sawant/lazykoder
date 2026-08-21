@@ -4,7 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
+
+	"github.com/chinmay-sawant/lazykoder/internal/workspace"
 )
 
 // fileMode is the mode of files written by the write tool.
@@ -42,58 +43,9 @@ func Run(filePath, contents, rootDir string) (Result, error) {
 
 // resolve returns the absolute cleaned path of filePath inside rootDir, rejecting escapes.
 func resolve(filePath, rootDir string) (string, error) {
-	var p string
-	if filepath.IsAbs(filePath) {
-		p = filepath.Clean(filePath)
-	} else {
-		p = filepath.Join(rootDir, filepath.Clean(filePath))
-	}
-	abs, err := filepath.Abs(p)
+	abs, err := workspace.Resolve(filePath, rootDir)
 	if err != nil {
 		return "", fmt.Errorf("write: %s: %w", filePath, err)
-	}
-	abs = filepath.Clean(abs)
-	root, err := filepath.Abs(rootDir)
-	if err != nil {
-		return "", fmt.Errorf("write: %s: %w", filePath, err)
-	}
-	root = filepath.Clean(root)
-	if !inside(abs, root) {
-		return "", fmt.Errorf("write: %s: path escapes session directory", abs)
-	}
-	rootReal, err := filepath.EvalSymlinks(root)
-	if err != nil {
-		return "", fmt.Errorf("write: %s: %w", abs, err)
-	}
-	resolved, err := evalResolved(abs)
-	if err != nil {
-		return "", fmt.Errorf("write: %s: %w", abs, err)
-	}
-	if !inside(resolved, rootReal) {
-		return "", fmt.Errorf("write: %s: path escapes session directory via symlink", abs)
 	}
 	return abs, nil
-}
-
-func inside(p, root string) bool {
-	rel, err := filepath.Rel(root, p)
-	if err != nil {
-		return false
-	}
-	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel))
-}
-
-func evalResolved(p string) (string, error) {
-	cur := p
-	for {
-		resolved, err := filepath.EvalSymlinks(cur)
-		if err == nil {
-			return resolved, nil
-		}
-		parent := filepath.Dir(cur)
-		if parent == cur {
-			return "", err
-		}
-		cur = parent
-	}
 }

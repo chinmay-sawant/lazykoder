@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/chinmay-sawant/lazykoder/internal/policy"
+	"github.com/chinmay-sawant/lazykoder/internal/roles"
 )
 
 // Status is the lifecycle state of a sub-agent job.
@@ -27,9 +28,9 @@ const (
 
 // Role names used for tool allowlists and writer locking.
 const (
-	RoleExplore = "explore"
-	RolePlan    = "plan"
-	RoleGeneral = "general"
+	RoleExplore = roles.Explore
+	RolePlan    = roles.Plan
+	RoleGeneral = roles.General
 )
 
 // Spec is the parent-facing spawn request (task tool args).
@@ -94,8 +95,11 @@ type Job struct {
 	Model    string
 	Endpoint string
 	Variant  string
-	MaxSteps int
-	Timeout  time.Duration
+	// ContextWindow is the selected child model's known context capacity.
+	// Zero means the model cache did not provide one.
+	ContextWindow int64
+	MaxSteps      int
+	Timeout       time.Duration
 	// Depth is the nesting level of this job (1 = direct child of the chat parent).
 	Depth int
 	// MaxDepth is copied from Config; Host stays nil when Depth >= MaxDepth.
@@ -111,6 +115,15 @@ type Job struct {
 	OnSession func(childSessionID string)
 }
 
+// ModelProfile is the child-model data chosen at the chat/model seam.
+// Manager selects exactly one profile after resolving a child model override.
+type ModelProfile struct {
+	ID            string
+	Endpoint      string
+	ContextWindow int64
+	Variants      []string
+}
+
 // Runner executes a child job. Production uses an AgentRunner; tests use fakes.
 type Runner interface {
 	Run(ctx context.Context, job Job) (Result, error)
@@ -122,6 +135,7 @@ type Runtime struct {
 	Model    string
 	Endpoint string
 	Variant  string
+	Profiles []ModelProfile
 	Confirm  func(dec policy.Decision, subject string) (bool, error)
 	Ask      func(question string, options []string) (int, error)
 }

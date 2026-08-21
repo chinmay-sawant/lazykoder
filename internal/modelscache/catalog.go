@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+
+	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 )
 
 // modelsDevURL is the live OpenCode catalog used to fill prices, cache
@@ -96,23 +98,11 @@ func ParseModelsDev(raw []byte) (map[string]Info, error) {
 	return out, nil
 }
 
-// Known OpenCode chat-completions URLs. Kept here so the catalog can fill
-// models.json without importing the HTTP client. Must match the defaults
-// in internal/provider/opencode.
-const (
-	catalogGoChatURL  = "https://opencode.ai/zen/go/v1/chat/completions"
-	catalogZenChatURL = "https://opencode.ai/zen/v1/chat/completions"
-)
-
 func liveInfo(id string, m liveModel, provider string) Info {
 	info := Info{ID: id, Context: m.Limit.Context, Variants: effortVariants(m.ReasoningOptions)}
-	switch provider {
-	case "opencode-go":
-		info.Endpoint = catalogGoChatURL
-		info.Provider = ProviderOpenCodeGo
-	case "opencode":
-		info.Endpoint = catalogZenChatURL
-		info.Provider = ProviderOpenCodeZen
+	if route, ok := opencode.RouteForCatalogProvider(opencode.DefaultBaseURL, provider); ok {
+		info.Endpoint = route.Endpoint
+		info.Provider = route.Provider
 	}
 	if m.Cost != nil {
 		info.InputPerM = m.Cost.Input

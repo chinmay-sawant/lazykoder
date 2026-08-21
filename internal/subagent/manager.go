@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/chinmay-sawant/lazykoder/internal/db"
+	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
+	"github.com/chinmay-sawant/lazykoder/internal/roles"
 )
 
 // Poll tuning for recovering a job that is open in the store but not yet in
@@ -38,6 +40,10 @@ type Manager struct {
 	writerMu sync.Mutex
 
 	rt Runtime
+
+	persistMu  sync.Mutex
+	persistErr error
+	writeJob   func(context.Context, db.SubagentJob) error
 }
 
 type handle struct {
@@ -181,8 +187,6 @@ func (m *Manager) Spawn(ctx context.Context, parentSessionID, parentPartID strin
 			StartedAt: now,
 		},
 	}
-	m.handles[id] = h
-
 	job := m.buildJob(id, parentSessionID, parentPartID, name, role, spec, timeout, rt, "", false)
 	h.snap.Model = job.Model
 	h.snap.Variant = job.Variant
@@ -191,9 +195,14 @@ func (m *Manager) Spawn(ctx context.Context, parentSessionID, parentPartID strin
 		h.mu.Lock()
 		h.snap.ChildSessionID = childSessionID
 		h.mu.Unlock()
-		m.persistHandle(h)
+		_ = m.persistHandle(h)
 	}
-	m.persistHandleLocked(h) // still holding m.mu
+	if err := m.persistHandleLocked(h); err != nil {
+		m.mu.Unlock()
+		cancel()
+		return Snapshot{}, fmt.Errorf("subagent: persist queued job: %w", err)
+	}
+	m.handles[id] = h
 	m.mu.Unlock()
 
 	go m.execute(jobCtx, h, job, role, runner)
@@ -223,13 +232,19 @@ func (m *Manager) Recover(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	var recoverErr error
 	for _, row := range open {
 		if err := m.resumeJob(ctx, row, runner, rt); err != nil {
 			// Mark failed so a bad row does not loop forever on every start.
-			_ = store.UpsertSubagentJob(ctx, rowWithStatus(row, string(StatusFailed), "", err.Error()))
+			if persistErr := m.writeSubagentJob(ctx, rowWithStatus(row, string(StatusFailed), "", err.Error())); persistErr != nil {
+				persistErr = fmt.Errorf("subagent: persist recovery failure for %q: %w", row.ID, persistErr)
+				m.recordPersistenceError(persistErr)
+				return persistErr
+			}
+			recoverErr = err
 		}
 	}
-	return nil
+	return recoverErr
 }
 
 func (m *Manager) resumeJob(ctx context.Context, row db.SubagentJob, runner Runner, rt Runtime) error {
@@ -285,7 +300,6 @@ func (m *Manager) resumeJob(ctx context.Context, row db.SubagentJob, runner Runn
 			StartedAt:       started,
 		},
 	}
-	m.handles[row.ID] = h
 	job := m.buildJob(row.ID, row.ParentSessionID, row.ParentPartID, row.Name, role, spec, timeout, rt, row.ChildSessionID, true)
 	h.snap.Model = job.Model
 	h.snap.Variant = job.Variant
@@ -293,9 +307,14 @@ func (m *Manager) resumeJob(ctx context.Context, row db.SubagentJob, runner Runn
 		h.mu.Lock()
 		h.snap.ChildSessionID = childSessionID
 		h.mu.Unlock()
-		m.persistHandle(h)
+		_ = m.persistHandle(h)
 	}
-	m.persistHandleLocked(h)
+	if err := m.persistHandleLocked(h); err != nil {
+		m.mu.Unlock()
+		cancel()
+		return err
+	}
+	m.handles[row.ID] = h
 	m.mu.Unlock()
 
 	go m.execute(jobCtx, h, job, role, runner)
@@ -317,10 +336,11 @@ func rowWithStatus(row db.SubagentJob, status, summary, errText string) db.Subag
 
 func (m *Manager) buildJob(id, parentSessionID, parentPartID, name, role string, spec Spec, timeout time.Duration, rt Runtime, childSessionID string, resume bool) Job {
 	cfg := m.cfg
-	model := firstNonEmpty(spec.Model, cfg.Model, rt.Model)
+	model := firstNonEmpty(spec.Model, cfg.Model, rt.Model, opencode.DefaultModelID)
 	if role == RoleExplore && cfg.ExploreModel != "" {
 		model = firstNonEmpty(spec.Model, cfg.ExploreModel, model)
 	}
+	profile := rt.profile(model)
 	maxSteps := spec.MaxSteps
 	if maxSteps < 1 {
 		maxSteps = cfg.ChildMaxSteps
@@ -328,6 +348,10 @@ func (m *Manager) buildJob(id, parentSessionID, parentPartID, name, role string,
 	confirm := rt.Confirm
 	if cfg.BashConfirm == BashConfirmDeny {
 		confirm = nil // ask/deny-class bash is denied without a UI confirm
+	}
+	endpoint := profile.Endpoint
+	if endpoint == "" && model == rt.Model {
+		endpoint = rt.Endpoint
 	}
 	return Job{
 		ID:              id,
@@ -341,16 +365,45 @@ func (m *Manager) buildJob(id, parentSessionID, parentPartID, name, role string,
 		Resume:          resume,
 		Workdir:         rt.Workdir,
 		Model:           model,
-		Endpoint:        firstNonEmpty(cfg.Endpoint, rt.Endpoint),
-		Variant:         firstNonEmpty(spec.Variant, cfg.Variant, rt.Variant),
+		Endpoint:        endpoint,
+		Variant:         profile.variant(spec.Variant, cfg.Variant, rt.Variant),
+		ContextWindow:   profile.ContextWindow,
 		MaxSteps:        maxSteps,
 		Timeout:         timeout,
 		Depth:           1, // Manager only builds direct children of the chat parent
 		MaxDepth:        cfg.MaxDepth,
-		Tools:           toolsForRole(role),
+		Tools:           roles.Tools(role),
 		Confirm:         confirm,
 		Ask:             nil, // children never get the question tool
 	}
+}
+
+func (rt Runtime) profile(model string) ModelProfile {
+	for _, profile := range rt.Profiles {
+		if profile.ID == model {
+			profile.Variants = append([]string{}, profile.Variants...)
+			return profile
+		}
+	}
+	return ModelProfile{ID: model}
+}
+
+func (profile ModelProfile) variant(candidates ...string) string {
+	for _, candidate := range candidates {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			continue
+		}
+		if len(profile.Variants) == 0 {
+			return candidate
+		}
+		for _, supported := range profile.Variants {
+			if candidate == supported {
+				return candidate
+			}
+		}
+	}
+	return ""
 }
 
 func (m *Manager) execute(jobCtx context.Context, h *handle, job Job, role string, runner Runner) {
@@ -386,7 +439,7 @@ func (m *Manager) execute(jobCtx context.Context, h *handle, job Job, role strin
 		h.snap.StartedAt = time.Now().UnixMilli()
 	}
 	h.mu.Unlock()
-	m.persistHandle(h)
+	_ = m.persistHandle(h)
 
 	res, err := runner.Run(jobCtx, job)
 	if res.ID == "" {
@@ -459,14 +512,16 @@ func (m *Manager) finish(h *handle, res Result) {
 	}
 	h.snap.FinishedAt = now
 	h.mu.Unlock()
-	m.persistHandle(h)
+	_ = m.persistHandle(h)
 	// Bump parent session so resume lists show activity.
 	m.mu.Lock()
 	store := m.store
 	parentID := h.snapshot().ParentSessionID
 	m.mu.Unlock()
 	if store != nil && parentID != "" {
-		_ = store.TouchSession(context.Background(), parentID)
+		if err := store.TouchSession(context.Background(), parentID); err != nil {
+			m.recordPersistenceError(fmt.Errorf("subagent: touch parent session %q: %w", parentID, err))
+		}
 	}
 }
 
@@ -565,7 +620,10 @@ func (m *Manager) Cancel(id string) (Snapshot, error) {
 			}
 			// Mark cancelled in store when not live (crashed mid-flight, never recovered).
 			row = rowWithStatus(row, string(StatusCancelled), row.Summary, "subagent: cancelled")
-			_ = store.UpsertSubagentJob(context.Background(), row)
+			if err := m.writeSubagentJob(context.Background(), row); err != nil {
+				m.recordPersistenceError(fmt.Errorf("subagent: persist cancellation for %q: %w", id, err))
+				return Snapshot{}, err
+			}
 			return snapshotFromRow(row), nil
 		}
 	}
@@ -752,41 +810,82 @@ func (h *handle) snapshot() Snapshot {
 	return h.snap
 }
 
-func (m *Manager) persistHandle(h *handle) {
+func (m *Manager) persistHandle(h *handle) error {
 	m.mu.Lock()
 	store := m.store
 	m.mu.Unlock()
 	if store == nil || h == nil {
-		return
+		return nil
 	}
-	upsertSubagentJobRelaxed(store, m.rowFromHandle(h))
+	if err := m.upsertSubagentJobRelaxed(store, m.rowFromHandle(h)); err != nil {
+		m.recordPersistenceError(err)
+		return err
+	}
+	return nil
 }
 
 // persistHandleLocked must be called with m.mu held.
-func (m *Manager) persistHandleLocked(h *handle) {
+func (m *Manager) persistHandleLocked(h *handle) error {
 	if m.store == nil || h == nil {
-		return
+		return nil
 	}
-	upsertSubagentJobRelaxed(m.store, m.rowFromHandle(h))
+	if err := m.upsertSubagentJobRelaxed(m.store, m.rowFromHandle(h)); err != nil {
+		m.recordPersistenceError(err)
+		return err
+	}
+	return nil
 }
 
 // upsertSubagentJobRelaxed persists a job even when optional FK targets
 // (parent part / child session) are missing - e.g. tests or stale ids.
 // Required parent_session_id must still exist.
-func upsertSubagentJobRelaxed(store *db.Store, row db.SubagentJob) {
+func (m *Manager) upsertSubagentJobRelaxed(store *db.Store, row db.SubagentJob) error {
 	if store == nil || row.ID == "" {
-		return
+		return nil
 	}
 	ctx := context.Background()
-	if err := store.UpsertSubagentJob(ctx, row); err == nil {
-		return
+	if err := m.writeSubagentJob(ctx, row); err == nil {
+		return nil
 	}
 	row.ParentPartID = ""
-	if err := store.UpsertSubagentJob(ctx, row); err == nil {
-		return
+	if err := m.writeSubagentJob(ctx, row); err == nil {
+		return nil
 	}
 	row.ChildSessionID = ""
-	_ = store.UpsertSubagentJob(ctx, row)
+	if err := m.writeSubagentJob(ctx, row); err != nil {
+		return fmt.Errorf("subagent: persist job %q: %w", row.ID, err)
+	}
+	return nil
+}
+
+func (m *Manager) writeSubagentJob(ctx context.Context, row db.SubagentJob) error {
+	if m.writeJob != nil {
+		return m.writeJob(ctx, row)
+	}
+	if m.store == nil {
+		return nil
+	}
+	return m.store.UpsertSubagentJob(ctx, row)
+}
+
+// TakePersistenceError returns the latest durable-state failure and clears it.
+// Live jobs keep running, but callers can show the failure instead of claiming
+// that a state transition survived a restart.
+func (m *Manager) TakePersistenceError() error {
+	m.persistMu.Lock()
+	defer m.persistMu.Unlock()
+	err := m.persistErr
+	m.persistErr = nil
+	return err
+}
+
+func (m *Manager) recordPersistenceError(err error) {
+	if err == nil {
+		return
+	}
+	m.persistMu.Lock()
+	defer m.persistMu.Unlock()
+	m.persistErr = err
 }
 
 func (m *Manager) rowFromHandle(h *handle) db.SubagentJob {
@@ -882,18 +981,6 @@ func IsTerminalStatus(s string) bool {
 		return true
 	default:
 		return false
-	}
-}
-
-func toolsForRole(role string) []string {
-	switch role {
-	case RoleGeneral:
-		return []string{"bash", "read", "grep", "write", "edit", "webfetch"}
-	case RolePlan:
-		// Plan/explore: search + read; shell for listing (policy still gates rm).
-		return []string{"bash", "read", "grep", "webfetch"}
-	default: // explore
-		return []string{"bash", "read", "grep", "webfetch"}
 	}
 }
 

@@ -104,9 +104,10 @@ type WaitResult struct {
 
 // CancelResult is returned by task_cancel.
 type CancelResult struct {
-	ID        string   `json:"id,omitempty"`
-	Cancelled []string `json:"cancelled,omitempty"`
-	CancelAll bool     `json:"cancel_all,omitempty"`
+	ID             string   `json:"id,omitempty"`
+	Cancelled      []string `json:"cancelled,omitempty"`
+	CancelledCount int      `json:"cancelled_count,omitempty"`
+	CancelAll      bool     `json:"cancel_all,omitempty"`
 }
 
 // Specs returns the five task tool definitions for provider advertising.

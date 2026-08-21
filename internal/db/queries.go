@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-
-	"github.com/chinmay-sawant/lazykoder/internal/settings"
 )
 
 const (
@@ -21,17 +19,14 @@ const (
 	toolCallColumns = `part_id, tool, call_id, status, title, time_start, time_end, exit_code, input_json, output, metadata_json`
 )
 
-// CreateSession inserts a session, filling the ID and defaults for
-// Provider, Model, Status and timestamps when zero.
+// CreateSession inserts a session, filling the ID and storage defaults for
+// Provider, Status, and timestamps when zero. Callers choose the model.
 func (s *Store) CreateSession(ctx context.Context, sess Session) (Session, error) {
 	if sess.ID == "" {
 		sess.ID = NewID("ses_")
 	}
 	if sess.Provider == "" {
 		sess.Provider = "opencode-go"
-	}
-	if sess.Model == "" {
-		sess.Model = settings.DefaultModelID
 	}
 	if sess.Status == "" {
 		sess.Status = "active"

@@ -35,14 +35,17 @@ func (m Model) attachSubMgr(cfg settings.Settings, recoverJobs bool) Model {
 	runner := subagent.AgentRunner{Store: m.store, Client: m.client}
 	m.subMgr = subagent.NewManager(subagent.ConfigFromSettings(cfg), runner)
 	rt := subagent.Runtime{
-		Workdir: m.workdir,
-		Model:   cfg.EffectiveModel(),
-		Variant: cfg.EffectiveVariant(),
-		Confirm: m.confirmHook,
-		Ask:     m.runtimeAsk,
+		Workdir:  m.workdir,
+		Model:    cfg.EffectiveModel(),
+		Variant:  cfg.EffectiveVariant(),
+		Profiles: m.subagentModelProfiles(),
+		Confirm:  m.confirmHook,
+		Ask:      m.runtimeAsk,
 	}
 	if recoverJobs && m.store != nil {
-		_ = m.subMgr.Boot(context.Background(), m.store, rt, runner)
+		if err := m.subMgr.Boot(context.Background(), m.store, rt, runner); err != nil {
+			m.err = "subagent recovery failed: " + err.Error()
+		}
 		return m
 	}
 	m.subMgr.SetStore(m.store)
@@ -107,9 +110,23 @@ func (m Model) wireSubMgrRuntime() {
 		Model:    m.model,
 		Endpoint: m.modelEndpoint(),
 		Variant:  m.variant,
+		Profiles: m.subagentModelProfiles(),
 		Confirm:  m.confirmHook,
 		Ask:      m.runtimeAsk,
 	})
+}
+
+func (m Model) subagentModelProfiles() []subagent.ModelProfile {
+	profiles := make([]subagent.ModelProfile, 0, len(m.modelInfos))
+	for _, info := range m.modelInfos {
+		profiles = append(profiles, subagent.ModelProfile{
+			ID:            info.ID,
+			Endpoint:      info.Endpoint,
+			ContextWindow: int64(info.Context),
+			Variants:      append([]string{}, info.Variants...),
+		})
+	}
+	return profiles
 }
 
 // startTurn arms channels, builds the Agent, and returns watch/pulse cmds.

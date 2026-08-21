@@ -3,6 +3,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -24,6 +25,9 @@ const (
 	// defaultMaxSteps bounds tool-calling turns when no limit is configured.
 	defaultMaxSteps = 16
 )
+
+// ErrStepLimit marks a completed turn that consumed its configured tool budget.
+var ErrStepLimit = errors.New("agent: step limit reached")
 
 // Options configures an Agent.
 type Options struct {
@@ -99,7 +103,19 @@ type Agent struct {
 
 // New returns an Agent for the given store, provider client and workdir.
 func New(store *db.Store, client *opencode.Client, workdir string, opts Options) *Agent {
+	if strings.TrimSpace(opts.Model) == "" {
+		opts.Model = opencode.DefaultModelID
+	}
+	opts.ToolNames = cloneStrings(opts.ToolNames)
+	opts.BashAllowlist = cloneStrings(opts.BashAllowlist)
 	return &Agent{store: store, client: client, workdir: workdir, opts: opts}
+}
+
+func cloneStrings(values []string) []string {
+	if values == nil {
+		return nil
+	}
+	return append([]string{}, values...)
 }
 
 // ensureProjectInstructions loads AGENTS.md once per Agent.
@@ -225,7 +241,7 @@ func (a *Agent) runSteps(ctx context.Context, events chan<- Event) error {
 			break
 		}
 		if step == maxSteps-1 {
-			return a.fail(events, fmt.Errorf("agent: step limit reached (max %d)", maxSteps))
+			return a.fail(events, fmt.Errorf("%w (max %d)", ErrStepLimit, maxSteps))
 		}
 	}
 	return nil

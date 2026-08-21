@@ -20,6 +20,12 @@ command passes. Do not claim TUI feel from headless `go run`.
 scan lives in `plans/v0.0.9/architecture-review/` (HTML report + phase
 checklist). It does not replace phases 1-4 below.
 
+**Follow-up review:** the 2026-08-21 evidence-based review lives in
+`plans/v0.0.9/architecture-review-21082026-2121/`. Its
+`phase-wise-checklist.md` records the completed P0 webfetch, P1 runtime, and
+P2 shared-policy remediation. Its HTML report explains the original findings.
+It does not reopen the completed C1-C9 rows above without regression evidence.
+
 ---
 
 ## Overview

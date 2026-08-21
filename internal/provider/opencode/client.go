@@ -16,12 +16,12 @@ import (
 )
 
 const (
-	defaultBaseURL = "https://opencode.ai/zen/go/v1"
-	defaultModel   = "deepseek-v4-flash"
+	// DefaultBaseURL is the OpenCode Go API base used for model-route fallback.
+	DefaultBaseURL = "https://opencode.ai/zen/go/v1"
+	DefaultModelID = "deepseek-v4-flash"
 
-	// Must match modelscache.ProviderOpenCodeGo / ProviderOpenCodeZen.
-	providerGo  = "opencode go"
-	providerZen = "opencode zen"
+	ProviderGo  = "opencode go"
+	ProviderZen = "opencode zen"
 
 	// maxResponseBytes caps how much of a chat response body is read.
 	maxResponseBytes = 64 << 20
@@ -32,6 +32,12 @@ const (
 // ChatURL returns the OpenAI-compatible chat-completions URL for an API base.
 func ChatURL(base string) string {
 	return strings.TrimSuffix(base, "/") + "/chat/completions"
+}
+
+// Route is the endpoint and provider identity selected for a model.
+type Route struct {
+	Endpoint string
+	Provider string
 }
 
 // ZenBaseURL maps an OpenCode Go base (.../zen/go/v1) to the Zen sibling
@@ -55,12 +61,35 @@ func ZenChatURL(goBase string) (string, bool) {
 // ChatURLForModel picks the chat URL for a model id when models.json has no
 // stored endpoint. Free Zen models go to the Zen sibling; others use base.
 func ChatURLForModel(base, id string) string {
+	return RouteForModel(base, id).Endpoint
+}
+
+// RouteForModel chooses a chat route for an OpenCode model id. Free models use
+// the Zen sibling when the base is an OpenCode Go route.
+func RouteForModel(base, id string) Route {
 	if isFreeModelID(id) {
-		if u, ok := ZenChatURL(base); ok {
-			return u
+		if endpoint, ok := ZenChatURL(base); ok {
+			return Route{Endpoint: endpoint, Provider: ProviderZen}
 		}
 	}
-	return ChatURL(base)
+	return Route{Endpoint: ChatURL(base), Provider: ProviderGo}
+}
+
+// RouteForCatalogProvider turns a models.dev provider key into the matching
+// OpenCode chat route. Unknown keys have no OpenCode route.
+func RouteForCatalogProvider(base, provider string) (Route, bool) {
+	switch provider {
+	case "opencode-go":
+		return Route{Endpoint: ChatURL(base), Provider: ProviderGo}, true
+	case "opencode":
+		endpoint, ok := ZenChatURL(base)
+		if !ok {
+			return Route{}, false
+		}
+		return Route{Endpoint: endpoint, Provider: ProviderZen}, true
+	default:
+		return Route{}, false
+	}
 }
 
 func isFreeModelID(id string) bool {
@@ -110,8 +139,8 @@ type Client struct {
 func NewClient(apiKey string, opts ...Option) *Client {
 	c := &Client{
 		apiKey:     apiKey,
-		baseURL:    defaultBaseURL,
-		model:      defaultModel,
+		baseURL:    DefaultBaseURL,
+		model:      DefaultModelID,
 		httpClient: http.DefaultClient,
 	}
 	for _, opt := range opts {
@@ -518,7 +547,7 @@ func (c *Client) ModelInfos(ctx context.Context) ([]ModelInfo, error) {
 		}
 		info := m.info()
 		info.Endpoint = endpoint
-		info.Provider = providerGo
+		info.Provider = ProviderGo
 		out = append(out, info)
 	}
 	return out, nil
@@ -558,7 +587,7 @@ func (c *Client) FreeModelInfos(ctx context.Context) ([]ModelInfo, error) {
 		}
 		info := m.info()
 		info.Endpoint = endpoint
-		info.Provider = providerZen
+		info.Provider = ProviderZen
 		out = append(out, info)
 	}
 	return out, nil

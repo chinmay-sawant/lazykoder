@@ -3,6 +3,8 @@ package subagent
 import (
 	"strings"
 	"time"
+
+	"github.com/chinmay-sawant/lazykoder/internal/roles"
 )
 
 const (
@@ -96,17 +98,5 @@ func (c Config) Normalize() Config {
 }
 
 func normalizeRole(role, fallback string) string {
-	switch strings.ToLower(strings.TrimSpace(role)) {
-	case RoleExplore:
-		return RoleExplore
-	case RolePlan:
-		return RolePlan
-	case RoleGeneral:
-		return RoleGeneral
-	default:
-		if fallback == "" {
-			return DefaultRole
-		}
-		return normalizeRole(fallback, DefaultRole)
-	}
+	return roles.Normalize(role, fallback)
 }
