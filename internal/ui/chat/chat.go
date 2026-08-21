@@ -211,6 +211,8 @@ type Model struct {
 	pendingAsk  *askRequest
 	confirm     confirm.Model
 	confirmMode bool
+	formMode    bool
+	formHost    *formHost
 	askMode     bool
 	askQuestion question.Question
 	askCursor   int
@@ -225,6 +227,7 @@ type Model struct {
 
 	settingsMode      bool
 	settingsCursor    int
+	settingsHover     int
 	settingsEdit      bool
 	settingsEditValue string
 	stepLimitHit      bool // last turn stopped on agent step limit
@@ -364,6 +367,7 @@ var slashCommands = []slashCmd{
 	{name: "/model", description: "search and switch the live chat model"},
 	{name: "/variant", description: "switch live reasoning effort (low / medium / high / max)"},
 	{name: "/agents", description: "open the sub-agent drawer and logs", aliases: []string{"subs", "subagents"}},
+	{name: "/spawn", description: "spawn a new sub-agent via interactive form", aliases: []string{"agent"}},
 	{name: "/refresh", description: "reload the model list into models.json"},
 	{name: "/usage", description: "show OpenCode Go plan usage (rolling, weekly, monthly)"},
 	{name: "/status", description: "open the status drawer and toggle details"},
@@ -424,6 +428,7 @@ func New(opts Options) Model {
 		selectedItem:        -1,
 		historyCursor:       -1,
 		pendingHistoryIndex: -1,
+		settingsHover:       -1,
 		userNavHover:        -1,
 		userNavTip:          -1,
 		cachePath:           opts.CachePath,
@@ -719,6 +724,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.openSessionPicker(), nil
 		}
 		switch m.currentFocus() {
+		case focusForm:
+			return m.updateFormKey(msg)
 		case focusConfirm:
 			return m.updateConfirmKey(msg)
 		case focusAsk:
@@ -785,6 +792,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.askMode {
 			return m, nil
 		}
+		if m.settingsMode {
+			prev := m.settingsHover
+			m.settingsHover = -1
+			if row, ok := m.settingsRowAtScreenY(msg.Mouse().Y); ok {
+				m.settingsHover = row
+			}
+			if m.settingsHover != prev {
+				m.layout.settingsPaint = ""
+				return m, nil
+			}
+			return m, nil
+		}
 		if m.sessionPickerMode {
 			m.sessionHover = -1
 			if idx, ok := m.sessionIndexAtScreenY(msg.Mouse().Y); ok {
@@ -846,6 +865,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.copyNotice = "Text copied"
 		return m, tea.Batch(tea.SetClipboard(text), clearCopyNotice())
+	default:
+		if m.formMode && m.formHost != nil {
+			return m.updateFormMsg(msg)
+		}
 	}
 	return m, nil
 }
@@ -930,6 +953,34 @@ func (m Model) adoptSession(id string) Model {
 	// Load child rows for the footer chip; do not force-open the drawer.
 	m = m.loadTodos()
 	return m.syncSubagentDrawer()
+}
+
+func (m Model) ensureSession(title string) Model {
+	if m.session != nil || m.store == nil {
+		return m
+	}
+	title = strings.TrimSpace(title)
+	if title == "" {
+		title = "Sub-agent run"
+	}
+	if len([]rune(title)) > 60 {
+		title = string([]rune(title)[:60])
+	}
+	var variantPtr *string
+	if m.variant != "" {
+		variantPtr = &m.variant
+	}
+	sess, err := m.store.CreateSession(context.Background(), db.Session{
+		Title:     title,
+		Directory: m.workdir,
+		Model:     m.model,
+		Variant:   variantPtr,
+	})
+	if err == nil {
+		m.session = &sess
+		m.wireSubMgrRuntime()
+	}
+	return m
 }
 
 func (m Model) finishTurn(err error) Model {

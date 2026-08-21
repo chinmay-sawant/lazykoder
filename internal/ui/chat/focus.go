@@ -19,6 +19,7 @@ const (
 	focusSubagents
 	focusSubagentLog
 	focusSlash
+	focusForm
 )
 
 // setFocus enters k. Full-screen and primary drawers clear sibling
@@ -26,6 +27,9 @@ const (
 // own flags (matching prior open helpers) so chrome under them stays put.
 func (m Model) setFocus(k focusKind) Model {
 	switch k {
+	case focusForm:
+		m.formMode = true
+		return m
 	case focusConfirm:
 		m.confirmMode = true
 		m.askMode = false
@@ -46,6 +50,7 @@ func (m Model) setFocus(k focusKind) Model {
 	case focusNone:
 		m.confirmMode = false
 		m.askMode = false
+		m.formMode = false
 		return m
 	}
 
@@ -62,6 +67,7 @@ func (m Model) setFocus(k focusKind) Model {
 	m.statusMode = false
 	m.subagentPickerMode = false
 	m.subagentLogMode = false
+	m.formMode = false
 
 	switch k {
 	case focusHelp:
@@ -87,6 +93,9 @@ func (m Model) setFocus(k focusKind) Model {
 // clearFocus drops only k (or subagent pair). Other modes stay put.
 func (m Model) clearFocus(k focusKind) Model {
 	switch k {
+	case focusForm:
+		m.formMode = false
+		m.formHost = nil
 	case focusConfirm:
 		m.confirmMode = false
 	case focusAsk:
@@ -123,6 +132,8 @@ func (m Model) clearFocus(k focusKind) Model {
 // Update key cascade and frame() full-screen branches.
 func (m Model) currentFocus() focusKind {
 	switch {
+	case m.formMode:
+		return focusForm
 	case m.confirmMode:
 		return focusConfirm
 	case m.askMode:

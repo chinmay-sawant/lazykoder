@@ -40,6 +40,7 @@ go.work.sum
 # OS
 .DS_Store
 Thumbs.db
+*.png
 
 # lazykoder workspace (created at app start)
 .lazykoder/

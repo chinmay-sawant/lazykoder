@@ -2,6 +2,7 @@ package chat
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -82,6 +83,7 @@ const (
 func (m Model) openSettings() Model {
 	m = m.setFocus(focusSettings)
 	m.settingsCursor = settingsRowModel
+	m.settingsHover = -1
 	m.settingsEdit = false
 	m.settingsEditValue = ""
 	m.prompt.SetValue("")
@@ -92,6 +94,7 @@ func (m Model) openSettings() Model {
 func (m Model) closeSettings() Model {
 	m = m.clearFocus(focusSettings)
 	m.settingsCursor = 0
+	m.settingsHover = -1
 	m.settingsPickDefault = false
 	m.settingsEdit = false
 	m.settingsEditValue = ""
@@ -109,13 +112,15 @@ func (m Model) settingsCardView() string {
 	cardW := m.overlayWidth()
 	innerW := max(minPaneWidth, cardW-cardBorder-2*settingsCardHorzPad)
 
-	title := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).Render("SETTINGS")
+	title := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorAccent()).Render("SETTINGS")
 	closeBtn := m.settingsCloseLabel()
 	gap := max(1, innerW-lipgloss.Width(title)-lipgloss.Width(closeBtn))
 	header := title + strings.Repeat(" ", gap) + closeBtn
 
-	sel := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText())
+	sel := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).Background(theme.ColorBorder())
+	hover := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText())
 	normal := lipgloss.NewStyle().Foreground(theme.ColorMute())
+	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorAccent())
 	mute := hintStyle
 	dim := lipgloss.NewStyle().Foreground(theme.ColorMute()).Faint(true)
 
@@ -129,10 +134,14 @@ func (m Model) settingsCardView() string {
 			text = truncateRunes(text, innerW)
 		}
 		switch {
+		case line.kind == settingsLineHeader:
+			body.WriteString(headerStyle.MaxWidth(innerW).Render(text))
+		case line.kind == settingsLineHint:
+			body.WriteString(mute.MaxWidth(innerW).Render(text))
 		case line.kind == settingsLineRow && line.row == m.settingsCursor:
 			body.WriteString(sel.MaxWidth(innerW).Render(text))
-		case line.kind == settingsLineHeader || line.kind == settingsLineHint:
-			body.WriteString(mute.MaxWidth(innerW).Render(text))
+		case line.kind == settingsLineRow && line.row == m.settingsHover:
+			body.WriteString(hover.MaxWidth(innerW).Render(text))
 		case line.dim:
 			body.WriteString(dim.MaxWidth(innerW).Render(text))
 		default:
@@ -280,14 +289,14 @@ func (m Model) settingsUsageRow(label string, w opencode.BillingWindow, innerW i
 	if !w.ResetsAt.IsZero() {
 		val += "  ·  " + w.ResetsAt.Local().Format("Jan 2 15:04")
 	}
-	return settingsPaintLine{kind: settingsLineRow, row: -1, text: settingsKVRow(false, label, val, innerW), dim: w.RateLimited}
+	return settingsPaintLine{kind: settingsLineRow, row: -1, text: settingsKVRow(false, false, label, val, innerW), dim: w.RateLimited}
 }
 
 func (m Model) settingsPaintRow(row int, value string, innerW int, dim bool) settingsPaintLine {
 	return settingsPaintLine{
 		kind: settingsLineRow,
 		row:  row,
-		text: settingsKVRow(m.settingsCursor == row, settingsRowLabel(row), value, innerW),
+		text: settingsKVRow(m.settingsCursor == row, m.settingsHover == row, settingsRowLabel(row), value, innerW),
 		dim:  dim,
 	}
 }
@@ -368,10 +377,12 @@ func boolOn(on bool) string {
 	return "off"
 }
 
-func settingsKVRow(selected bool, label, value string, width int) string {
+func settingsKVRow(selected, hovered bool, label, value string, width int) string {
 	prefix := "  "
 	if selected {
 		prefix = "▸ "
+	} else if hovered {
+		prefix = "• "
 	}
 	left := prefix + label
 	right := value
@@ -458,24 +469,42 @@ func (m Model) activateSettingsRow() (Model, tea.Cmd) {
 		return m.setLimitEnabled(!m.projectSettings.Slot.LimitEnabled), nil
 	case settingsRowSteps:
 		if m.projectSettings.Slot.LimitEnabled {
-			return m.setMaxSteps(m.projectSettings.Slot.MaxSteps + 1), nil
+			return m.openSettingInputForm("Max Steps", "Maximum steps per prompt turn", strconv.Itoa(m.projectSettings.Slot.MaxSteps), validateIntSetting, func(mod Model, val string) (Model, tea.Cmd) {
+				v, _ := strconv.Atoi(val)
+				return mod.setMaxSteps(v), nil
+			})
 		}
 	case settingsRowCompactAuto:
 		return m.setCompactAuto(!m.projectSettings.Compaction.Auto), nil
 	case settingsRowCompactPercent:
-		return m.setCompactPercent(m.projectSettings.EffectiveCompaction().Percent + settingsCompactPercentStep), nil
+		return m.openSettingInputForm("Compaction Context %", "Percentage of context window (10-90)", strconv.Itoa(m.projectSettings.EffectiveCompaction().Percent), validatePercentSetting, func(mod Model, val string) (Model, tea.Cmd) {
+			v, _ := strconv.Atoi(val)
+			return mod.setCompactPercent(v), nil
+		})
 	case settingsRowAgentsEnabled:
 		return m.setAgentsEnabled(!m.projectSettings.Agents.Enabled), nil
 	case settingsRowAgentsRole:
 		return m.cycleAgentsRole(1), nil
 	case settingsRowAgentsConcurrent:
-		return m.setAgentsConcurrent(m.projectSettings.Agents.MaxConcurrent + 1), nil
+		return m.openSettingInputForm("Max Concurrent Agents", "Max parallel sub-agents", strconv.Itoa(m.projectSettings.Agents.MaxConcurrent), validateIntSetting, func(mod Model, val string) (Model, tea.Cmd) {
+			v, _ := strconv.Atoi(val)
+			return mod.setAgentsConcurrent(v), nil
+		})
 	case settingsRowAgentsQueued:
-		return m.setAgentsQueued(m.projectSettings.Agents.MaxQueued + 1), nil
+		return m.openSettingInputForm("Max Queued Agents", "Max queued sub-agent backlog", strconv.Itoa(m.projectSettings.Agents.MaxQueued), validateIntSetting, func(mod Model, val string) (Model, tea.Cmd) {
+			v, _ := strconv.Atoi(val)
+			return mod.setAgentsQueued(v), nil
+		})
 	case settingsRowAgentsChildSteps:
-		return m.setAgentsChildSteps(m.projectSettings.Agents.ChildMaxSteps + 1), nil
+		return m.openSettingInputForm("Child Agent Steps", "Maximum steps for each child agent", strconv.Itoa(m.projectSettings.Agents.ChildMaxSteps), validateIntSetting, func(mod Model, val string) (Model, tea.Cmd) {
+			v, _ := strconv.Atoi(val)
+			return mod.setAgentsChildSteps(v), nil
+		})
 	case settingsRowAgentsTimeout:
-		return m.setAgentsTimeout(m.projectSettings.Agents.DefaultTimeoutSec + settingsTimeoutStepSec), nil
+		return m.openSettingInputForm("Agent Timeout (sec)", "Child agent execution timeout in seconds", strconv.Itoa(m.projectSettings.Agents.DefaultTimeoutSec), validateIntSetting, func(mod Model, val string) (Model, tea.Cmd) {
+			v, _ := strconv.Atoi(val)
+			return mod.setAgentsTimeout(v), nil
+		})
 	case settingsRowAgentsWriters:
 		return m.setAgentsWriters(!m.projectSettings.Agents.AllowParallelWriters), nil
 	case settingsRowBashConfirm:
@@ -483,10 +512,34 @@ func (m Model) activateSettingsRow() (Model, tea.Cmd) {
 	case settingsRowAllowlistEnabled:
 		return m.setAllowlistEnabled(!m.projectSettings.Agents.BashAllowlistEnabled), nil
 	case settingsRowAllowlist:
-		m.settingsEdit = true
-		m.settingsEditValue = strings.Join(m.projectSettings.Agents.BashAllowlist, ", ")
+		return m.openSettingInputForm("Bash Allowlist", "Comma-separated allowlisted command prefixes", strings.Join(m.projectSettings.Agents.BashAllowlist, ", "), nil, func(mod Model, val string) (Model, tea.Cmd) {
+			var list []string
+			for _, p := range strings.Split(val, ",") {
+				if s := strings.TrimSpace(p); s != "" {
+					list = append(list, s)
+				}
+			}
+			mod.projectSettings.Agents.BashAllowlist = list
+			return mod.persistSettings(), nil
+		})
 	}
 	return m, nil
+}
+
+func validateIntSetting(s string) error {
+	v, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil || v < 1 {
+		return fmt.Errorf("must be a positive integer")
+	}
+	return nil
+}
+
+func validatePercentSetting(s string) error {
+	v, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil || v < 10 || v > 90 {
+		return fmt.Errorf("must be between 10 and 90")
+	}
+	return nil
 }
 
 func (m Model) setAllowlistEnabled(on bool) Model {
@@ -505,22 +558,28 @@ func (m Model) adjustSettings(delta int) Model {
 	case settingsRowExploreModel:
 		return m.cycleExploreModel(delta)
 	case settingsRowLimit:
-		if delta != 0 {
-			return m.setLimitEnabled(!m.projectSettings.Slot.LimitEnabled)
+		if delta > 0 {
+			return m.setLimitEnabled(true)
+		} else if delta < 0 {
+			return m.setLimitEnabled(false)
 		}
 	case settingsRowSteps:
 		if m.projectSettings.Slot.LimitEnabled {
 			return m.setMaxSteps(m.projectSettings.Slot.MaxSteps + delta)
 		}
 	case settingsRowCompactAuto:
-		if delta != 0 {
-			return m.setCompactAuto(!m.projectSettings.Compaction.Auto)
+		if delta > 0 {
+			return m.setCompactAuto(true)
+		} else if delta < 0 {
+			return m.setCompactAuto(false)
 		}
 	case settingsRowCompactPercent:
 		return m.setCompactPercent(m.projectSettings.EffectiveCompaction().Percent + delta*settingsCompactPercentStep)
 	case settingsRowAgentsEnabled:
-		if delta != 0 {
-			return m.setAgentsEnabled(!m.projectSettings.Agents.Enabled)
+		if delta > 0 {
+			return m.setAgentsEnabled(true)
+		} else if delta < 0 {
+			return m.setAgentsEnabled(false)
 		}
 	case settingsRowAgentsRole:
 		return m.cycleAgentsRole(delta)
@@ -529,18 +588,22 @@ func (m Model) adjustSettings(delta int) Model {
 	case settingsRowAgentsQueued:
 		return m.setAgentsQueued(m.projectSettings.Agents.MaxQueued + delta)
 	case settingsRowAgentsChildSteps:
-		return m.setAgentsChildSteps(m.projectSettings.Agents.ChildMaxSteps + delta)
+		return m.setAgentsChildSteps(m.projectSettings.Agents.ChildMaxSteps + delta*10)
 	case settingsRowAgentsTimeout:
 		return m.setAgentsTimeout(m.projectSettings.Agents.DefaultTimeoutSec + delta*settingsTimeoutStepSec)
 	case settingsRowAgentsWriters:
-		if delta != 0 {
-			return m.setAgentsWriters(!m.projectSettings.Agents.AllowParallelWriters)
+		if delta > 0 {
+			return m.setAgentsWriters(true)
+		} else if delta < 0 {
+			return m.setAgentsWriters(false)
 		}
 	case settingsRowBashConfirm:
 		return m.cycleBashConfirm(delta)
 	case settingsRowAllowlistEnabled:
-		if delta != 0 {
-			return m.setAllowlistEnabled(!m.projectSettings.Agents.BashAllowlistEnabled)
+		if delta > 0 {
+			return m.setAllowlistEnabled(true)
+		} else if delta < 0 {
+			return m.setAllowlistEnabled(false)
 		}
 	case settingsRowAllowlist:
 		if delta != 0 {

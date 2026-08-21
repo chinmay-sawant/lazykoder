@@ -586,3 +586,59 @@ func countSessionUsers(t *testing.T, st *db.Store, sess *db.Session) int {
 	}
 	return n
 }
+
+func TestSettingsMouseHover(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = mm.(Model).openSettings()
+
+	if m.settingsHover != -1 {
+		t.Fatalf("settingsHover on init = %d, want -1", m.settingsHover)
+	}
+
+	// Move mouse over row 5 (parent max steps)
+	rowY := -1
+	for y := 0; y < 30; y++ {
+		if r, ok := m.settingsRowAtScreenY(y); ok && r == settingsRowSteps {
+			rowY = y
+			break
+		}
+	}
+	if rowY < 0 {
+		t.Fatal("could not locate settingsRowSteps on screen")
+	}
+
+	mm, _ = m.Update(tea.MouseMotionMsg(tea.Mouse{X: 30, Y: rowY}))
+	m = mm.(Model)
+
+	if m.settingsHover != settingsRowSteps {
+		t.Fatalf("settingsHover = %d, want %d (settingsRowSteps)", m.settingsHover, settingsRowSteps)
+	}
+}
+
+func TestSettingsLeftRightArrowBooleans(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	m = m.openSettings()
+
+	// Navigate to Limit
+	m.settingsCursor = settingsRowLimit
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyLeft})
+	if m.projectSettings.Slot.LimitEnabled {
+		t.Fatal("Left arrow should turn LimitEnabled off")
+	}
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyRight})
+	if !m.projectSettings.Slot.LimitEnabled {
+		t.Fatal("Right arrow should turn LimitEnabled on")
+	}
+
+	// Navigate to AgentsEnabled
+	m.settingsCursor = settingsRowAgentsEnabled
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyLeft})
+	if m.projectSettings.Agents.Enabled {
+		t.Fatal("Left arrow should turn Agents.Enabled off")
+	}
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyRight})
+	if !m.projectSettings.Agents.Enabled {
+		t.Fatal("Right arrow should turn Agents.Enabled on")
+	}
+}

@@ -97,6 +97,9 @@ func (m Model) frame() string {
 	if m.filePickerMode {
 		screen = overlayOn(screen, m.width, overlayH, m.filePickerOverlay())
 	}
+	if m.formMode && m.formHost != nil {
+		screen = overlayOn(screen, m.width, m.height, m.formOverlay())
+	}
 	return screen
 }
 

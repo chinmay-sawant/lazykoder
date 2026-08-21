@@ -638,39 +638,32 @@ func (m Model) subagentDrawerView() string {
 	if m.liveStatusInSubagentDrawer() {
 		parts = append(parts, m.liveStatusInDrawerView())
 	}
-	header := hintStyle.Render("sub-agents  ·  ")
+
+	meta := ""
 	if m.subagentDrawerCompact {
-		header += lipgloss.NewStyle().Foreground(theme.ColorText()).Render(fmt.Sprintf("%d", total))
+		meta = fmt.Sprintf("%d", total)
 		if live > 0 {
-			header += hintStyle.Render("  ·  ")
-			header += lipgloss.NewStyle().Foreground(theme.ColorAccent()).Render(fmt.Sprintf("%d live", live))
+			meta += fmt.Sprintf("  ·  %d live", live)
 		}
 		if ok > 0 {
-			header += hintStyle.Render("  ·  ")
-			header += lipgloss.NewStyle().Foreground(theme.ColorGood()).Render(fmt.Sprintf("%d ok", ok))
+			meta += fmt.Sprintf("  ·  %d ok", ok)
 		}
 		if failed > 0 {
-			header += hintStyle.Render("  ·  ")
-			header += lipgloss.NewStyle().Foreground(theme.ColorDanger()).Render(fmt.Sprintf("%d failed", failed))
+			meta += fmt.Sprintf("  ·  %d failed", failed)
 		}
-		if lipgloss.Width(header) > cardW {
-			header = truncateRunes(header, cardW)
+		footer := "enter/click expand  •  esc close"
+		body := ""
+		drawer := drawerChrome("sub-agents", meta, body, footer, cardW)
+		if len(parts) > 0 {
+			return lipgloss.JoinVertical(lipgloss.Left, append(parts, drawer)...)
 		}
-		footer := hintStyle.Width(cardW).Render(
-			truncateRunes("enter/click expand  •  esc close", cardW),
-		)
-		parts = append(parts, header, footer)
-		return lipgloss.NewStyle().Width(cardW).Render(lipgloss.JoinVertical(lipgloss.Left, parts...))
+		return drawer
 	}
 
 	if live > 0 {
-		header += lipgloss.NewStyle().Foreground(theme.ColorAccent()).Render(fmt.Sprintf("%d live", live))
-		header += hintStyle.Render(fmt.Sprintf("  ·  %d total", total))
+		meta = fmt.Sprintf("%d live  ·  %d total", live, total)
 	} else {
-		header += hintStyle.Render(fmt.Sprintf("%d", total))
-	}
-	if lipgloss.Width(header) > cardW {
-		header = truncateRunes(header, cardW)
+		meta = fmt.Sprintf("%d", total)
 	}
 
 	body := hintStyle.Render("no sub-agents for this session")
@@ -678,11 +671,12 @@ func (m Model) subagentDrawerView() string {
 		body = withScrollbar(m.subagentVp.View(), m.subagentVp.Width(), m.subagentVp.Height(),
 			m.subagentVp.ScrollPercent(), m.subagentVp.TotalLineCount() > m.subagentVp.Height())
 	}
-	footer := hintStyle.Width(cardW).Render(
-		truncateRunes("↑/↓ select  •  → logs  •  d cancel live  •  esc close", cardW),
-	)
-	parts = append(parts, header, body, footer)
-	return lipgloss.NewStyle().Width(cardW).Render(lipgloss.JoinVertical(lipgloss.Left, parts...))
+	footer := "↑/↓ select  •  → logs  •  d cancel live  •  esc close"
+	drawer := drawerChrome("sub-agents", meta, body, footer, cardW)
+	if len(parts) > 0 {
+		return lipgloss.JoinVertical(lipgloss.Left, append(parts, drawer)...)
+	}
+	return drawer
 }
 
 // subagentDrawerCounts returns live / ok / failed / total for drawer chrome.
@@ -743,7 +737,7 @@ func (m Model) subagentDrawerRow(row subagentRow, selected bool, width int) stri
 	}
 	line := left + strings.Repeat(" ", gap) + hintStyle.Render(right)
 	if selected {
-		return lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).MaxWidth(width).Render(line)
+		return drawerSelectedStyle.Width(width).MaxWidth(width).Render(line)
 	}
 	return lipgloss.NewStyle().MaxWidth(width).Render(line)
 }
