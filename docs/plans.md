@@ -40,6 +40,11 @@ snapshots:
 | `v0.0.9/phase-3-docs-kb-gates.md` | docs, knowledge-base, tips/help, full gates |
 | `v0.0.9/phase-4-agents-md-context.md` | inject workdir AGENTS.md as system primer |
 | `v0.0.9/phase-4-agents-md-context.md` | inject workdir AGENTS.md as system primer |
+| `v0.0.10/README.md` | planned local recap memory and closure gates |
+| `v0.0.10/phase-1-settings-and-recap-records.md` | recap settings and idempotent SQLite records |
+| `v0.0.10/phase-2-hidden-recap-worker.md` | bounded snapshot, silent worker, and atomic local file |
+| `v0.0.10/phase-3-settings-ui-and-turn-scheduling.md` | settings rows and post-turn scheduling |
+| `v0.0.10/phase-4-docs-and-gates.md` | docs, local knowledge base, and release checks |
 
 Each checklist row is marked `[x]` only when the gate actually passed, with
 the command and exit code recorded beside the row. Rows are never checked
@@ -71,6 +76,10 @@ human runs them.
   alt screen exits; workdir `AGENTS.md` is prepended as a system message on
   chat model calls. Automated gates green; manual TUI rows open. Ledger:
   `plans/v0.0.9/`.
+- v0.0.10: planned optional local recap memory. It will write ordered,
+  durable recaps under `knowledge-base/recaps/` after completed main-chat
+  turns. It does not yet add recall searches before tool calls. Ledger:
+  `plans/v0.0.10/`.
 
 ## What 0.0.1 deliberately does not do
 
