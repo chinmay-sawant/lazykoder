@@ -5,7 +5,7 @@
 > **Estimated effort:** 1 day
 > **Priority:** P0
 > **Gate:** a fresh or legacy settings file has a stable recap configuration,
-> and the database can reserve one recoverable record for a source message.
+> and the database can reserve one recoverable artifact record for a source message.
 
 ## Overview
 
@@ -18,8 +18,8 @@ then show exactly what happened after a restart.
 
 The settings change is backward compatible and defaults to off. The database
 change adds a small `recap_records` ledger that is the source of truth for
-deduplication, worker status, and the written file path. SQLite remains the
-single writer.
+deduplication, worker status, source times, and the written artifact manifest.
+SQLite remains the single writer.
 
 ## Phase 1: Settings and durable state
 
@@ -50,10 +50,11 @@ single writer.
       session_id             TEXT NOT NULL FK sessions ON DELETE CASCADE
       source_start_seq       INTEGER NOT NULL
       source_end_seq         INTEGER NOT NULL
+      source_start_time      INTEGER NOT NULL        // Unix milliseconds
+      source_end_time        INTEGER NOT NULL        // Unix milliseconds
       source_end_message_id  TEXT NOT NULL
       model                  TEXT NOT NULL
-      file_path              TEXT NOT NULL
-      content_sha256         TEXT nullable
+      artifacts_json         TEXT NOT NULL           // path and SHA-256 by artifact type
       status                 TEXT NOT NULL          // queued|running|completed|failed|cancelled
       attempts               INTEGER NOT NULL
       error                  TEXT nullable
@@ -65,14 +66,16 @@ single writer.
 - [ ] Add a unique index on `(session_id, source_end_message_id)` and indexes
       for open records and per-session source order. Model duplicate inserts
       as a harmless already-reserved result.
-- [ ] Add `db.RecapRecord` plus narrow Store methods for reserve, claim,
-      complete, fail, cancel, list open, and list records after a session
-      sequence. Keep status transitions in one package and test them.
+- [ ] Add `db.RecapRecord`, `db.RecapArtifacts`, and narrow Store methods
+      for reserve, claim, complete, fail, cancel, list open, and list records
+      after a session sequence. Validate the artifact JSON at the database
+      boundary and keep status transitions in one package.
 - [ ] Preserve recap files if a user deletes a session. Deleting the session
       cascades the SQLite ledger only. The knowledge base is project memory,
       not a session-owned cache.
-- [ ] Test migration from the current schema, uniqueness, status transitions,
-      and record ordering in `internal/db` tests.
+- [ ] Test migration from the current schema, uniqueness, artifact-manifest
+      validation, status transitions, and record ordering in `internal/db`
+      tests.
 
 ## Dependencies
 

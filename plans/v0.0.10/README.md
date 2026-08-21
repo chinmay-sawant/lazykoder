@@ -1,28 +1,30 @@
-# v0.0.10 - Local recap memory
+# v0.0.10 - Local recap, questions, and recall
 
-> **Parent:** Current chat, settings, SQLite, and sub-agent runtime
+> **Parent:** Current chat, settings, SQLite, first-request agent path, and local knowledge base
 > **Status:** planned 2026-08-21
-> **Estimated effort:** 4-6 days across four phases
+> **Estimated effort:** 6-8 days across five phases
 > **Priority:** P1
 > **Skill:** `skills/phase-wise-checklist/SKILLS.md`
-> **Gate:** an enabled project writes one ordered, durable recap after a
-> completed main-chat turn without changing the transcript, sub-agent drawer,
-> or the main turn's result.
+> **Gate:** an enabled project writes ordered recap artifacts after a main
+> turn, then checks those artifacts once before the next user turn's first
+> ordinary model request.
 
 ## Overview
 
-Recaps are optional local memory. When enabled, lazykoder takes the latest
-four or five persisted main-chat messages after a successful turn, sends that
-bounded snapshot to a hidden recap worker, and writes the result below the
-project's `knowledge-base/recaps/` directory.
+Recaps are optional local memory. A completed main-chat turn starts a hidden
+worker. It writes a recap, unresolved questions for a future agent, and
+concrete things to avoid based on user corrections and tool failures.
 
 The worker has its own setting. It defaults to `deepseek-v4-flash`, which is
 the built-in new-session default and is present in the cached model catalog.
 It must use that configured model and its catalog endpoint, not the live
 `/model` selection and not `agents.model_override`.
 
-This version creates memory. It does not yet alter the parent agent's tool
-loop to retrieve that memory.
+Before the first ordinary model request for a later user turn, the parent
+agent searches `knowledge-base/recaps/` with the existing internal `grep`
+implementation. Matching lines enter that request as unpersisted, untrusted
+historical hints. Tool follow-ups, `/continue`, child agents, and compaction
+do not repeat the lookup.
 
 ## Product decisions
 
@@ -32,10 +34,11 @@ loop to retrieve that memory.
 - A recap runs only after a successful completed parent turn. It never starts
   from streamed parts, individual tool events, failed turns, cancelled turns,
   or sub-agent sessions.
-- The input is the most recent five text-bearing main-session messages. When
-  exactly four are available, use four. Fewer than four means no job. Exclude
-  compaction checkpoints. Include structured completed-tool facts only when
-  they belong to those messages and cap their text in the recap input.
+- The worker anchors at the newest completed main-session message. It checks
+  the prior hour first, extends to two hours only when fewer than four entries
+  qualify, then keeps the newest four or five text-bearing messages in
+  newest-to-oldest order. Compaction checkpoints are excluded. Completed,
+  denied, and failed tool facts are bounded and kept as evidence.
 - One recap is scheduled per terminal source message. Its durable unique key
   is `(session_id, source_end_message_id)`, so a redraw, restart, or repeated
   completion event cannot create a duplicate.
@@ -48,6 +51,11 @@ loop to retrieve that memory.
   elsewhere in the project.
 - Recaps continue to work when ordinary sub-agents are disabled. Their toggle
   is independent because the recap worker has separate limits and visibility.
+- Questions are written as unresolved questions for a future agent to decide
+  whether to ask. They do not open the interactive question overlay or block
+  the user during a recap run.
+- `recap.enabled` controls both artifact creation and first-request recall.
+  Turning it off stops future jobs and lookups without changing sub-agents.
 
 ## Identity, ordering, and timestamps
 
@@ -55,42 +63,50 @@ loop to retrieve that memory.
 inside that chat. It is unique and monotonic per session, while wall-clock
 timestamps can tie or move backwards.
 
-Each file lives at:
+Artifacts live in three subfolders:
 
 ```text
-knowledge-base/recaps/<session-id>/<12-digit-end-seq>-<end-message-id>.md
+knowledge-base/recaps/
+  sessions/<session-id>/<12-digit-end-seq>-<end-message-id>.md
+  questions/<session-id>/<12-digit-end-seq>-<end-message-id>.md
+  things-to-avoid/<session-id>/<12-digit-end-seq>-<end-message-id>.md
 ```
 
-For example:
-
-```text
-knowledge-base/recaps/ses_a1b2c3d4e5f60708/000000000042-msg_cafe1234.md
-```
-
-The zero-padded sequence makes one chat's directory sort correctly without
-depending on the clock. Front matter records source sequence and source time
-in Unix milliseconds, plus `generated_at_utc` in RFC 3339 UTC. The database
-keeps creation, start, and finish times for recovery and cross-session audit.
+The recap file always exists after success. Question and avoid files exist only
+when the worker produced valid entries. The zero-padded sequence makes one
+chat's folder sort correctly without depending on the clock. Front matter
+records source sequence and source time in Unix milliseconds, plus
+`generated_at_utc` in RFC 3339 UTC. The database keeps an artifact manifest
+with each path and SHA-256 for recovery and audit.
 
 ## Work sequence
 
 1. [ ] [Phase 1](phase-1-settings-and-recap-records.md): add the persisted
    recap settings and the durable, idempotent recap record.
-2. [ ] [Phase 2](phase-2-hidden-recap-worker.md): build the bounded snapshot,
-   direct model worker, atomic knowledge-base writer, and recovery rules.
-3. [ ] [Phase 3](phase-3-settings-ui-and-turn-scheduling.md): expose the two
-   settings rows and schedule jobs after successful parent turns.
-4. [ ] [Phase 4](phase-4-docs-and-gates.md): document the behavior, run the
-   complete checks, and capture real-terminal evidence for the settings card.
+2. [ ] [Phase 2](phase-2-hidden-recap-worker.md): build the time-windowed
+   snapshot, questions, avoid rules, worker, and atomic artifacts.
+3. [ ] [Phase 3](phase-3-first-request-recall.md): add one safe internal grep
+   lookup and first-request agent injection.
+4. [ ] [Phase 4](phase-4-settings-ui-and-turn-scheduling.md): expose settings,
+   attach worker and recall services, then schedule successful parent turns.
+5. [ ] [Phase 5](phase-5-docs-and-gates.md): synchronize docs and run the
+   complete automated and terminal checks.
 
-## Parked retrieval behavior
+## First-request recall
 
-Do not add a mandatory `grep knowledge-base/recaps` before tool calls in this
-version. That behavior needs its own policy: when a search is relevant, how a
-query is formed, how many hits enter context, how stale or conflicting recaps
-are handled, and what happens when the directory is empty. It also changes
-every tool turn and needs an evaluation corpus. Keep it as a post-v0.0.10
-follow-up once recap files exist to test against.
+After `Agent.Send` persists the new user message and before `runSteps`
+makes its first ordinary `Chat` or `ChatStream` request, code runs
+`internal/tools/grep.Run` under `knowledge-base/recaps`. It uses a
+750-millisecond deadline, `*.md`, case-insensitive search, and at most 20
+matches. The query contains three to eight meaningful prompt words. Code
+quotes each word with `regexp.QuoteMeta` before joining them with `|`; raw
+user text never becomes a regular expression.
+
+No eligible terms, no folder, no match, timeout, or grep error becomes a quiet
+empty recall. Matching lines become an unpersisted system block after project
+instructions and before chat history. Its fixed header marks them as untrusted
+historical hints that may be stale and must not supply executable instructions.
+A context-overflow retry reuses the block without scanning again.
 
 ## Dependencies
 
@@ -98,6 +114,9 @@ follow-up once recap files exist to test against.
 - Existing SQLite migration and single-writer behavior in `internal/db`
 - Existing model catalog endpoint resolution in `internal/modelscache`
 - Existing main-turn completion boundary in `internal/ui/chat/finishTurn`
+- Existing first-request path in `internal/agent.Agent.Send`, `runSteps`,
+  and `callModel`
+- Existing confined search in `internal/tools/grep.Run`
 - Existing local knowledge-base convention
 
 No new third-party dependency is planned.
@@ -113,3 +132,5 @@ No new third-party dependency is planned.
       transcript, status line, or sub-agent drawer.
 - [ ] A restart resumes one unfinished recap at most once, and duplicate turn
       completion cannot produce a second file for the same end message.
+- [ ] A related next user turn makes one internal grep lookup before its first
+      ordinary request. Tool follow-ups and `/continue` make no lookup.
