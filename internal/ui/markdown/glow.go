@@ -14,8 +14,15 @@ import (
 
 var (
 	glowMu        sync.RWMutex
-	glowRenderers = make(map[int]*glamour.TermRenderer)
+	glowRenderers = make(map[rendererKey]*glamour.TermRenderer)
 )
+
+type rendererKey struct {
+	width int
+	mode  theme.Mode
+}
+
+const maxGlowRenderers = 16
 
 //go:fix inline
 func uintPtr(u uint) *uint { return new(u) }
@@ -26,57 +33,63 @@ func stringPtr(s string) *string { return new(s) }
 //go:fix inline
 func boolPtr(b bool) *bool { return new(b) }
 
-// glowStyleConfig constructs a theme-matched Dark style mapping to LazyKoder palette.
+// glowStyleConfig constructs a theme-matched style mapping to LazyKoder palette.
 func glowStyleConfig() ansi.StyleConfig {
 	cfg := styles.DarkStyleConfig
+	if theme.CurrentMode() == theme.ModeLight {
+		cfg = styles.LightStyleConfig
+	}
 
 	// Document frame - no outer margin or blank padding
 	cfg.Document.Margin = uintPtr(0)
 	cfg.Document.BlockPrefix = ""
 	cfg.Document.BlockSuffix = ""
-	cfg.Document.Color = stringPtr(theme.Text)
-	cfg.Document.BackgroundColor = stringPtr(theme.Bg)
+	cfg.Document.Color = stringPtr(theme.TextHex())
+	// Assistant panels supply the background. Leaving markdown transparent
+	// keeps every reply row on the surrounding panel instead of repainting the
+	// application canvas behind each glyph.
+	cfg.Document.BackgroundColor = nil
 
 	// Headings
 	cfg.Heading.Bold = boolPtr(true)
-	cfg.H1.Color = stringPtr(theme.Text)
+	cfg.H1.Color = stringPtr(theme.TextHex())
 	cfg.H1.BackgroundColor = nil
 	cfg.H1.Prefix = ""
 	cfg.H1.Suffix = ""
 	cfg.H1.Bold = boolPtr(true)
 
-	cfg.H2.Color = stringPtr(theme.Accent)
+	cfg.H2.Color = stringPtr(theme.AccentHex())
 	cfg.H2.Prefix = ""
 	cfg.H2.Bold = boolPtr(true)
 
-	cfg.H3.Color = stringPtr(theme.Mute)
+	cfg.H3.Color = stringPtr(theme.MuteHex())
 	cfg.H3.Prefix = ""
 	cfg.H3.Bold = boolPtr(true)
 
 	// Blockquote
-	cfg.BlockQuote.Color = stringPtr(theme.Mute)
+	cfg.BlockQuote.Color = stringPtr(theme.MuteHex())
 	cfg.BlockQuote.Indent = uintPtr(1)
 	cfg.BlockQuote.IndentToken = stringPtr("│ ")
 
 	// Inline code
-	cfg.Code.Color = stringPtr(theme.Text)
-	cfg.Code.BackgroundColor = stringPtr(theme.Bg)
+	cfg.Code.Color = stringPtr(theme.TextHex())
+	cfg.Code.BackgroundColor = nil
 	cfg.Code.Prefix = ""
 	cfg.Code.Suffix = ""
 
 	// Code block
 	cfg.CodeBlock.Margin = uintPtr(0)
-	cfg.CodeBlock.Color = stringPtr(theme.Mute)
+	cfg.CodeBlock.Color = stringPtr(theme.MuteHex())
 	if cfg.CodeBlock.Chroma != nil {
-		cfg.CodeBlock.Chroma.Background.BackgroundColor = stringPtr(theme.Bg)
+		cfg.CodeBlock.Chroma.Background.BackgroundColor = nil
 	}
 
 	// Table
 	cfg.Table.StyleBlock.Margin = uintPtr(0)
 
 	// Links
-	cfg.Link.Color = stringPtr(theme.Accent)
-	cfg.LinkText.Color = stringPtr(theme.Text)
+	cfg.Link.Color = stringPtr(theme.AccentHex())
+	cfg.LinkText.Color = stringPtr(theme.TextHex())
 
 	// Lists
 	cfg.Item.BlockPrefix = "• "
@@ -85,8 +98,9 @@ func glowStyleConfig() ansi.StyleConfig {
 }
 
 func getGlowRenderer(width int) (*glamour.TermRenderer, error) {
+	key := rendererKey{width: width, mode: theme.CurrentMode()}
 	glowMu.RLock()
-	r, ok := glowRenderers[width]
+	r, ok := glowRenderers[key]
 	glowMu.RUnlock()
 	if ok {
 		return r, nil
@@ -94,7 +108,7 @@ func getGlowRenderer(width int) (*glamour.TermRenderer, error) {
 
 	glowMu.Lock()
 	defer glowMu.Unlock()
-	if r, ok := glowRenderers[width]; ok {
+	if r, ok := glowRenderers[key]; ok {
 		return r, nil
 	}
 
@@ -114,10 +128,10 @@ func getGlowRenderer(width int) (*glamour.TermRenderer, error) {
 	}
 
 	// Keep cache bounded to recent widths
-	if len(glowRenderers) > 16 {
-		glowRenderers = make(map[int]*glamour.TermRenderer)
+	if len(glowRenderers) > maxGlowRenderers {
+		glowRenderers = make(map[rendererKey]*glamour.TermRenderer)
 	}
-	glowRenderers[width] = renderer
+	glowRenderers[key] = renderer
 	return renderer, nil
 }
 

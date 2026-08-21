@@ -523,13 +523,23 @@ func (m Model) selectedText() (string, bool) {
 // stripTranscriptChrome removes left layout markers (work rail, user frame
 // curls) from a copied transcript slice. The markers stay visible in the TUI.
 func stripTranscriptChrome(line string) string {
-	for _, p := range []string{workRail + " ", "╭ ", "╰ "} {
+	line = ansi.Strip(line)
+	for _, p := range []string{"╭ ", "╰ "} {
 		if strings.HasPrefix(line, p) {
 			return strings.TrimPrefix(line, p)
 		}
 	}
+	if strings.HasPrefix(line, workRail+" ") && !strings.Contains(line[2:], workRail) {
+		return strings.TrimPrefix(line, workRail+" ")
+	}
 	if line == workRail {
 		return ""
+	}
+	// A selected row may include the panel's fixed-width right border. Strip
+	// border-only padding while preserving ordinary indentation in content.
+	if strings.Contains(line, "│") {
+		line = strings.ReplaceAll(line, "│", "")
+		line = strings.TrimRight(line, " ")
 	}
 	return line
 }

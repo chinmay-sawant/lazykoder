@@ -58,6 +58,9 @@ const (
 
 // View renders the picker card, slash menu, confirm overlay, or the chat layout.
 func (m Model) View() tea.View {
+	theme.SetMode(m.projectSettings.EffectiveTheme())
+	configureThemeStyles()
+	m.prompt.SetStyles(promptStyles())
 	m = m.ensureLayout()
 	return m.newView(m.frame())
 }
@@ -113,8 +116,8 @@ func (m Model) paintedLines() []string {
 	return strings.Split(painted, "\n")
 }
 
-// newView paints a full-size solid black layer so the host terminal
-// background never shows through empty cells.
+// newView paints a full-size application background so the host terminal
+// profile cannot show through empty cells.
 func (m Model) newView(content string) tea.View {
 	painted := lipgloss.NewStyle().
 		Background(theme.ColorBg()).
@@ -404,10 +407,11 @@ func (m Model) promptLine() string {
 		text = withScrollbar(text, contentW, h, percent, true)
 	}
 	body := lipgloss.JoinVertical(lipgloss.Left, text, m.composerFooter(contentW))
-	// Lifted-panel look: the Dialog tint reads as translucent against the
-	// black transcript (terminals cannot blend true alpha). The border
-	// carries state: it throbs with the shared pulse while the agent works,
-	// holds a dim accent glow while the user edits, and stays muted idle.
+	body = keepBackground(body, theme.ColorComposer())
+	// The composer uses a dedicated input surface above the neutral black
+	// canvas. Its border carries state: it throbs with the shared pulse while
+	// the agent works, holds a dim accent glow while the user edits, and stays
+	// muted idle.
 	var border color.Color = theme.ColorBorder()
 	switch {
 	case m.busy && m.pulseOn:
@@ -418,7 +422,8 @@ func (m Model) promptLine() string {
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(border).
-		Background(theme.ColorDialog()).
+		BorderBackground(theme.ColorComposer()).
+		Background(theme.ColorComposer()).
 		Width(max(minPaneWidth, m.width)).
 		Render(body)
 }
@@ -853,13 +858,15 @@ func (m Model) helpOverlay() string {
 	}
 	body.WriteString("\n")
 	body.WriteString(hintStyle.Width(innerW).Render("esc or ?  close"))
+	content := keepBackground(lipgloss.JoinVertical(lipgloss.Left, header, body.String()), theme.ColorSurface())
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(theme.ColorBorder()).
-		Background(theme.ColorBg()).
+		BorderBackground(theme.ColorSurface()).
+		Background(theme.ColorSurface()).
 		Padding(1, cardHorzPad).
 		Width(min(m.overlayWidth(), innerW+cardBorder+cardBorderPad)).
-		Render(lipgloss.JoinVertical(lipgloss.Left, header, body.String()))
+		Render(content)
 }
 
 func (m Model) helpCloseRect() (x0, y, x1 int, ok bool) {
@@ -916,11 +923,12 @@ func (m Model) headerView() string {
 
 func (m Model) confirmOverlay() string {
 	innerW := max(minPaneWidth, m.overlayWidth()-cardBorder-cardBorderPad)
-	inner := lipgloss.NewStyle().Width(innerW).Render(m.confirm.View())
+	inner := keepBackground(lipgloss.NewStyle().Width(innerW).Render(m.confirm.View()), theme.ColorSurface())
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(theme.ColorDanger()).
-		Background(theme.ColorBg()).
+		BorderBackground(theme.ColorSurface()).
+		Background(theme.ColorSurface()).
 		Padding(1, cardHorzPad).
 		Width(min(m.overlayWidth(), innerW+cardBorder+cardBorderPad)).
 		Render(inner)
@@ -928,13 +936,15 @@ func (m Model) confirmOverlay() string {
 
 func (m Model) askOverlay() string {
 	_, cardW, lines, _ := m.askOverlayLines()
+	content := keepBackground(strings.Join(lines, "\n"), theme.ColorSurface())
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(theme.ColorBorder()).
-		Background(theme.ColorDialog()).
+		BorderBackground(theme.ColorSurface()).
+		Background(theme.ColorSurface()).
 		Padding(1, cardHorzPad).
 		Width(cardW).
-		Render(strings.Join(lines, "\n"))
+		Render(content)
 }
 
 type askOptionSpan struct {

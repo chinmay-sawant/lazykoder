@@ -12,6 +12,7 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/agent"
 	"github.com/chinmay-sawant/lazykoder/internal/db"
 	"github.com/chinmay-sawant/lazykoder/internal/settings"
+	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
 
 func TestSettingsSlashOpensCard(t *testing.T) {
@@ -23,8 +24,10 @@ func TestSettingsSlashOpensCard(t *testing.T) {
 		Workdir:      dir,
 		SettingsPath: path,
 	})
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 48})
+	m = mm.(Model)
 	m = typeText(m, "/settings")
-	mm, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	mm, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = mm.(Model)
 	if !m.settingsMode {
 		t.Fatal("settings mode not opened")
@@ -33,7 +36,7 @@ func TestSettingsSlashOpensCard(t *testing.T) {
 	if !strings.Contains(v, "SETTINGS") || !strings.Contains(v, "[x]") {
 		t.Fatalf("settings card missing header/x: %q", v)
 	}
-	for _, want := range []string{"new-session model", "child timeout", "default role", "child bash confirms", "parent bash allowlist", "auto-compact", "compact at"} {
+	for _, want := range []string{"theme", "new-session model", "child timeout", "default role", "child bash confirms", "parent bash allowlist", "auto-compact", "compact at"} {
 		if !strings.Contains(v, want) {
 			t.Fatalf("settings card missing %q: %q", want, v)
 		}
@@ -43,6 +46,95 @@ func TestSettingsSlashOpensCard(t *testing.T) {
 	// a dedicated screen so the prompt should not be the focus frame.
 	if !strings.Contains(v, "SETTINGS") {
 		t.Fatal("missing SETTINGS title")
+	}
+}
+
+func TestSettingsThemeCyclesAndPersists(t *testing.T) {
+	t.Cleanup(func() { theme.SetMode(string(theme.ModeDark)) })
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	m := New(Options{
+		Store:        newTestStore(t),
+		Client:       deadClient(),
+		Workdir:      dir,
+		SettingsPath: path,
+	}).openSettings()
+	m.settingsCursor = settingsRowTheme
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyRight})
+	if m.projectSettings.EffectiveTheme() != "light" {
+		t.Fatalf("theme = %q, want light", m.projectSettings.EffectiveTheme())
+	}
+	if theme.CurrentMode() != theme.ModeLight {
+		t.Fatalf("active palette = %q, want light", theme.CurrentMode())
+	}
+	loaded, err := settings.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.EffectiveTheme() != "light" {
+		t.Fatalf("persisted theme = %q, want light", loaded.EffectiveTheme())
+	}
+	if !strings.Contains(stripANSI(viewText(m)), "◂ light ▸") {
+		t.Fatal("settings card did not redraw the light theme row")
+	}
+	if !strings.Contains(viewText(m), "48;2;247;248;252") {
+		t.Fatal("light theme did not repaint the application background")
+	}
+}
+
+func TestThemeSwitchRerendersCachedTranscript(t *testing.T) {
+	t.Cleanup(func() { theme.SetMode(string(theme.ModeDark)) })
+	dir := t.TempDir()
+	m := New(Options{
+		Store:        newTestStore(t),
+		Client:       deadClient(),
+		Workdir:      dir,
+		SettingsPath: filepath.Join(dir, "settings.json"),
+	})
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = mm.(Model)
+	m.items = []transcriptItem{{kind: itemAssistant, text: "cached assistant text"}}
+	m.syncTranscript()
+	if !strings.Contains(viewText(m), "48;2;16;40;50") {
+		t.Fatal("dark assistant panel did not render before the theme switch")
+	}
+
+	m = m.setTheme("light")
+	lightView := viewText(m)
+	if !strings.Contains(lightView, "48;2;228;247;251") {
+		t.Fatal("cached assistant panel retained dark colors after switching to light")
+	}
+	lightPlain := stripANSI(lightView)
+	if !strings.Contains(lightPlain, "cached assistant text") || !strings.Contains(lightPlain, "enter send") {
+		t.Fatalf("theme switch hid chat content or composer: %q", lightPlain)
+	}
+	if lines := strings.Split(strings.TrimRight(lightPlain, "\n"), "\n"); len(lines) > m.height {
+		t.Fatalf("theme switch grew compact layout to %d rows, want at most %d", len(lines), m.height)
+	}
+
+	m = m.setTheme("dark")
+	if !strings.Contains(viewText(m), "48;2;16;40;50") {
+		t.Fatal("cached assistant panel did not repaint after switching back to dark")
+	}
+}
+
+func TestDarkComposerFillsInputSurface(t *testing.T) {
+	t.Cleanup(func() { theme.SetMode(string(theme.ModeDark)) })
+	dir := t.TempDir()
+	m := New(Options{
+		Store:        newTestStore(t),
+		Client:       deadClient(),
+		Workdir:      dir,
+		SettingsPath: filepath.Join(dir, "settings.json"),
+	})
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 48})
+	m = mm.(Model)
+
+	view := viewText(m)
+	for _, ansi := range []string{"48;2;5;5;5", "48;2;16;16;16"} {
+		if !strings.Contains(view, ansi) {
+			t.Fatalf("dark view missing expected surface %q", ansi)
+		}
 	}
 }
 
@@ -170,6 +262,10 @@ func TestSettingsMouseAdjustSteps(t *testing.T) {
 	}
 	// Re-read after re-render.
 	line = settingsPaintedRow(m, "parent max steps")
+	rowTop = settingsPaintedRowY(m, "parent max steps")
+	if rowTop < 0 {
+		t.Fatal("parent max steps row missing after decrease")
+	}
 	inc0, inc1, ok := displaySpanLast(line, "▸")
 	if !ok {
 		t.Fatal("▸ missing after decrease")
@@ -335,6 +431,30 @@ func TestSettingsHitAllRows(t *testing.T) {
 		}
 		if !settingsHitChanged(base, next, row) {
 			t.Fatalf("settingsHit on %q did not change state or open editor (x=%d y=%d line=%q)", label, x, y, line)
+		}
+	}
+}
+
+func TestSettingsCardFitsCompactTerminal(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = mm.(Model).openSettings()
+
+	view := stripANSI(viewText(m))
+	if got := len(strings.Split(view, "\n")); got != 24 {
+		t.Fatalf("compact settings height = %d, want 24:\n%s", got, view)
+	}
+	for _, want := range []string{"theme", "j/k move", "╰"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("compact settings missing %q:\n%s", want, view)
+		}
+	}
+
+	m.settingsCursor = settingsRowAllowlist
+	view = stripANSI(viewText(m))
+	for _, want := range []string{"allowed executables", "j/k move", "╰"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("scrolled settings missing %q:\n%s", want, view)
 		}
 	}
 }
@@ -528,6 +648,8 @@ func settingsHitChanged(before, after Model, row int) bool {
 	}
 	ba, aa := before.projectSettings.Agents, after.projectSettings.Agents
 	switch row {
+	case settingsRowTheme:
+		return after.projectSettings.EffectiveTheme() != before.projectSettings.EffectiveTheme()
 	case settingsRowModel:
 		return after.projectSettings.Model.Default != before.projectSettings.Model.Default
 	case settingsRowVariant:

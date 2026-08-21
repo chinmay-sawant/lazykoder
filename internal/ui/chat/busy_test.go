@@ -109,3 +109,19 @@ func TestEscWhileBusyCancels(t *testing.T) {
 		t.Fatalf("err = %q", m.err)
 	}
 }
+
+func TestWorkRailAssistantColor(t *testing.T) {
+	m := New(Options{Workdir: t.TempDir()})
+	m.busy = true
+	m.pulseOn = true
+	m.pulse = 0
+	railDim := m.workRailLive(true)
+	railStatic := m.workRailLive(false)
+
+	if !strings.Contains(railDim, workRail) {
+		t.Fatalf("workRailLive(true) should contain %q, got %q", workRail, railDim)
+	}
+	if !strings.Contains(railStatic, workRail) {
+		t.Fatalf("workRailLive(false) should contain %q, got %q", workRail, railStatic)
+	}
+}

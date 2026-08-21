@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"image/color"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -61,14 +62,14 @@ type transcriptItem struct {
 }
 
 const (
-	roleYou          = "you"
-	roleAssistant    = "assistant"
-	thinkingLabel    = "thinking"
-	maxToolTitle     = 72
-	workBracket      = "["
-	workRail         = "│"
-	workRailCols     = 2
-	streamCursor     = "▌"
+	roleYou       = "you"
+	roleAssistant = "assistant"
+	thinkingLabel = "thinking"
+	maxToolTitle  = 72
+	workBracket   = "["
+	workRail      = "│"
+	workRailCols  = 2
+	streamCursor  = "▌"
 )
 
 func (m *Model) replay(sessionID string) {
@@ -399,11 +400,7 @@ func (m Model) buildRenderedItems() []string {
 	}
 	for i, it := range m.items {
 		if i > 0 && (it.kind == itemUser || it.kind == itemAssistant) {
-			if it.kind == itemUser {
-				out = append(out, "")
-			} else {
-				out = append(out, m.railedItem(i, " "))
-			}
+			out = append(out, "")
 		}
 		body := ""
 		if m.renderCache != nil {
@@ -488,9 +485,9 @@ func (m Model) workRailMark() string {
 }
 
 func (m Model) workRailLive(throb bool) string {
-	style := lipgloss.NewStyle().Foreground(theme.ColorAccent())
+	style := lipgloss.NewStyle().Foreground(theme.ColorAssistantBorder())
 	if throb {
-		style = lipgloss.NewStyle().Foreground(theme.PulseAccent(m.pulseT()))
+		style = lipgloss.NewStyle().Foreground(theme.PulseAssistant(m.pulseT()))
 	}
 	return style.Render(workRail)
 }
@@ -557,7 +554,33 @@ func itemTime(messageMS int64, partMS int64) int64 {
 }
 
 func (m Model) roleLine(label string, when int64) string {
-	return m.alignMeta(roleStyle.Render(label), formatClock(when))
+	style := roleStyle
+	switch label {
+	case roleYou:
+		style = userRoleStyle
+	case roleAssistant:
+		style = assistantRoleStyle
+	}
+	return m.alignMeta(style.Render(label), formatClock(when))
+}
+
+// transcriptPanel gives each conversational turn a quiet surface and rounded
+// border. Keeping the role line outside the panel preserves the activity rail
+// and makes the speaker boundary obvious even in a busy transcript.
+func transcriptPanel(body string, width int, background, border color.Color) string {
+	panelBorder := lipgloss.Border{
+		Left:  "│",
+		Right: " ",
+	}
+	body = keepBackground(body, background)
+	return lipgloss.NewStyle().
+		Background(background).
+		Border(panelBorder).
+		BorderForeground(border).
+		BorderBackground(background).
+		PaddingLeft(1).
+		Width(max(1, width)).
+		Render(body)
 }
 
 func (m Model) alignMeta(left, stamp string) string {
@@ -803,9 +826,17 @@ func (m Model) renderItem(it transcriptItem, selected bool, streaming bool) stri
 func (m Model) renderItemWithToolMode(it transcriptItem, selected bool, streaming, fullToolOutput bool) string {
 	switch it.kind {
 	case itemUser:
-		return m.roleLine(roleYou, it.when) + "\n" + userStyle.Render(frameUserPrompt(it.text, m.contentWidth(it.when)))
+		// The user frame already provides a clear boundary. Add a subtle wash
+		// without wrapping it in a second border, which keeps selection and
+		// copy coordinates stable.
+		body := lipgloss.NewStyle().Background(theme.ColorUserPanel()).Render(
+			userStyle.Render(frameUserPrompt(it.text, m.contentWidth(it.when))))
+		return m.roleLine(roleYou, it.when) + "\n" + body
 	case itemAssistant:
-		rendered := markdown.Render(it.text, m.contentWidth(it.when))
+		panelWidth := max(1, m.contentWidth(it.when))
+		innerWidth := max(1, panelWidth-cardHorzPad)
+		rendered := markdown.Render(it.text, innerWidth)
+		rendered = transcriptPanel(rendered, panelWidth, theme.ColorAssistantPanel(), theme.ColorAssistantBorder())
 		return m.roleLine(roleAssistant, it.when) + "\n" + rendered
 	case itemReasoning:
 		marker := "▸"
@@ -885,7 +916,7 @@ func (m Model) renderToolMode(tool db.ToolCall, part db.Part, collapsed bool, wh
 		return m.renderEditTool(header, tool, collapsed, bodyWidth)
 	}
 
-	card := toolCardStyle.Width(bodyWidth).Background(theme.ColorBg())
+	card := toolCardStyle.Width(bodyWidth).Background(theme.ColorSurface())
 	if collapsed {
 		return card.Render(header)
 	}

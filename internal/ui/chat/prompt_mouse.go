@@ -409,8 +409,8 @@ func (m Model) promptBodyPaint(width, height int) string {
 			if ph == "" {
 				ph = "ask lazykoder"
 			}
-			mute := lipgloss.NewStyle().Background(theme.ColorDialog()).Foreground(theme.ColorMute())
-			plain := lipgloss.NewStyle().Background(theme.ColorDialog()).Foreground(theme.ColorText())
+			mute := lipgloss.NewStyle().Background(theme.ColorComposer()).Foreground(theme.ColorMute())
+			plain := lipgloss.NewStyle().Background(theme.ColorComposer()).Foreground(theme.ColorText())
 			// Show placeholder on first row; caret at col 0.
 			line := selectionStyle.Render(" ") + mute.Render(ph)
 			pad := width - 1 - lipgloss.Width(ph)
@@ -444,7 +444,7 @@ func (m Model) promptBodyPaint(width, height int) string {
 		caret = promptOffsetFromCursor(m)
 	}
 
-	plain := lipgloss.NewStyle().Background(theme.ColorDialog()).Foreground(theme.ColorText())
+	plain := lipgloss.NewStyle().Background(theme.ColorComposer()).Foreground(theme.ColorText())
 	var b strings.Builder
 	for row := 0; row < height; row++ {
 		if row > 0 {

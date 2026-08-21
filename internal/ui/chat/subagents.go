@@ -42,10 +42,16 @@ const (
 	subagentLogFooterRows = 1
 	maxSubagentActivity   = 48
 	maxSubagentDrawerRows = 8
-	// subagentRowMinLeftW is the floor width for a sub-agent row label.
-	subagentRowMinLeftW = 6
 	// subagentLogRowFactor estimates the two log lines per item.
 	subagentLogRowFactor = 2
+
+	subagentDrawerRowChrome      = 4
+	subagentDrawerColumnGap      = 2
+	subagentDrawerMinLeftWidth   = 24
+	subagentDrawerMinMetaWidth   = 20
+	subagentDrawerCompactWidth   = 60
+	subagentCompactActivityShare = 4
+	subagentCompactMetadataShare = 3
 )
 
 // openSubagentPicker opens the model-style drawer above the prompt and
@@ -713,33 +719,71 @@ func (m Model) subagentDrawerRow(row subagentRow, selected bool, width int) stri
 	if selected {
 		prefix = "▸ "
 	}
-	diamond := m.subagentDiamond(row)
-	name := row.Name
-	if name == "" {
-		name = row.ID
-	}
-	st := strings.TrimSpace(row.Status)
-	if st == "" {
-		st = "unknown"
-	}
+	name := firstNonEmptyStr(row.Name, row.ID)
 	if row.Role != "" {
-		name = name + "  ·  " + row.Role
+		name += "  ·  " + row.Role
 	}
-	left := prefix + diamond + "  " + st + "  " + name
-	right := m.subagentRowRight(row, max(1, width-lipgloss.Width(left)-1))
-	gap := width - lipgloss.Width(left) - lipgloss.Width(right)
-	if gap < 1 {
-		left = truncateRunes(left, max(subagentRowMinLeftW, width-lipgloss.Width(right)-1))
-		gap = width - lipgloss.Width(left) - lipgloss.Width(right)
+	status := firstNonEmptyStr(strings.TrimSpace(row.Status), "unknown")
+	leftText := status + "  " + name
+	meta := m.subagentRowMetadata(row)
+	if row.Model != "" || row.Variant != "" {
+		meta = "thinking: " + firstNonEmptyStr(row.Variant, "?") + "  " + firstNonEmptyStr(row.Model, "model?") + "  " + formatCost(row.Cost)
 	}
-	if gap < 1 {
-		gap = 1
+	meta = singleLine(meta)
+
+	available := max(1, width-subagentDrawerRowChrome)
+	leftNeeded := lipgloss.Width(prefix) +
+		lipgloss.Width(theme.StatusDiamond) +
+		subagentDrawerColumnGap +
+		lipgloss.Width(leftText)
+	metaNeeded := lipgloss.Width(meta)
+
+	leftWidth := min(
+		leftNeeded,
+		max(subagentDrawerMinLeftWidth, available-subagentDrawerMinMetaWidth),
+	)
+	metaWidth := min(
+		metaNeeded,
+		max(
+			subagentDrawerMinMetaWidth,
+			available-leftWidth-subagentDrawerRowChrome-subagentDrawerColumnGap,
+		),
+	)
+	if leftWidth+metaWidth > available {
+		metaWidth = max(subagentDrawerMinMetaWidth, available-leftWidth)
 	}
-	line := left + strings.Repeat(" ", gap) + hintStyle.Render(right)
+	activityWidth := max(0, available-leftWidth-metaWidth)
+	if width < subagentDrawerCompactWidth {
+		activityWidth = max(1, width/subagentCompactActivityShare)
+		metaWidth = max(1, width/subagentCompactMetadataShare)
+		leftWidth = max(1, width-metaWidth-activityWidth-subagentDrawerColumnGap)
+	}
+
+	leftBudget := max(1, leftWidth-lipgloss.Width(prefix)-lipgloss.Width(theme.StatusDiamond)-subagentDrawerColumnGap)
+	left := prefix + m.subagentDiamond(row) + "  " + truncateRunes(status+"  "+name, leftBudget)
+	metaStr := truncateRunes(meta, metaWidth)
+	activity := truncateRunes(singleLine(firstNonEmptyStr(strings.TrimSpace(row.Activity), "·")), activityWidth)
+
+	// Build a line whose measured width is exactly the drawer width. This is
+	// important: lipgloss wraps a row when its styled content exceeds Width.
+	line := padRight(left, leftWidth) + "  " + padRight(metaStr, metaWidth) + "  " + padRight(activity, activityWidth)
 	if selected {
 		return drawerSelectedStyle.Width(width).MaxWidth(width).Render(line)
 	}
-	return lipgloss.NewStyle().MaxWidth(width).Render(line)
+	return lipgloss.NewStyle().Width(width).MaxWidth(width).Render(line)
+}
+
+func singleLine(value string) string {
+	return strings.Join(strings.Fields(value), " ")
+}
+
+func (m Model) subagentRowMetadata(row subagentRow) string {
+	return formatCost(row.Cost) + "  " + formatCache(row.CacheHit, row.CacheMiss) + "  " +
+		firstNonEmptyStr(row.Model, "model?") + "  " + firstNonEmptyStr(row.Variant, "thinking?")
+}
+
+func padRight(value string, width int) string {
+	return value + strings.Repeat(" ", max(0, width-lipgloss.Width(value)))
 }
 
 // subagentRowRight keeps the actual resolved child model and thinking level

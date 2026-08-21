@@ -98,42 +98,52 @@ const (
 	pulseMinSteps = 2
 	// composerPad is the prompt textarea border/padding width per side.
 	composerPad = 2
+	// sessionTitleMaxRunes prevents generated session titles from dominating
+	// compact pickers and headers.
+	sessionTitleMaxRunes = 60
 )
 
 var (
-	errStyle       = lipgloss.NewStyle().Foreground(theme.ColorDanger())
-	busyStyle      = lipgloss.NewStyle().Foreground(theme.ColorAccent())
-	hintStyle      = lipgloss.NewStyle().Foreground(theme.ColorMute())
-	userStyle      = lipgloss.NewStyle().Foreground(theme.ColorAccent())
-	roleStyle      = lipgloss.NewStyle().Foreground(theme.ColorText()).Bold(true)
-	reasoningStyle = lipgloss.NewStyle().Foreground(theme.ColorMute())
-	toolCardStyle  = lipgloss.NewStyle().
-			Background(theme.ColorBg()).
-			Foreground(theme.ColorText())
-	toolOutputStyle = lipgloss.NewStyle().
-			Background(theme.ColorBg()).
-			Foreground(theme.ColorMute())
-	// editCardStyle: soft greenish chrome for the edit card header/body shell.
-	editCardStyle = lipgloss.NewStyle().
-			Background(theme.ColorEditPanel()).
-			Foreground(theme.ColorText())
-	selectionStyle = lipgloss.NewStyle().
-			Background(theme.ColorAccent()).
-			Foreground(theme.ColorBg())
-	// Full-width soft tints: light greenish + rows, light reddish - rows.
-	diffAddStyle = lipgloss.NewStyle().
-			Foreground(theme.ColorGood()).
-			Background(theme.ColorEditAddBg())
-	diffDelStyle = lipgloss.NewStyle().
-			Foreground(theme.ColorDanger()).
-			Background(theme.ColorEditDelBg())
-	diffMetaStyle = lipgloss.NewStyle().
-			Foreground(theme.ColorEditMeta()).
-			Background(theme.ColorEditPanel())
-	diffCtxStyle = lipgloss.NewStyle().
-			Foreground(theme.ColorMute()).
-			Background(theme.ColorEditPanel())
+	errStyle           lipgloss.Style
+	busyStyle          lipgloss.Style
+	hintStyle          lipgloss.Style
+	userStyle          lipgloss.Style
+	userRoleStyle      lipgloss.Style
+	assistantRoleStyle lipgloss.Style
+	roleStyle          lipgloss.Style
+	reasoningStyle     lipgloss.Style
+	toolCardStyle      lipgloss.Style
+	toolOutputStyle    lipgloss.Style
+	editCardStyle      lipgloss.Style
+	selectionStyle     lipgloss.Style
+	diffAddStyle       lipgloss.Style
+	diffDelStyle       lipgloss.Style
+	diffMetaStyle      lipgloss.Style
+	diffCtxStyle       lipgloss.Style
 )
+
+func configureThemeStyles() {
+	errStyle = lipgloss.NewStyle().Foreground(theme.ColorDanger())
+	busyStyle = lipgloss.NewStyle().Foreground(theme.ColorAccent())
+	hintStyle = lipgloss.NewStyle().Foreground(theme.ColorMute())
+	userStyle = lipgloss.NewStyle().Foreground(theme.ColorAccent())
+	userRoleStyle = lipgloss.NewStyle().Foreground(theme.ColorAccent()).Bold(true)
+	assistantRoleStyle = lipgloss.NewStyle().Foreground(theme.ColorAssistantBorder()).Bold(true)
+	roleStyle = lipgloss.NewStyle().Foreground(theme.ColorText()).Bold(true)
+	reasoningStyle = lipgloss.NewStyle().Foreground(theme.ColorMute())
+	toolCardStyle = lipgloss.NewStyle().Background(theme.ColorSurface()).Foreground(theme.ColorText())
+	toolOutputStyle = lipgloss.NewStyle().Background(theme.ColorDialog()).Foreground(theme.ColorMute())
+	editCardStyle = lipgloss.NewStyle().Background(theme.ColorEditPanel()).Foreground(theme.ColorText())
+	selectionStyle = lipgloss.NewStyle().Background(theme.ColorAccent()).Foreground(theme.ColorBg())
+	diffAddStyle = lipgloss.NewStyle().Foreground(theme.ColorGood()).Background(theme.ColorEditAddBg())
+	diffDelStyle = lipgloss.NewStyle().Foreground(theme.ColorDanger()).Background(theme.ColorEditDelBg())
+	diffMetaStyle = lipgloss.NewStyle().Foreground(theme.ColorEditMeta()).Background(theme.ColorEditPanel())
+	diffCtxStyle = lipgloss.NewStyle().Foreground(theme.ColorMute()).Background(theme.ColorEditPanel())
+	drawerSelectedStyle = lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).Background(theme.ColorBorder())
+	drawerNormalStyle = lipgloss.NewStyle().Foreground(theme.ColorMute())
+	drawerHeaderTitleStyle = hintStyle
+	drawerHeaderMetaStyle = lipgloss.NewStyle().Foreground(theme.ColorText())
+}
 
 // Options configures the chat model.
 type Options struct {
@@ -293,15 +303,15 @@ type Model struct {
 	subagentLogItems    []transcriptItem
 	subagentLogSelected int
 
-	slashMode       bool
-	slashCursor     int
-	slashItems      []slashCmd
-	slashFromPaste  bool
-	selection       textSelection
-	promptSel       promptSelection
-	copyNotice               string
-	promptSelectAll          bool
-	tipsIndex                int
+	slashMode                 bool
+	slashCursor               int
+	slashItems                []slashCmd
+	slashFromPaste            bool
+	selection                 textSelection
+	promptSel                 promptSelection
+	copyNotice                string
+	promptSelectAll           bool
+	tipsIndex                 int
 	projectInstructionsNotice string // set when workdir AGENTS.md loaded; alert-row only
 
 	dragTarget int // -1 none, 0 transcript, 1 picker
@@ -408,6 +418,8 @@ func New(opts Options) Model {
 		cfg.Slot.MaxSteps = opts.MaxSteps
 		cfg.Slot.LimitEnabled = true
 	}
+	theme.SetMode(cfg.EffectiveTheme())
+	configureThemeStyles()
 	// Effective* helpers normalize clamps and empty model ids.
 	eff := cfg.EffectiveMaxSteps()
 	m := Model{
@@ -963,8 +975,8 @@ func (m Model) ensureSession(title string) Model {
 	if title == "" {
 		title = "Sub-agent run"
 	}
-	if len([]rune(title)) > 60 {
-		title = string([]rune(title)[:60])
+	if len([]rune(title)) > sessionTitleMaxRunes {
+		title = string([]rune(title)[:sessionTitleMaxRunes])
 	}
 	var variantPtr *string
 	if m.variant != "" {
@@ -1201,9 +1213,15 @@ func newPromptArea(width int) textarea.Model {
 	ta.KeyMap.WordForward = key.NewBinding(key.WithKeys("alt+right", "ctrl+right", "alt+f"))
 	ta.KeyMap.LinePrevious = key.NewBinding(key.WithKeys("up", "ctrl+p", "ctrl+up"))
 	ta.KeyMap.LineNext = key.NewBinding(key.WithKeys("down", "ctrl+n", "ctrl+down"))
-	plain := lipgloss.NewStyle().Background(theme.ColorBg()).Foreground(theme.ColorText())
-	mute := lipgloss.NewStyle().Background(theme.ColorBg()).Foreground(theme.ColorMute())
-	ta.SetStyles(textarea.Styles{
+	ta.SetStyles(promptStyles())
+	ta.Focus()
+	return ta
+}
+
+func promptStyles() textarea.Styles {
+	plain := lipgloss.NewStyle().Background(theme.ColorComposer()).Foreground(theme.ColorText())
+	mute := lipgloss.NewStyle().Background(theme.ColorComposer()).Foreground(theme.ColorMute())
+	return textarea.Styles{
 		Focused: textarea.StyleState{
 			Base:        plain,
 			Text:        plain,
@@ -1221,9 +1239,7 @@ func newPromptArea(width int) textarea.Model {
 			EndOfBuffer: plain,
 		},
 		Cursor: textarea.CursorStyle{Color: theme.ColorText(), Blink: true},
-	})
-	ta.Focus()
-	return ta
+	}
 }
 
 func (m Model) promptHeight() int {

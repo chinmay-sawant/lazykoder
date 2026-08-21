@@ -132,11 +132,13 @@ func (m Model) usageCardView() string {
 	footer := hintStyle.Width(innerW).Render(truncateRunes(foot, innerW))
 
 	content := lipgloss.JoinVertical(lipgloss.Left, header, "", body.String(), "", footer)
+	content = keepBackground(content, theme.ColorSurface())
 
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(theme.ColorBorder()).
-		Background(theme.ColorBg()).
+		BorderBackground(theme.ColorSurface()).
+		Background(theme.ColorSurface()).
 		Padding(settingsCardVertPad, settingsCardHorzPad).
 		Width(cardW).
 		Render(content)

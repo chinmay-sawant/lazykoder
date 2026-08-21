@@ -15,6 +15,8 @@ const (
 	FileName = "settings.json"
 	// DefaultModelID is the built-in chat model when none is configured.
 	DefaultModelID = "deepseek-v4-flash"
+	// DefaultTheme is the initial application palette.
+	DefaultTheme = "dark"
 	// DefaultMaxSteps matches the agent default when no file exists.
 	DefaultMaxSteps = 16
 	// MinMaxSteps is the lowest configurable step budget.
@@ -82,6 +84,12 @@ type Model struct {
 	Variant string `json:"variant"`
 }
 
+// Appearance holds visual preferences for the TUI.
+type Appearance struct {
+	// Theme is "dark" or "light". Unknown values fall back to dark.
+	Theme string `json:"theme"`
+}
+
 // Agents holds multi-agent / sub-agent preferences.
 type Agents struct {
 	Enabled              bool   `json:"enabled"`
@@ -114,6 +122,7 @@ type Compaction struct {
 
 // Settings is the on-disk project config under .lazykoder/settings.json.
 type Settings struct {
+	Appearance Appearance `json:"appearance"`
 	Slot       Slot       `json:"slot"`
 	Model      Model      `json:"model"`
 	Agents     Agents     `json:"agents"`
@@ -123,6 +132,7 @@ type Settings struct {
 // Default returns the built-in defaults.
 func Default() Settings {
 	return Settings{
+		Appearance: Appearance{Theme: DefaultTheme},
 		Slot: Slot{
 			MaxSteps:     DefaultMaxSteps,
 			LimitEnabled: true,
@@ -210,6 +220,11 @@ func (s Settings) EffectiveVariant() string {
 	return s.normalized().Model.Variant
 }
 
+// EffectiveTheme returns the selected supported TUI palette.
+func (s Settings) EffectiveTheme() string {
+	return s.normalized().Appearance.Theme
+}
+
 // EffectiveAgents returns normalized multi-agent preferences.
 func (s Settings) EffectiveAgents() Agents {
 	return s.normalized().Agents
@@ -244,6 +259,7 @@ func (a Agents) ToolsForRole(role string) []string {
 }
 
 func (s Settings) normalized() Settings {
+	s.Appearance.Theme = NormalizeTheme(s.Appearance.Theme)
 	if s.Slot.MaxSteps < MinMaxSteps {
 		s.Slot.MaxSteps = DefaultMaxSteps
 	}
@@ -258,6 +274,16 @@ func (s Settings) normalized() Settings {
 	s.Agents = s.Agents.normalized()
 	s.Compaction = s.Compaction.normalized()
 	return s
+}
+
+// NormalizeTheme converts an on-disk theme value to a supported mode.
+func NormalizeTheme(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "light":
+		return "light"
+	default:
+		return DefaultTheme
+	}
 }
 
 func (c Compaction) normalized() Compaction {

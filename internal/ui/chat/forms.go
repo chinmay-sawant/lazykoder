@@ -14,6 +14,13 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
 
+const (
+	spawnFormSelectHeight = 4
+	spawnFormMaxWidth     = 72
+	settingFormMaxWidth   = 60
+	formOverlayMaxWidth   = 76
+)
+
 type formHost struct {
 	form     *huh.Form
 	title    string
@@ -25,7 +32,7 @@ type formHost struct {
 
 func formTheme() huh.Theme {
 	return huh.ThemeFunc(func(isDark bool) *huh.Styles {
-		t := huh.ThemeBase(true)
+		t := huh.ThemeBase(theme.CurrentMode() == theme.ModeDark)
 
 		t.Focused.Base = lipgloss.NewStyle()
 		t.Focused.Title = lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText())
@@ -88,7 +95,7 @@ func (m Model) openSubagentSpawnForm() (Model, tea.Cmd) {
 				Key("model").
 				Title("Model").
 				Options(modelOptions...).
-				Height(4).
+				Height(spawnFormSelectHeight).
 				Value(&data.model),
 			huh.NewInput().
 				Key("steps").
@@ -107,13 +114,13 @@ func (m Model) openSubagentSpawnForm() (Model, tea.Cmd) {
 				Title("Run in background").
 				Value(&data.background),
 		),
-	).WithTheme(formTheme()).WithWidth(min(72, max(minPaneWidth, m.width-cardBorder)))
+	).WithTheme(formTheme()).WithWidth(min(spawnFormMaxWidth, max(minPaneWidth, m.width-cardBorder)))
 
 	host := &formHost{
 		form:  form,
 		title: "spawn sub-agent",
 		kind:  "spawn",
-		width: min(72, max(minPaneWidth, m.width-cardBorder)),
+		width: min(spawnFormMaxWidth, max(minPaneWidth, m.width-cardBorder)),
 		onDone: func(mod Model) (Model, tea.Cmd) {
 			mod = mod.clearFocus(focusForm)
 			steps, _ := strconv.Atoi(strings.TrimSpace(data.steps))
@@ -188,13 +195,13 @@ func (m Model) openSettingInputForm(title, desc, current string, validator func(
 
 	form := huh.NewForm(
 		huh.NewGroup(inp),
-	).WithTheme(formTheme()).WithWidth(min(60, max(minPaneWidth, m.width-cardBorder)))
+	).WithTheme(formTheme()).WithWidth(min(settingFormMaxWidth, max(minPaneWidth, m.width-cardBorder)))
 
 	host := &formHost{
 		form:  form,
 		title: title,
 		kind:  "setting",
-		width: min(60, max(minPaneWidth, m.width-cardBorder)),
+		width: min(settingFormMaxWidth, max(minPaneWidth, m.width-cardBorder)),
 		onDone: func(mod Model) (Model, tea.Cmd) {
 			mod = mod.clearFocus(focusForm)
 			return onSave(mod, strings.TrimSpace(val))
@@ -260,7 +267,7 @@ func (m Model) formOverlay() string {
 	if m.formHost == nil || m.formHost.form == nil {
 		return ""
 	}
-	cardW := max(minPaneWidth, min(76, m.overlayWidth()))
+	cardW := max(minPaneWidth, min(formOverlayMaxWidth, m.overlayWidth()))
 	innerW := max(1, cardW-cardBorder-cardBorderPad)
 
 	m.formHost.form.WithWidth(innerW)
@@ -270,11 +277,13 @@ func (m Model) formOverlay() string {
 	hint := hintStyle.Render("tab/shift-tab navigate  •  enter submit  •  esc cancel")
 
 	cardContent := lipgloss.JoinVertical(lipgloss.Left, head, "", body, "", hint)
+	cardContent = keepBackground(cardContent, theme.ColorSurface())
 
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(theme.ColorBorder()).
-		Background(theme.ColorBg()).
+		BorderBackground(theme.ColorSurface()).
+		Background(theme.ColorSurface()).
 		Padding(1, cardHorzPad).
 		Width(cardW).
 		Render(cardContent)

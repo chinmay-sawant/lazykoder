@@ -107,10 +107,12 @@ func (m Model) sessionPickerView() string {
 	}
 	footer := hintStyle.Width(innerW).Render("j/k select  •  enter open  •  esc/[x] cancel")
 	content := lipgloss.JoinVertical(lipgloss.Left, header, "", body, footer)
+	content = keepBackground(content, theme.ColorSurface())
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(theme.ColorBorder()).
-		Background(theme.ColorBg()).
+		BorderBackground(theme.ColorSurface()).
+		Background(theme.ColorSurface()).
 		Padding(1, cardPad).
 		Width(cardW).
 		Render(content)

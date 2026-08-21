@@ -17,7 +17,8 @@ import (
 
 // settingsRow is one focusable row in the project settings card.
 const (
-	settingsRowModel = iota
+	settingsRowTheme = iota
+	settingsRowModel
 	settingsRowVariant
 	settingsRowChildModel
 	settingsRowExploreModel
@@ -58,6 +59,12 @@ const (
 	settingsCardColsPerVertPad = 2
 	// settingsUsageReserveRows is the headroom added to the paint buffer.
 	settingsUsageReserveRows = 8
+	// settingsUsageMinHeight keeps the settings card from clipping its footer
+	// when the optional usage section would not fit in the terminal.
+	settingsUsageMinHeight = 42
+	// settingsContentFixedRows are the header, spacer, and footer inside the
+	// card. Borders and vertical padding are added separately.
+	settingsContentFixedRows = 3
 	// settingsUsageMaxCorners is the extra width kept for the error line.
 	settingsUsageMaxCorners = 16
 	// settingsUsageMinTextW is the floor width for the usage text row.
@@ -82,7 +89,7 @@ const (
 // the fetch via maybeFetchUsage.
 func (m Model) openSettings() Model {
 	m = m.setFocus(focusSettings)
-	m.settingsCursor = settingsRowModel
+	m.settingsCursor = settingsRowTheme
 	m.settingsHover = -1
 	m.settingsEdit = false
 	m.settingsEditValue = ""
@@ -124,8 +131,9 @@ func (m Model) settingsCardView() string {
 	mute := hintStyle
 	dim := lipgloss.NewStyle().Foreground(theme.ColorMute()).Faint(true)
 
+	lines := m.visibleSettingsPaintLines(innerW)
 	var body strings.Builder
-	for i, line := range m.settingsPaintLines(innerW) {
+	for i, line := range lines {
 		if i > 0 {
 			body.WriteString("\n")
 		}
@@ -161,11 +169,13 @@ func (m Model) settingsCardView() string {
 	if extra := minInner - lipgloss.Height(content); extra > 0 {
 		content = lipgloss.JoinVertical(lipgloss.Left, header, "", body.String(), strings.Repeat("\n", extra-1), footer)
 	}
+	content = keepBackground(content, theme.ColorSurface())
 
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(theme.ColorBorder()).
-		Background(theme.ColorBg()).
+		BorderBackground(theme.ColorSurface()).
+		Background(theme.ColorSurface()).
 		Padding(settingsCardVertPad, settingsCardHorzPad).
 		Width(cardW).
 		Render(content)
@@ -178,6 +188,40 @@ func (m Model) settingsCardMinInnerHeight() int {
 		return minPaneHeight
 	}
 	return inner
+}
+
+func (m Model) settingsBodyMaxRows() int {
+	chrome := cardBorder + settingsCardColsPerVertPad*settingsCardVertPad + settingsContentFixedRows
+	return max(1, m.height-chrome)
+}
+
+func (m Model) visibleSettingsPaintLines(innerW int) []settingsPaintLine {
+	lines := m.settingsPaintLines(innerW)
+	maxRows := m.settingsBodyMaxRows()
+	if len(lines) <= maxRows {
+		return lines
+	}
+
+	selected := 0
+	for i, line := range lines {
+		if line.kind == settingsLineRow && line.row == m.settingsCursor {
+			selected = i
+			break
+		}
+	}
+	start := max(0, selected-maxRows+1)
+	for i := selected; i >= 0; i-- {
+		if lines[i].kind != settingsLineHeader || selected-i >= maxRows {
+			continue
+		}
+		start = i
+		break
+	}
+	end := min(len(lines), start+maxRows)
+	if end-start < maxRows {
+		start = max(0, end-maxRows)
+	}
+	return lines[start:end]
 }
 
 func (m Model) settingsCloseLabel() string {
@@ -236,7 +280,11 @@ func (m Model) settingsPaintLines(innerW int) []settingsPaintLine {
 	}
 
 	out := make([]settingsPaintLine, 0, settingsRowCount+settingsUsageReserveRows)
-	out = append(out, settingsPaintLine{kind: settingsLineHeader, row: -1, text: "model"})
+	out = append(out, settingsPaintLine{kind: settingsLineHeader, row: -1, text: "appearance"})
+	out = append(out,
+		m.settingsPaintRow(settingsRowTheme, "◂ "+m.projectSettings.EffectiveTheme()+" ▸", innerW, false),
+		settingsPaintLine{kind: settingsLineHeader, row: -1, text: "model"},
+	)
 	out = append(out,
 		m.settingsPaintRow(settingsRowModel, "◂ "+modelVal+" ▸", innerW, false),
 		m.settingsPaintRow(settingsRowVariant, "◂ "+variantVal+" ▸", innerW, false),
@@ -264,16 +312,16 @@ func (m Model) settingsPaintLines(innerW int) []settingsPaintLine {
 		m.settingsPaintRow(settingsRowAllowlist, allowlistVal, innerW, false),
 		settingsPaintLine{kind: settingsLineHint, row: -1, text: "children are not filtered by this list"},
 	)
-	if m.usageLoaded {
+	if m.height >= settingsUsageMinHeight && m.usageLoaded {
 		out = append(out, settingsPaintLine{kind: settingsLineHeader, row: -1, text: "opencode usage"})
 		out = append(out,
 			m.settingsUsageRow("rolling", m.usage.Rolling, innerW),
 			m.settingsUsageRow("weekly", m.usage.Weekly, innerW),
 			m.settingsUsageRow("monthly", m.usage.Monthly, innerW),
 		)
-	} else if m.usageErr != "" {
+	} else if m.height >= settingsUsageMinHeight && m.usageErr != "" {
 		out = append(out, settingsPaintLine{kind: settingsLineHint, row: -1, text: "opencode usage: " + truncateRunes(m.usageErr, max(settingsUsageMinTextW, innerW-settingsUsageMaxCorners))})
-	} else {
+	} else if m.height >= settingsUsageMinHeight {
 		out = append(out, settingsPaintLine{kind: settingsLineHint, row: -1, text: "opencode usage: run /usage to load plan usage"})
 	}
 	return out
@@ -303,6 +351,8 @@ func (m Model) settingsPaintRow(row int, value string, innerW int, dim bool) set
 
 func settingsRowLabel(row int) string {
 	switch row {
+	case settingsRowTheme:
+		return "theme"
 	case settingsRowModel:
 		return "new-session model"
 	case settingsRowVariant:
@@ -449,6 +499,8 @@ func (m Model) updateSettingsKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 
 func (m Model) activateSettingsRow() (Model, tea.Cmd) {
 	switch m.settingsCursor {
+	case settingsRowTheme:
+		return m.cycleTheme(1), nil
 	case settingsRowModel:
 		m.settingsPickDefault = true
 		m.settingsMode = false
@@ -549,6 +601,8 @@ func (m Model) setAllowlistEnabled(on bool) Model {
 
 func (m Model) adjustSettings(delta int) Model {
 	switch m.settingsCursor {
+	case settingsRowTheme:
+		return m.cycleTheme(delta)
 	case settingsRowModel:
 		return m.cycleDefaultModel(delta)
 	case settingsRowVariant:
@@ -616,6 +670,8 @@ func (m Model) adjustSettings(delta int) Model {
 
 func (m Model) toggleSettingsRow() Model {
 	switch m.settingsCursor {
+	case settingsRowTheme:
+		return m.cycleTheme(1)
 	case settingsRowLimit:
 		return m.setLimitEnabled(!m.projectSettings.Slot.LimitEnabled)
 	case settingsRowSteps:
@@ -800,6 +856,27 @@ func indexOfString(list []string, want string) int {
 		}
 	}
 	return -1
+}
+
+func (m Model) cycleTheme(delta int) Model {
+	if delta == 0 {
+		return m
+	}
+	next := settings.DefaultTheme
+	if m.projectSettings.EffectiveTheme() == "dark" {
+		next = "light"
+	}
+	return m.setTheme(next)
+}
+
+func (m Model) setTheme(value string) Model {
+	m.projectSettings.Appearance.Theme = settings.NormalizeTheme(value)
+	theme.SetMode(m.projectSettings.EffectiveTheme())
+	configureThemeStyles()
+	m.prompt.SetStyles(promptStyles())
+	m.layout = layoutSnap{}
+	m.syncTranscript()
+	return m.persistSettings()
 }
 
 func (m Model) setDefaultModel(id string) Model {
@@ -1065,6 +1142,11 @@ func (m Model) settingsHit(x, y int, button tea.MouseButton) (Model, tea.Cmd, bo
 	}
 	line := plainLine(paint, y)
 	switch row {
+	case settingsRowTheme:
+		if dec, inc := hitStepChevrons(line, x); dec || inc {
+			return m.cycleTheme(1), nil, true
+		}
+		return m.cycleTheme(1), nil, true
 	case settingsRowModel:
 		if dec, inc := hitStepChevrons(line, x); dec {
 			return m.cycleDefaultModel(-1), nil, true

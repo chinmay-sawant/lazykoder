@@ -430,7 +430,7 @@ func TestPromptCtrlCAndCtrlA(t *testing.T) {
 	if got := m.prompt.Value(); got != "hello world" {
 		t.Fatalf("prompt value after ctrl+a = %q", got)
 	}
-	if !strings.Contains(viewText(m), "48;2;212;160;199") {
+	if !strings.Contains(viewText(m), "48;2;163;177;138") {
 		t.Fatalf("select-all highlight missing from view: %q", viewText(m))
 	}
 
@@ -564,7 +564,7 @@ func TestAlertRowCopyNotice(t *testing.T) {
 		t.Fatalf("ctrl+c after ctrl+a did not copy the prompt: %v", cmd)
 	}
 	v := viewText(m)
-	if !strings.Contains(v, "38;2;158;206;106") {
+	if !strings.Contains(v, "38;2;143;191;143") {
 		t.Fatalf("copy alert is not green: %q", v)
 	}
 	if !strings.Contains(stripANSI(v), "Text copied") {
@@ -663,7 +663,7 @@ func TestAlertRowQuitWarning(t *testing.T) {
 	if !strings.Contains(stripANSI(v), "ctrl+c again to quit") {
 		t.Fatalf("quit warning missing from view: %q", v)
 	}
-	if !strings.Contains(v, "38;2;224;108;117") {
+	if !strings.Contains(v, "38;2;209;122;122") {
 		t.Fatalf("quit warning is not red: %q", v)
 	}
 	alertRow := viewLineIndex(m, "ctrl+c again to quit")
@@ -1388,7 +1388,7 @@ func TestSessionPickerHoverHighlightsRow(t *testing.T) {
 	if m.sessionHover != want {
 		t.Fatalf("sessionHover = %d, want %d (hover-session-3)", m.sessionHover, want)
 	}
-	if !strings.Contains(viewText(m), "48;2;42;42;42") {
+	if !strings.Contains(viewText(m), "48;2;48;48;46") {
 		t.Errorf("hovered row missing background highlight: %q", viewText(m))
 	}
 	m = upd(m, tea.MouseMotionMsg(tea.Mouse{X: 1, Y: 0, Button: tea.MouseLeft}))

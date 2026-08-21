@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
 
 // renderCache memoizes the rendered transcript so drag motion events do not
@@ -164,6 +166,7 @@ func stringPtr(s string) *string {
 
 func (m Model) itemRenderKey(index int, it transcriptItem) uint64 {
 	w := newFPWriter()
+	w.str(string(theme.CurrentMode()))
 	w.u64(m.itemContentFingerprint(index, it))
 	w.b(index == m.selectedItem)
 	streaming := m.busy && it.kind == itemReasoning && !it.collapsed && index == m.lastReasoningIndex()
@@ -191,6 +194,7 @@ func (m Model) itemRenderKey(index int, it transcriptItem) uint64 {
 // lengths, rather than being written into the hash on every stream delta.
 func (m Model) renderFingerprint() uint64 {
 	w := newFPWriter()
+	w.str(string(theme.CurrentMode()))
 	w.i(m.selectedItem)
 	w.b(m.busy)
 	w.b(m.pulseOn)

@@ -121,10 +121,12 @@ func (m Model) filePickerOverlay() string {
 	foot := hintStyle.Width(contentW).MaxWidth(contentW).
 		Render(truncateRunes("↑/↓ select  •  enter insert  •  esc close", contentW))
 	content := lipgloss.JoinVertical(lipgloss.Left, head, body, foot)
+	content = keepBackground(content, theme.ColorSurface())
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(theme.ColorBorder()).
-		Background(theme.ColorBg()).
+		BorderBackground(theme.ColorSurface()).
+		Background(theme.ColorSurface()).
 		Padding(1, cardPad).
 		Width(boxW).
 		Render(content)

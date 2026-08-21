@@ -19,6 +19,9 @@ func TestDefault(t *testing.T) {
 	if s.Model.Default != DefaultModelID {
 		t.Fatalf("Default model = %q, want %q", s.Model.Default, DefaultModelID)
 	}
+	if s.Appearance.Theme != DefaultTheme {
+		t.Fatalf("Theme = %q, want %q", s.Appearance.Theme, DefaultTheme)
+	}
 	a := s.Agents
 	if !a.Enabled {
 		t.Fatal("Agents.Enabled want true")
@@ -75,8 +78,9 @@ func TestLoadMissingReturnsDefault(t *testing.T) {
 func TestSaveLoadRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.json")
 	want := Settings{
-		Slot:  Slot{MaxSteps: 8, LimitEnabled: false},
-		Model: Model{Default: "claude-4", Variant: "high"},
+		Appearance: Appearance{Theme: "light"},
+		Slot:       Slot{MaxSteps: 8, LimitEnabled: false},
+		Model:      Model{Default: "claude-4", Variant: "high"},
 	}
 	if err := Save(path, want); err != nil {
 		t.Fatal(err)
@@ -90,6 +94,23 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	}
 	if got.Model.Default != "claude-4" || got.Model.Variant != "high" {
 		t.Fatalf("model %+v", got.Model)
+	}
+	if got.Appearance.Theme != "light" {
+		t.Fatalf("appearance %+v", got.Appearance)
+	}
+}
+
+func TestThemeNormalizesOnLoad(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte(`{"appearance":{"theme":"noon"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.EffectiveTheme() != DefaultTheme {
+		t.Fatalf("invalid theme = %q, want %q", got.EffectiveTheme(), DefaultTheme)
 	}
 }
 

@@ -9,14 +9,10 @@ import (
 )
 
 var (
-	drawerSelectedStyle = lipgloss.NewStyle().
-				Bold(true).
-				Foreground(theme.ColorText()).
-				Background(theme.ColorBorder())
-	drawerNormalStyle = lipgloss.NewStyle().
-				Foreground(theme.ColorMute())
-	drawerHeaderTitleStyle = hintStyle
-	drawerHeaderMetaStyle  = lipgloss.NewStyle().Foreground(theme.ColorText())
+	drawerSelectedStyle    lipgloss.Style
+	drawerNormalStyle      lipgloss.Style
+	drawerHeaderTitleStyle lipgloss.Style
+	drawerHeaderMetaStyle  lipgloss.Style
 )
 
 // drawerChrome renders the shared frame for all drawers (status, models,
@@ -50,8 +46,12 @@ func drawerChrome(title, meta, body, hint string, width int) string {
 		parts = append(parts, foot)
 	}
 
-	content := strings.Join(parts, "\n")
-	return lipgloss.NewStyle().Width(width).MaxWidth(width).Render(content)
+	content := keepBackground(strings.Join(parts, "\n"), theme.ColorSurface())
+	return lipgloss.NewStyle().
+		Background(theme.ColorSurface()).
+		Width(width).
+		MaxWidth(width).
+		Render(content)
 }
 
 // drawerRowLine formats a standard drawer row with left label and right value.
