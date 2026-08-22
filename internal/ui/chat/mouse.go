@@ -214,6 +214,11 @@ func (m Model) mousePress(msg tea.MouseClickMsg) (Model, tea.Cmd) {
 			if kind == itemReasoning {
 				m = m.clearTextSelection()
 				m.selectedItem = idx
+				// Clicking a thinking block toggles it, same as enter.
+				// Skip while streaming: the live block stays open.
+				if !m.busy {
+					m.items[idx].collapsed = !m.items[idx].collapsed
+				}
 				m.syncTranscript()
 				return m, nil
 			}

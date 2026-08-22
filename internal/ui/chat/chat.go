@@ -450,6 +450,13 @@ func New(opts Options) Model {
 	}
 	theme.SetMode(cfg.EffectiveTheme())
 	configureThemeStyles()
+	if opts.Client != nil && opts.Settings != nil {
+		retry := cfg.EffectiveRetry()
+		opts.Client.SetRetryPolicy(opencode.RetryPolicy{
+			MaxRetries: retry.MaxRetries,
+			Delay:      time.Duration(retry.DelaySeconds) * time.Second,
+		})
+	}
 	// Effective* helpers normalize clamps and empty model ids.
 	eff := cfg.EffectiveMaxSteps()
 	m := Model{

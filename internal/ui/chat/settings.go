@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -25,6 +26,8 @@ const (
 	settingsRowRecapEnabled
 	settingsRowRecapModel
 	settingsRowRecapAfterChats
+	settingsRowRetryMaxRetries
+	settingsRowRetryDelay
 	settingsRowSkillsEnabled
 	settingsRowSkillsAutoDetect
 	settingsRowSkillsLocal
@@ -330,6 +333,9 @@ func (m Model) settingsPaintLines(innerW int) []settingsPaintLine {
 		m.settingsPaintRow(settingsRowBashConfirm, "◂ "+confirmVal+" ▸", innerW, false),
 		m.settingsPaintRow(settingsRowAllowlistEnabled, "["+boolOn(m.projectSettings.Agents.BashAllowlistEnabled)+"]", innerW, false),
 		m.settingsPaintRow(settingsRowAllowlist, allowlistVal, innerW, false),
+		settingsPaintLine{kind: settingsLineHeader, row: -1, text: "request retries"},
+		m.settingsPaintRow(settingsRowRetryMaxRetries, fmt.Sprintf("◂ %d ▸", m.projectSettings.EffectiveRetry().MaxRetries), innerW, false),
+		m.settingsPaintRow(settingsRowRetryDelay, fmt.Sprintf("◂ %ds ▸", m.projectSettings.EffectiveRetry().DelaySeconds), innerW, false),
 	)
 	if m.height < settingsUsageMinHeight || m.usageLoaded {
 		// Keep compact and usage cards stable. The master switch remains
@@ -421,6 +427,10 @@ func settingsRowLabel(row int) string {
 		return "recap model"
 	case settingsRowRecapAfterChats:
 		return "recap after chats"
+	case settingsRowRetryMaxRetries:
+		return "api retries"
+	case settingsRowRetryDelay:
+		return "retry delay"
 	case settingsRowSkillsEnabled:
 		return "skills enabled"
 	case settingsRowSkillsAutoDetect:
@@ -601,6 +611,16 @@ func (m Model) activateSettingsRow() (Model, tea.Cmd) {
 			v, _ := strconv.Atoi(val)
 			return mod.setRecapAfterChats(v), nil
 		})
+	case settingsRowRetryMaxRetries:
+		return m.openSettingInputForm("API retries", "Retries after a transient 500 or 503", strconv.Itoa(m.projectSettings.EffectiveRetry().MaxRetries), validateRetryMaxRetries, func(mod Model, val string) (Model, tea.Cmd) {
+			v, _ := strconv.Atoi(val)
+			return mod.setRetryMaxRetries(v), nil
+		})
+	case settingsRowRetryDelay:
+		return m.openSettingInputForm("Retry delay (sec)", "Wait between transient API attempts", strconv.Itoa(m.projectSettings.EffectiveRetry().DelaySeconds), validateRetryDelaySeconds, func(mod Model, val string) (Model, tea.Cmd) {
+			v, _ := strconv.Atoi(val)
+			return mod.setRetryDelaySeconds(v), nil
+		})
 	case settingsRowSkillsEnabled:
 		return m.setSkillsEnabled(!m.projectSettings.EffectiveSkills().Enabled), nil
 	case settingsRowSkillsAutoDetect:
@@ -709,6 +729,22 @@ func validateSkillMaxMatches(s string) error {
 	return nil
 }
 
+func validateRetryMaxRetries(s string) error {
+	v, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil || v < settings.MinRetryMaxRetries || v > settings.MaxRetryMaxRetries {
+		return fmt.Errorf("must be between %d and %d", settings.MinRetryMaxRetries, settings.MaxRetryMaxRetries)
+	}
+	return nil
+}
+
+func validateRetryDelaySeconds(s string) error {
+	v, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil || v < settings.MinRetryDelaySeconds || v > settings.MaxRetryDelaySeconds {
+		return fmt.Errorf("must be between %d and %d", settings.MinRetryDelaySeconds, settings.MaxRetryDelaySeconds)
+	}
+	return nil
+}
+
 func (m Model) setAllowlistEnabled(on bool) Model {
 	m.projectSettings.Agents.BashAllowlistEnabled = on
 	return m.persistSettings()
@@ -736,6 +772,10 @@ func (m Model) adjustSettings(delta int) Model {
 		return m.cycleRecapModel(delta)
 	case settingsRowRecapAfterChats:
 		return m.setRecapAfterChats(m.projectSettings.EffectiveRecap().AfterChats + delta)
+	case settingsRowRetryMaxRetries:
+		return m.setRetryMaxRetries(m.projectSettings.EffectiveRetry().MaxRetries + delta)
+	case settingsRowRetryDelay:
+		return m.setRetryDelaySeconds(m.projectSettings.EffectiveRetry().DelaySeconds + delta)
 	case settingsRowSkillsEnabled:
 		if delta > 0 {
 			return m.setSkillsEnabled(true)
@@ -865,6 +905,10 @@ func (m Model) toggleSettingsRow() Model {
 		return m.setRecapEnabled(!m.projectSettings.EffectiveRecap().Enabled)
 	case settingsRowRecapModel:
 		return m.cycleRecapModel(1)
+	case settingsRowRetryMaxRetries:
+		return m.setRetryMaxRetries(m.projectSettings.EffectiveRetry().MaxRetries + 1)
+	case settingsRowRetryDelay:
+		return m.setRetryDelaySeconds(m.projectSettings.EffectiveRetry().DelaySeconds + 1)
 	case settingsRowSkillsEnabled:
 		return m.setSkillsEnabled(!m.projectSettings.EffectiveSkills().Enabled)
 	case settingsRowSkillsAutoDetect:
@@ -1120,6 +1164,28 @@ func (m Model) setRecapAfterChats(value int) Model {
 	return m.persistSettings()
 }
 
+func (m Model) setRetryMaxRetries(value int) Model {
+	if value < settings.MinRetryMaxRetries {
+		value = settings.MinRetryMaxRetries
+	}
+	if value > settings.MaxRetryMaxRetries {
+		value = settings.MaxRetryMaxRetries
+	}
+	m.projectSettings.Retry.MaxRetries = value
+	return m.persistSettings()
+}
+
+func (m Model) setRetryDelaySeconds(value int) Model {
+	if value < settings.MinRetryDelaySeconds {
+		value = settings.MinRetryDelaySeconds
+	}
+	if value > settings.MaxRetryDelaySeconds {
+		value = settings.MaxRetryDelaySeconds
+	}
+	m.projectSettings.Retry.DelaySeconds = value
+	return m.persistSettings()
+}
+
 func (m Model) setSkillsEnabled(on bool) Model {
 	m.projectSettings.Skills.Enabled = on
 	if !on {
@@ -1270,6 +1336,13 @@ func (m Model) setAgentsWriters(on bool) Model {
 }
 
 func (m Model) persistSettings() Model {
+	retry := m.projectSettings.EffectiveRetry()
+	if m.client != nil {
+		m.client.SetRetryPolicy(opencode.RetryPolicy{
+			MaxRetries: retry.MaxRetries,
+			Delay:      time.Duration(retry.DelaySeconds) * time.Second,
+		})
+	}
 	if m.settingsPath == "" {
 		return m
 	}
@@ -1461,6 +1534,30 @@ func (m Model) settingsHit(x, y int, button tea.MouseButton) (Model, tea.Cmd, bo
 			return next, cmd, true
 		}
 		return m.setRecapAfterChats(current + 1), nil, true
+	case settingsRowRetryMaxRetries:
+		current := m.projectSettings.EffectiveRetry().MaxRetries
+		if dec, inc := hitStepChevrons(line, x); dec {
+			return m.setRetryMaxRetries(current - 1), nil, true
+		} else if inc {
+			return m.setRetryMaxRetries(current + 1), nil, true
+		}
+		if button == tea.MouseLeft {
+			next, cmd := m.activateSettingsRow()
+			return next, cmd, true
+		}
+		return m.setRetryMaxRetries(current + 1), nil, true
+	case settingsRowRetryDelay:
+		current := m.projectSettings.EffectiveRetry().DelaySeconds
+		if dec, inc := hitStepChevrons(line, x); dec {
+			return m.setRetryDelaySeconds(current - 1), nil, true
+		} else if inc {
+			return m.setRetryDelaySeconds(current + 1), nil, true
+		}
+		if button == tea.MouseLeft {
+			next, cmd := m.activateSettingsRow()
+			return next, cmd, true
+		}
+		return m.setRetryDelaySeconds(current + 1), nil, true
 	case settingsRowSkillsEnabled:
 		return m.setSkillsEnabled(!m.projectSettings.EffectiveSkills().Enabled), nil, true
 	case settingsRowSkillsAutoDetect:

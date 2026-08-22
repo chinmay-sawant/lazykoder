@@ -56,6 +56,9 @@ func TestDefault(t *testing.T) {
 	if s.Recap.Enabled || s.Recap.Model != DefaultModelID || s.Recap.AfterChats != DefaultRecapAfterChats {
 		t.Fatalf("recap defaults %+v", s.Recap)
 	}
+	if s.Retry.MaxRetries != DefaultRetryMaxRetries || s.Retry.DelaySeconds != DefaultRetryDelaySeconds {
+		t.Fatalf("retry defaults %+v", s.Retry)
+	}
 	if !s.Skills.Enabled || !s.Skills.AutoDetect || !s.Skills.IncludeLocal || !s.Skills.IncludeGlobal || !s.Skills.Remember {
 		t.Fatalf("skills defaults %+v", s.Skills)
 	}
@@ -84,6 +87,9 @@ func TestLoadMissingReturnsDefault(t *testing.T) {
 	}
 	if s.Recap.Enabled || s.Recap.Model != DefaultModelID || s.Recap.AfterChats != DefaultRecapAfterChats {
 		t.Fatalf("recap %+v", s.Recap)
+	}
+	if got := s.EffectiveRetry(); got.MaxRetries != DefaultRetryMaxRetries || got.DelaySeconds != DefaultRetryDelaySeconds {
+		t.Fatalf("retry %+v", got)
 	}
 }
 
@@ -126,6 +132,51 @@ func TestRecapAfterChatsNormalizes(t *testing.T) {
 	}
 	if s.EffectiveRecap().AfterChats != DefaultRecapAfterChats {
 		t.Fatalf("after chats = %d, want %d", s.EffectiveRecap().AfterChats, DefaultRecapAfterChats)
+	}
+}
+
+func TestRetrySettingsNormalizeBounds(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte(`{"retry":{"max_retries":-1,"delay_seconds":9999}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := s.EffectiveRetry()
+	if got.MaxRetries != DefaultRetryMaxRetries || got.DelaySeconds != DefaultRetryDelaySeconds {
+		t.Fatalf("retry bounds = %+v, want defaults", got)
+	}
+}
+
+func TestRetrySettingsPartialFileKeepsExplicitZero(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte(`{"retry":{"max_retries":0}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := s.EffectiveRetry()
+	if got.MaxRetries != 0 || got.DelaySeconds != DefaultRetryDelaySeconds {
+		t.Fatalf("retry = %+v, want explicit zero and default delay", got)
+	}
+}
+
+func TestRetrySettingsSaveLoadRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	want := Settings{Retry: Retry{MaxRetries: 3, DelaySeconds: 7}}
+	if err := Save(path, want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.Retry, want.Retry) {
+		t.Fatalf("retry got %+v want %+v", got.Retry, want.Retry)
 	}
 }
 

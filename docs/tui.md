@@ -301,6 +301,8 @@ and keyboard hint rows keep the card's opaque neutral-charcoal background.
 | recaps enabled | on/off for hidden recap generation and first-request local recall (default off) |
 | recap model | model for hidden recap generation (default `deepseek-v4-flash`) |
 | recap after chats | successful main-chat turns before scheduling (1-20, default 2) |
+| api retries | retries after the initial 500 or 503 response (0-20, default 5) |
+| retry delay | seconds between retry attempts (0-300, default 10) |
 | skills enabled | on/off for discovery, activation, and request-time injection (default on) |
 | skill settings | discovery toggles and automatic-match limit; body/context caps remain JSON controls |
 | sub-agents | on/off for parent `task` tools |
@@ -353,6 +355,13 @@ recent snapshot, the previous memory document, and related local knowledge
 evidence. Explicit user instructions are decoded into their durable section.
 While local memory patterns are being searched or the hidden update is
 running, the status line shows a separate animated memory marker.
+
+The retry settings apply to every chat completion sent through the shared
+OpenCode client, including streamed parent turns, recaps, memory updates, and
+child agents. A retry waits for the configured delay before sending the same
+request again. A setting of zero disables retries. The client does not retry
+401 or 403 responses, or 500 and 503 bodies that identify an authentication
+failure.
 
 `/skills` and `/skill` open the same drawer family as `/model`. The drawer
 rescans approved project and configured global roots, labels each descriptor

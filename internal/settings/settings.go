@@ -62,6 +62,19 @@ const (
 	MinRecapAfterChats = 1
 	// MaxRecapAfterChats caps the recap scheduling threshold.
 	MaxRecapAfterChats = 20
+	// DefaultRetryMaxRetries is the number of transient API retries after the
+	// initial request.
+	DefaultRetryMaxRetries = 5
+	// MinRetryMaxRetries allows retries to be disabled explicitly.
+	MinRetryMaxRetries = 0
+	// MaxRetryMaxRetries caps the configured retry count.
+	MaxRetryMaxRetries = 20
+	// DefaultRetryDelaySeconds is the delay between transient API attempts.
+	DefaultRetryDelaySeconds = 10
+	// MinRetryDelaySeconds allows immediate retries when explicitly selected.
+	MinRetryDelaySeconds = 0
+	// MaxRetryDelaySeconds caps the configured retry delay.
+	MaxRetryDelaySeconds = 300
 	// DefaultSkillMaxAutoMatches limits automatic skill context injection.
 	DefaultSkillMaxAutoMatches = 2
 	// MinSkillMaxAutoMatches is the smallest automatic skill match count.
@@ -152,6 +165,14 @@ type Recap struct {
 	AfterChats int `json:"after_chats"`
 }
 
+// Retry holds transient chat API retry preferences.
+type Retry struct {
+	// MaxRetries is in addition to the initial request.
+	MaxRetries int `json:"max_retries"`
+	// DelaySeconds is the wait between retry attempts.
+	DelaySeconds int `json:"delay_seconds"`
+}
+
 // Skills controls bounded discovery and request-time skill context.
 type Skills struct {
 	Enabled         bool `json:"enabled"`
@@ -172,6 +193,7 @@ type Settings struct {
 	Agents     Agents     `json:"agents"`
 	Compaction Compaction `json:"compaction"`
 	Recap      Recap      `json:"recap"`
+	Retry      Retry      `json:"retry"`
 	Skills     Skills     `json:"skills"`
 }
 
@@ -209,6 +231,10 @@ func Default() Settings {
 			Enabled:    false,
 			Model:      DefaultModelID,
 			AfterChats: DefaultRecapAfterChats,
+		},
+		Retry: Retry{
+			MaxRetries:   DefaultRetryMaxRetries,
+			DelaySeconds: DefaultRetryDelaySeconds,
 		},
 		Skills: Skills{
 			Enabled:         true,
@@ -290,6 +316,11 @@ func (s Settings) EffectiveRecap() Recap {
 	return s.normalized().Recap
 }
 
+// EffectiveRetry returns normalized transient chat retry preferences.
+func (s Settings) EffectiveRetry() Retry {
+	return s.normalized().Retry
+}
+
 // EffectiveSkills returns normalized skill discovery preferences.
 func (s Settings) EffectiveSkills() Skills {
 	return s.normalized().Skills
@@ -325,8 +356,19 @@ func (s Settings) normalized() Settings {
 	s.Agents = s.Agents.normalized()
 	s.Compaction = s.Compaction.normalized()
 	s.Recap = s.Recap.normalized()
+	s.Retry = s.Retry.normalized()
 	s.Skills = s.Skills.normalized()
 	return s
+}
+
+func (r Retry) normalized() Retry {
+	if r.MaxRetries < MinRetryMaxRetries || r.MaxRetries > MaxRetryMaxRetries {
+		r.MaxRetries = DefaultRetryMaxRetries
+	}
+	if r.DelaySeconds < MinRetryDelaySeconds || r.DelaySeconds > MaxRetryDelaySeconds {
+		r.DelaySeconds = DefaultRetryDelaySeconds
+	}
+	return r
 }
 
 func (r Recap) normalized() Recap {
@@ -479,6 +521,16 @@ func NormalizeAfterLoad(s Settings, raw []byte) Settings {
 	}
 	if !jsonHasKey(raw, "recap") {
 		s.Recap = Default().Recap
+	}
+	if !jsonHasKey(raw, "retry") {
+		s.Retry = Default().Retry
+	} else {
+		if !jsonHasKey(raw, "retry", "max_retries") {
+			s.Retry.MaxRetries = DefaultRetryMaxRetries
+		}
+		if !jsonHasKey(raw, "retry", "delay_seconds") {
+			s.Retry.DelaySeconds = DefaultRetryDelaySeconds
+		}
 	}
 	if !jsonHasKey(raw, "skills") {
 		s.Skills = Default().Skills

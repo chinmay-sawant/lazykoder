@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -36,7 +37,7 @@ func TestSettingsSlashOpensCard(t *testing.T) {
 	if !strings.Contains(v, "SETTINGS") || !strings.Contains(v, "[x]") {
 		t.Fatalf("settings card missing header/x: %q", v)
 	}
-	for _, want := range []string{"theme", "new-session model", "recaps enabled", "recap model", "recap after chats", "skills enabled", "skills auto-detect", "skills local source", "skills global source", "remember skill references", "skill auto matches", "child timeout", "default role", "child bash confirms", "parent bash allowlist", "auto-compact", "compact at"} {
+	for _, want := range []string{"theme", "new-session model", "recaps enabled", "recap model", "recap after chats", "api retries", "retry delay", "skills enabled", "skills auto-detect", "skills local source", "skills global source", "remember skill references", "skill auto matches", "child timeout", "default role", "child bash confirms", "parent bash allowlist", "auto-compact", "compact at"} {
 		if !strings.Contains(v, want) {
 			t.Fatalf("settings card missing %q: %q", want, v)
 		}
@@ -276,6 +277,39 @@ func TestSettingsRecapAfterChatsAdjustsAndPersists(t *testing.T) {
 	}
 }
 
+func TestSettingsRetryAdjustsAndPersists(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	m := New(Options{
+		Store:        newTestStore(t),
+		Client:       deadClient(),
+		Workdir:      dir,
+		SettingsPath: path,
+	}).openSettings()
+
+	m.settingsCursor = settingsRowRetryMaxRetries
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyLeft})
+	if got := m.projectSettings.EffectiveRetry().MaxRetries; got != settings.DefaultRetryMaxRetries-1 {
+		t.Fatalf("max retries after left = %d, want %d", got, settings.DefaultRetryMaxRetries-1)
+	}
+	m.settingsCursor = settingsRowRetryDelay
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyRight})
+	if got := m.projectSettings.EffectiveRetry().DelaySeconds; got != settings.DefaultRetryDelaySeconds+1 {
+		t.Fatalf("retry delay after right = %d, want %d", got, settings.DefaultRetryDelaySeconds+1)
+	}
+	policy := m.client.RetryPolicy()
+	if policy.MaxRetries != settings.DefaultRetryMaxRetries-1 || policy.Delay != 11*time.Second {
+		t.Fatalf("live client retry policy = %+v", policy)
+	}
+	loaded, err := settings.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := loaded.EffectiveRetry(); got.MaxRetries != settings.DefaultRetryMaxRetries-1 || got.DelaySeconds != settings.DefaultRetryDelaySeconds+1 {
+		t.Fatalf("persisted retry = %+v", got)
+	}
+}
+
 func TestSettingsRecapModelOpensSharedModelDrawer(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "settings.json")
@@ -428,6 +462,23 @@ func TestNewSeedsModelFromSettings(t *testing.T) {
 	}
 	if m.variant != "high" {
 		t.Fatalf("variant = %q, want high", m.variant)
+	}
+}
+
+func TestNewAppliesRetrySettingsToClient(t *testing.T) {
+	cfg := settings.Default()
+	cfg.Retry.MaxRetries = 2
+	cfg.Retry.DelaySeconds = 4
+	client := deadClient()
+	_ = New(Options{
+		Store:    newTestStore(t),
+		Client:   client,
+		Workdir:  t.TempDir(),
+		Settings: &cfg,
+	})
+	policy := client.RetryPolicy()
+	if policy.MaxRetries != 2 || policy.Delay != 4*time.Second {
+		t.Fatalf("retry policy = %+v, want 2 retries and 4s", policy)
 	}
 }
 
@@ -814,6 +865,10 @@ func settingsHitChanged(before, after Model, row int) bool {
 		return after.projectSettings.Recap.Model != before.projectSettings.Recap.Model
 	case settingsRowRecapAfterChats:
 		return after.projectSettings.EffectiveRecap().AfterChats != before.projectSettings.EffectiveRecap().AfterChats
+	case settingsRowRetryMaxRetries:
+		return after.projectSettings.EffectiveRetry().MaxRetries != before.projectSettings.EffectiveRetry().MaxRetries
+	case settingsRowRetryDelay:
+		return after.projectSettings.EffectiveRetry().DelaySeconds != before.projectSettings.EffectiveRetry().DelaySeconds
 	case settingsRowSkillsEnabled:
 		return after.projectSettings.EffectiveSkills().Enabled != before.projectSettings.EffectiveSkills().Enabled
 	case settingsRowSkillsAutoDetect:

@@ -65,7 +65,7 @@ func TestCtrlPTogglesAllThinking(t *testing.T) {
 	}
 }
 
-func TestClickMetaHeaderTogglesToolsOnly(t *testing.T) {
+func TestClickMetaHeaderTogglesToolsAndThinking(t *testing.T) {
 	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
 	m.items = []transcriptItem{
 		{kind: itemUser, text: "prompt"},
@@ -77,7 +77,8 @@ func TestClickMetaHeaderTogglesToolsOnly(t *testing.T) {
 		needle  string
 		expects bool
 	}{
-		{needle: thinkingLabel, expects: true},
+		// Both thinking blocks and tool cards expand on a header click.
+		{needle: thinkingLabel, expects: false},
 		{needle: "bash", expects: false},
 	} {
 		needle := tc.needle

@@ -12,6 +12,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -27,6 +28,10 @@ const (
 	maxResponseBytes = 64 << 20
 	// maxErrorBodyLen caps how much of an error body is echoed in errors.
 	maxErrorBodyLen = 300
+	// DefaultMaxRetries is the number of retries after the initial request.
+	DefaultMaxRetries = 5
+	// DefaultRetryDelay is the wait between retry attempts.
+	DefaultRetryDelay = 10 * time.Second
 )
 
 // ChatURL returns the OpenAI-compatible chat-completions URL for an API base.
@@ -112,6 +117,30 @@ func APIKeyFromEnv() (string, error) {
 // Option configures a Client.
 type Option func(*Client)
 
+// RetryPolicy controls retries for transient chat API failures. MaxRetries is
+// in addition to the initial request, so the default permits up to six total
+// attempts. Wait is optional and is primarily useful for deterministic tests.
+type RetryPolicy struct {
+	MaxRetries int
+	Delay      time.Duration
+	Wait       func(context.Context, time.Duration) error
+}
+
+// DefaultRetryPolicy returns the built-in transient failure policy.
+func DefaultRetryPolicy() RetryPolicy {
+	return RetryPolicy{MaxRetries: DefaultMaxRetries, Delay: DefaultRetryDelay}
+}
+
+func (p RetryPolicy) normalized() RetryPolicy {
+	if p.MaxRetries < 0 {
+		p.MaxRetries = 0
+	}
+	if p.Delay < 0 {
+		p.Delay = 0
+	}
+	return p
+}
+
 // WithBaseURL overrides the default API base URL.
 func WithBaseURL(u string) Option {
 	return func(c *Client) { c.baseURL = strings.TrimSuffix(u, "/") }
@@ -127,26 +156,48 @@ func WithHTTPClient(hc *http.Client) Option {
 	return func(c *Client) { c.httpClient = hc }
 }
 
+// WithRetryPolicy sets the transient chat failure retry policy.
+func WithRetryPolicy(policy RetryPolicy) Option {
+	return func(c *Client) { c.retryPolicy = policy.normalized() }
+}
+
 // Client talks to the OpenCode Go API.
 type Client struct {
-	apiKey     string
-	baseURL    string
-	model      string
-	httpClient *http.Client
+	apiKey      string
+	baseURL     string
+	model       string
+	httpClient  *http.Client
+	retryMu     sync.RWMutex
+	retryPolicy RetryPolicy
 }
 
 // NewClient returns a Client with the given API key and options.
 func NewClient(apiKey string, opts ...Option) *Client {
 	c := &Client{
-		apiKey:     apiKey,
-		baseURL:    DefaultBaseURL,
-		model:      DefaultModelID,
-		httpClient: http.DefaultClient,
+		apiKey:      apiKey,
+		baseURL:     DefaultBaseURL,
+		model:       DefaultModelID,
+		httpClient:  http.DefaultClient,
+		retryPolicy: DefaultRetryPolicy(),
 	}
 	for _, opt := range opts {
 		opt(c)
 	}
 	return c
+}
+
+// RetryPolicy returns a snapshot of the active transient failure policy.
+func (c *Client) RetryPolicy() RetryPolicy {
+	c.retryMu.RLock()
+	defer c.retryMu.RUnlock()
+	return c.retryPolicy
+}
+
+// SetRetryPolicy changes the transient failure policy for future chat calls.
+func (c *Client) SetRetryPolicy(policy RetryPolicy) {
+	c.retryMu.Lock()
+	c.retryPolicy = policy.normalized()
+	c.retryMu.Unlock()
 }
 
 // Model returns the model id in effect (the override if set, else the default).
@@ -452,21 +503,78 @@ func (c *Client) postChat(ctx context.Context, req ChatRequest, stream bool) (*h
 	if err != nil {
 		return nil, fmt.Errorf("opencode: marshal request: %w", err)
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.chatURL(req), bytes.NewReader(raw))
-	if err != nil {
-		return nil, fmt.Errorf("opencode: build request: %w", err)
+	policy := c.RetryPolicy()
+	for attempt := 0; ; attempt++ {
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.chatURL(req), bytes.NewReader(raw))
+		if err != nil {
+			return nil, fmt.Errorf("opencode: build request: %w", err)
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+		resp, err := c.HTTP().Do(httpReq)
+		if err != nil {
+			return nil, fmt.Errorf("opencode: chat request failed: %w", err)
+		}
+		if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
+			return resp, nil
+		}
+
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyLen))
+		_ = resp.Body.Close()
+		if retryableChatFailure(resp.StatusCode, body) && attempt < policy.MaxRetries {
+			if err := waitForRetry(ctx, policy); err != nil {
+				return nil, fmt.Errorf("opencode: chat retry wait: %w", err)
+			}
+			continue
+		}
+		return nil, statusError("chat request", resp.StatusCode, bytes.NewReader(body))
 	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
-	resp, err := c.httpClient.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("opencode: chat request failed: %w", err)
+}
+
+func retryableChatFailure(status int, body []byte) bool {
+	if status != http.StatusInternalServerError && status != http.StatusServiceUnavailable {
+		return false
 	}
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		defer resp.Body.Close()
-		return nil, statusError("chat request", resp.StatusCode, resp.Body)
+	return !authenticationFailureBody(body)
+}
+
+func authenticationFailureBody(body []byte) bool {
+	text := strings.ToLower(string(body))
+	for _, marker := range []string{
+		"authentication",
+		"unauthorized",
+		"invalid api key",
+		"invalid_api_key",
+		"api key",
+		"access token",
+		"invalid token",
+		"forbidden",
+	} {
+		if strings.Contains(text, marker) {
+			return true
+		}
 	}
-	return resp, nil
+	return false
+}
+
+func waitForRetry(ctx context.Context, policy RetryPolicy) error {
+	if policy.Wait != nil {
+		return policy.Wait(ctx, policy.Delay)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if policy.Delay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(policy.Delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // Chat POSTs <base>/chat/completions with Authorization: Bearer <key>.

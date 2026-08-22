@@ -22,7 +22,7 @@ owns the tool loop: it is not a wrapper around the OpenCode CLI or its global
 | `internal/subagent` | Manager + Host + AgentRunner for concurrent children |
 | `internal/policy` | bash classifier returning Allow/Ask/Deny |
 | `internal/tools` | bash, read, grep, write, edit, question, webfetch, task schemas |
-| `internal/settings` | project settings: slot, model, `agents` caps, `compaction`, and `recap` |
+| `internal/settings` | project settings: slot, model, `agents` caps, `compaction`, `recap`, skills, and API retry policy |
 | `internal/ui/chat` | transcript, prompt, status line, model picker |
 | `internal/ui/confirm` | the y/n confirm view (rm and question flows) |
 | `internal/envfile` | stdlib-only `.env` loader |
@@ -214,6 +214,12 @@ shrink-on-next-send, and the overflow retry still run.
 `/settings` exposes **auto-compact** and **compact at** (5% steps).
 `keep_tokens` is JSON-only (default 15,000). `0` or omitted is treated
 as 15,000. There is no `buffer` key; an old `buffer` field is ignored.
+
+Transient chat failures use the project retry policy. The default is five
+retries after the initial request, with a ten-second delay between attempts.
+Only HTTP 500 and 503 responses qualify. Authentication failures do not retry.
+The policy is stored as `retry.max_retries` and `retry.delay_seconds` and can
+be changed in `/settings`.
 
 **History.** The latest `compaction` part wins. `buildHistory` injects
 one synthetic user message (`This session continues from a compacted

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -33,7 +34,6 @@ func main() {
 		os.Exit(1)
 	}
 	key, keyErr := opencode.APIKeyFromEnv()
-	client := opencode.NewClient(key)
 	initial := ""
 	if keyErr != nil {
 		initial = keyErr.Error()
@@ -48,6 +48,11 @@ func main() {
 			initial = err.Error()
 		}
 	}
+	retry := cfg.EffectiveRetry()
+	client := opencode.NewClient(key, opencode.WithRetryPolicy(opencode.RetryPolicy{
+		MaxRetries: retry.MaxRetries,
+		Delay:      time.Duration(retry.DelaySeconds) * time.Second,
+	}))
 
 	// Always start fresh. Past runs stay in SQLite and load via /resume.
 	p := tea.NewProgram(chat.New(chat.Options{
