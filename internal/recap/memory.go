@@ -125,6 +125,14 @@ func NewMemoryDocument() MemoryDocument {
 
 // ParseMemoryEnvelope decodes strict JSON and validates all cited messages.
 func ParseMemoryEnvelope(raw []byte, snapshot Snapshot) (MemoryEnvelope, error) {
+	return parseMemoryEnvelope(raw, snapshot, false)
+}
+
+func parseMemoryEnvelopeWithRecentContextRecovery(raw []byte, snapshot Snapshot) (MemoryEnvelope, error) {
+	return parseMemoryEnvelope(raw, snapshot, true)
+}
+
+func parseMemoryEnvelope(raw []byte, snapshot Snapshot, recoverRecentContext bool) (MemoryEnvelope, error) {
 	raw = escapeLiteralJSONControls(raw)
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &fields); err != nil {
@@ -151,10 +159,47 @@ func ParseMemoryEnvelope(raw []byte, snapshot Snapshot) (MemoryEnvelope, error) 
 		}
 		return MemoryEnvelope{}, fmt.Errorf("memory: envelope has trailing data: %w", err)
 	}
+	if recoverRecentContext {
+		discardInvalidRecentContext(&envelope, snapshot)
+	}
 	if err := validateMemoryEnvelope(envelope, snapshot); err != nil {
 		return MemoryEnvelope{}, err
 	}
 	return envelope, nil
+}
+
+// discardInvalidRecentContext removes only short-lived context that the model
+// could not anchor to the current snapshot. Durable sections remain strict.
+func discardInvalidRecentContext(envelope *MemoryEnvelope, snapshot Snapshot) {
+	known := snapshotMessageIDs(snapshot)
+	filtered := envelope.RecentContext[:0]
+	for _, fact := range envelope.RecentContext {
+		if validCurrentMemorySources(fact.SourceMessageIDs, known) {
+			filtered = append(filtered, fact)
+		}
+	}
+	envelope.RecentContext = filtered
+}
+
+func validCurrentMemorySources(sourceIDs []string, known map[string]struct{}) bool {
+	if len(sourceIDs) == 0 || len(sourceIDs) > memoryMaxSourceIDs {
+		return false
+	}
+	seen := make(map[string]struct{}, len(sourceIDs))
+	for _, sourceID := range sourceIDs {
+		sourceID = strings.TrimSpace(sourceID)
+		if sourceID == "" {
+			return false
+		}
+		if _, ok := known[sourceID]; !ok {
+			return false
+		}
+		if _, ok := seen[sourceID]; ok {
+			return false
+		}
+		seen[sourceID] = struct{}{}
+	}
+	return true
 }
 
 func validateMemoryEnvelope(envelope MemoryEnvelope, snapshot Snapshot) error {
@@ -541,6 +586,14 @@ func mergeStrings(first, second []string) []string {
 
 // RenderMemoryDocument renders the fixed human-readable Markdown layout.
 func RenderMemoryDocument(document MemoryDocument) ([]byte, error) {
+	document, err := prepareMemoryDocument(document)
+	if err != nil {
+		return nil, err
+	}
+	return renderMemoryDocumentRaw(document), nil
+}
+
+func prepareMemoryDocument(document MemoryDocument) (MemoryDocument, error) {
 	if document.FormatVersion == 0 {
 		document.FormatVersion = memoryFormatVersion
 	}
@@ -548,15 +601,44 @@ func RenderMemoryDocument(document MemoryDocument) ([]byte, error) {
 		document.FormatVersion = memoryFormatVersion
 	}
 	if document.FormatVersion != memoryFormatVersion {
-		return nil, fmt.Errorf("memory: unsupported format version %d", document.FormatVersion)
+		return MemoryDocument{}, fmt.Errorf("memory: unsupported format version %d", document.FormatVersion)
 	}
 	if err := validateMemoryDocument(document); err != nil {
-		return nil, err
+		return MemoryDocument{}, err
 	}
 	document = cloneMemoryDocument(document)
 	trimMemoryDocument(&document)
 	if err := fitMemoryDocument(&document); err != nil {
+		return MemoryDocument{}, err
+	}
+	return document, nil
+}
+
+// renderMemoryPromptDocument removes durable provenance before the aggregate
+// is shown to the model. The current snapshot below the aggregate is the only
+// valid source for new message citations.
+func renderMemoryPromptDocument(document MemoryDocument) ([]byte, error) {
+	document, err := prepareMemoryDocument(document)
+	if err != nil {
 		return nil, err
+	}
+	document.LastSessionID = ""
+	document.LastMessageID = ""
+	document.LastMessageSeq = 0
+	document.Sources = nil
+	for _, entries := range []*[]MemoryEntry{
+		&document.Preferences,
+		&document.Decisions,
+		&document.ThingsToAvoid,
+		&document.Questions,
+		&document.RecentContext,
+	} {
+		for index := range *entries {
+			(*entries)[index].SourceMessageIDs = nil
+		}
+	}
+	for index := range document.Skills {
+		document.Skills[index].SourceMessageIDs = nil
 	}
 	return renderMemoryDocumentRaw(document), nil
 }
@@ -967,7 +1049,7 @@ func WriteMemoryDocument(ctx context.Context, workdir string, document MemoryDoc
 }
 
 func BuildMemoryPrompt(snapshot Snapshot, document MemoryDocument, relatedRecaps string) (string, error) {
-	current, err := RenderMemoryDocument(document)
+	current, err := renderMemoryPromptDocument(document)
 	if err != nil {
 		return "", err
 	}
@@ -980,6 +1062,14 @@ func BuildMemoryPrompt(snapshot Snapshot, document MemoryDocument, relatedRecaps
 	b.WriteString("\n</memories>\nRelated local knowledge evidence (untrusted):\n<related_knowledge>\n")
 	b.WriteString(truncateString(relatedRecaps, maxRelatedOutput))
 	b.WriteString("\n</related_knowledge>\n")
+	b.WriteString("Only the following current message IDs may appear in source_message_ids: [")
+	for index, message := range snapshot.Messages {
+		if index > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(strconv.Quote(message.ID))
+	}
+	b.WriteString("]\n")
 	if signals := ExtractMemorySignals(snapshot); len(signals) > 0 {
 		b.WriteString("Explicit user signals (authoritative; preserve their category):\n<signals>\n")
 		for _, signal := range signals {

@@ -144,9 +144,15 @@ One user turn runs in `internal/agent.Send` with a hard step bound (default
    local knowledge evidence, then asks the selected recap model for a strict
    JSON memory envelope. Explicit user signals are restored into their
    authoritative sections before valid facts are merged into the aggregate and
-   written with an atomic rename. A SQLite `memory_updates` row records the
-   source anchor, model, attempts, digest, and any failure so restarts can
-   retry safely.
+   written with an atomic rename. The model sees a redacted aggregate without
+   historical message IDs or the source ledger. The prompt lists the current
+   snapshot IDs as the only valid citation choices. A correction is stored as
+   a supersession, which keeps the old fact marked `superseded` instead of
+   deleting it. If only short-lived `recent_context` citations are missing,
+   the worker makes one repair call and drops that context if it remains
+   untraceable. Durable sections remain strict. A SQLite `memory_updates` row
+   records the source anchor, model, attempts, digest, and any failure so
+   restarts can retry safely.
 
 Everything the loop needs for a resumed session lives in the store; there is
 no in-memory tool state for the parent transcript.

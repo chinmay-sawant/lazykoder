@@ -141,8 +141,18 @@ func TestMergeMemorySupersedesAndRetainsSourceLedger(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MergeMemory: %v", err)
 	}
-	if len(got.Decisions) != 2 || got.Decisions[0].State != "active" || got.Decisions[1].State != "superseded" {
-		t.Fatalf("decisions = %+v, want active replacement and superseded source", got.Decisions)
+	var replacement, historical *MemoryEntry
+	for index := range got.Decisions {
+		entry := &got.Decisions[index]
+		switch entry.Text {
+		case "Use the checked plan":
+			replacement = entry
+		case "Use the old plan":
+			historical = entry
+		}
+	}
+	if replacement == nil || replacement.State != "active" || historical == nil || historical.State != "superseded" {
+		t.Fatalf("decisions = %+v, want active replacement and retained superseded source", got.Decisions)
 	}
 	if len(got.Sources) != len(snapshot.Messages) {
 		t.Fatalf("sources = %d, want %d", len(got.Sources), len(snapshot.Messages))
