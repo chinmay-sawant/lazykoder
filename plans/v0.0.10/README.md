@@ -1,12 +1,13 @@
-# v0.0.10 - Local recap, questions, and recall
+# v0.0.10 - Local recap, questions, recall, and durable memory
 
 > **Parent:** Current chat, settings, SQLite, first-request agent path, and local knowledge base
-> **Status:** planned 2026-08-21
-> **Estimated effort:** 6-8 days across five phases
+> **Status:** recap shipped; durable memory extension planned 2026-08-22
+> **Estimated effort:** recap baseline 6-8 days; memory extension 5-8 days
 > **Priority:** P1
 > **Skill:** `skills/phase-wise-checklist/SKILLS.md`
 > **Gate:** an enabled project writes ordered recap artifacts after a main
-> turn, then checks those artifacts once before the next user turn's first
+> turn, updates the durable memory aggregate after successful parent requests,
+> then checks memory and recap evidence before the next user turn's first
 > ordinary model request.
 
 ## Overview
@@ -14,6 +15,14 @@
 Recaps are optional local memory. A completed main-chat turn starts a hidden
 worker. It writes a recap, unresolved questions for a future agent, and
 concrete things to avoid based on user corrections and tool failures.
+
+The next extension adds one curated project file at
+`knowledge-base/memories.md`. It will hold stable user preferences, project
+decisions, things to avoid, open questions, recent context, and source links.
+The file is a bounded aggregate, not a transcript. The application owns its
+format and atomic writes. A hidden memory worker may use the configured recap
+model, but it must return structured evidence that code validates before the
+file changes.
 
 The worker has its own setting. It defaults to `deepseek-v4-flash`, which is
 the built-in new-session default and is present in the cached model catalog.
@@ -56,6 +65,30 @@ do not repeat the lookup.
   the user during a recap run.
 - `recap.enabled` controls both artifact creation and first-request recall.
   Turning it off stops future jobs and lookups without changing sub-agents.
+- `knowledge-base/memories.md` is the canonical aggregate for durable memory.
+  The existing `knowledge-base/recaps/` files remain the evidence ledger and
+  are never replaced by the aggregate.
+- A successful parent user request is the update boundary. The application
+  schedules a separate hidden memory update after the request completes. A
+  failed, cancelled, compact, continue, or child-agent operation does not
+  update the file. There is no reliable process-shutdown hook to use as the
+  only trigger.
+- The memory worker reads the previous aggregate and bounded recent evidence,
+  then returns typed entries for preferences, decisions, avoid rules,
+  questions, and recent context. It cannot write Markdown or front matter
+  directly. Code renders the canonical layout and keeps source message IDs.
+- The memory file has a fixed schema with `format_version`, UTC update time,
+  last source session and message, then these sections: User preferences,
+  Decisions and constraints, Things to avoid, Open questions, Recent context,
+  and Source ledger. Each entry carries evidence and source IDs.
+- The aggregate is capped at 64 KiB. Each section has entry limits, old
+  superseded entries are pruned only after their source remains in the ledger,
+  and secrets are rejected before persistence. Every write uses a temporary
+  file, sync, close, and rename.
+- First-request recall checks `memories.md` before the existing recap tree.
+  Both results remain bounded, untrusted, and wire-only. The same keyword
+  extraction and quoted internal grep path are reused, with explicit tests
+  for prompts about recent work, preferences, decisions, and things to avoid.
 
 ## Identity, ordering, and timestamps
 
@@ -91,6 +124,14 @@ with each path and SHA-256 for recovery and audit.
    attach worker and recall services, then schedule successful parent turns.
 5. [~] [Phase 5](phase-5-docs-and-gates.md): synchronize docs and run the
    complete automated and terminal checks.
+6. [ ] [Phase 6](phase-6-memory-contract.md): define the durable `memories.md`
+   schema, source identity, limits, and database update ledger.
+7. [ ] [Phase 7](phase-7-memory-update-worker.md): update the aggregate after
+   each successful parent request with an idempotent hidden worker.
+8. [ ] [Phase 8](phase-8-memory-recall-and-lifecycle.md): search the aggregate
+   before recap files and preserve the first-request wire-only boundary.
+9. [ ] [Phase 9](phase-9-memory-docs-and-gates.md): document, test, and verify
+   the memory lifecycle without adding a visible worker row.
 
 ## First-request recall
 
@@ -118,6 +159,8 @@ A context-overflow retry reuses the block without scanning again.
   and `callModel`
 - Existing confined search in `internal/tools/grep.Run`
 - Existing local knowledge-base convention
+- Existing atomic artifact writer and recap model envelope validation
+- SQLite single-writer behavior for memory update idempotency
 
 No new third-party dependency is planned.
 
@@ -134,3 +177,13 @@ No new third-party dependency is planned.
       completion cannot produce a second file for the same end message.
 - [x] A related next user turn makes one internal grep lookup before its first
       ordinary request. Tool follow-ups and `/continue` make no lookup.
+- [ ] A successful parent request updates `knowledge-base/memories.md` at most
+      once for its source message, and replaying the completion event does not
+      change the file a second time.
+- [ ] `memories.md` follows the fixed section schema, stays below 64 KiB, has
+      source IDs for every entry, and contains no secret-like values.
+- [ ] The next ordinary parent request searches `memories.md` before recap
+      artifacts and injects one bounded, untrusted block. Tool follow-ups,
+      `/continue`, compaction, and child agents do not search it.
+- [ ] A restart resumes one open memory update without losing the previous
+      aggregate or producing a partial file.

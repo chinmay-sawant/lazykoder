@@ -40,12 +40,16 @@ snapshots:
 | `v0.0.9/phase-3-docs-kb-gates.md` | docs, knowledge-base, tips/help, full gates |
 | `v0.0.9/phase-4-agents-md-context.md` | inject workdir AGENTS.md as system primer |
 | `v0.0.9/phase-4-agents-md-context.md` | inject workdir AGENTS.md as system primer |
-| `v0.0.10/README.md` | planned local recap, questions, avoid rules, and first-request recall |
+| `v0.0.10/README.md` | local recap, questions, avoid rules, first-request recall, and durable memory |
 | `v0.0.10/phase-1-settings-and-recap-records.md` | recap settings and idempotent artifact records |
 | `v0.0.10/phase-2-hidden-recap-worker.md` | time-windowed snapshot, questions, avoid rules, and atomic artifacts |
 | `v0.0.10/phase-3-first-request-recall.md` | bounded internal grep before the first normal user request |
 | `v0.0.10/phase-4-settings-ui-and-turn-scheduling.md` | settings rows, worker wiring, and post-turn scheduling |
 | `v0.0.10/phase-5-docs-and-gates.md` | docs, local knowledge base, and release checks |
+| `v0.0.10/phase-6-memory-contract.md` | durable `memories.md` schema, source identity, and limits |
+| `v0.0.10/phase-7-memory-update-worker.md` | per-request hidden memory update and idempotent writes |
+| `v0.0.10/phase-8-memory-recall-and-lifecycle.md` | memory-first recall and request lifecycle boundaries |
+| `v0.0.10/phase-9-memory-docs-and-gates.md` | memory documentation, tests, and closure gates |
 
 Each checklist row is marked `[x]` only when the gate actually passed, with
 the command and exit code recorded beside the row. Rows are never checked
@@ -84,6 +88,11 @@ human runs them.
   request. Automated
   gates are green; live-terminal settings inspection remains open. Ledger:
   `plans/v0.0.10/`.
+- v0.0.10 memory extension: planned durable `knowledge-base/memories.md`.
+  The aggregate will be refreshed after successful parent requests, retain
+  source-backed preferences, decisions, avoid rules, questions, and recent
+  context, and be searched before the existing recap artifacts. The memory
+  phases are not implemented or validated yet.
 
 ## What 0.0.1 deliberately does not do
 
