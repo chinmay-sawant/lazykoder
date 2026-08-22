@@ -18,13 +18,14 @@ var memoryWriteLocks sync.Map
 
 // MemoryRunInput joins one durable update reservation to the hidden worker.
 type MemoryRunInput struct {
-	Store      *db.Store
-	Record     db.MemoryUpdate
-	Snapshot   Snapshot
-	Workdir    string
-	Worker     MemoryWorker
-	GrepRunner *grep.Runner
-	Enabled    func() bool
+	Store           *db.Store
+	Record          db.MemoryUpdate
+	Snapshot        Snapshot
+	Workdir         string
+	Worker          MemoryWorker
+	SkillReferences []MemorySkillReference
+	GrepRunner      *grep.Runner
+	Enabled         func() bool
 }
 
 // RunMemoryUpdate claims, generates, merges, and atomically writes one memory
@@ -87,7 +88,7 @@ func RunMemoryUpdate(ctx context.Context, input MemoryRunInput) error {
 		}
 		return nil
 	}
-	merged, err := MergeMemory(document, envelope, input.Snapshot, timeNow())
+	merged, err := MergeMemoryWithSkills(document, envelope, input.Snapshot, input.SkillReferences, timeNow())
 	if err != nil {
 		return fail(err)
 	}

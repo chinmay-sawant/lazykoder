@@ -36,7 +36,7 @@ func TestSettingsSlashOpensCard(t *testing.T) {
 	if !strings.Contains(v, "SETTINGS") || !strings.Contains(v, "[x]") {
 		t.Fatalf("settings card missing header/x: %q", v)
 	}
-	for _, want := range []string{"theme", "new-session model", "recaps enabled", "recap model", "recap after chats", "child timeout", "default role", "child bash confirms", "parent bash allowlist", "auto-compact", "compact at"} {
+	for _, want := range []string{"theme", "new-session model", "recaps enabled", "recap model", "recap after chats", "skills enabled", "skills auto-detect", "skills local source", "skills global source", "remember skill references", "skill auto matches", "child timeout", "default role", "child bash confirms", "parent bash allowlist", "auto-compact", "compact at"} {
 		if !strings.Contains(v, want) {
 			t.Fatalf("settings card missing %q: %q", want, v)
 		}
@@ -757,7 +757,7 @@ func settingsPaintedRow(m Model, label string) string {
 
 func settingsHitX(line string, row int) int {
 	switch row {
-	case settingsRowLimit, settingsRowCompactAuto, settingsRowAgentsEnabled, settingsRowAgentsWriters, settingsRowAllowlistEnabled, settingsRowRecapEnabled:
+	case settingsRowLimit, settingsRowCompactAuto, settingsRowAgentsEnabled, settingsRowAgentsWriters, settingsRowAllowlistEnabled, settingsRowRecapEnabled, settingsRowSkillsEnabled, settingsRowSkillsAutoDetect, settingsRowSkillsLocal, settingsRowSkillsGlobal, settingsRowSkillsRemember:
 		if x0, x1, ok := displaySpan(line, "[on]"); ok {
 			return (x0 + x1) / 2
 		}
@@ -814,6 +814,18 @@ func settingsHitChanged(before, after Model, row int) bool {
 		return after.projectSettings.Recap.Model != before.projectSettings.Recap.Model
 	case settingsRowRecapAfterChats:
 		return after.projectSettings.EffectiveRecap().AfterChats != before.projectSettings.EffectiveRecap().AfterChats
+	case settingsRowSkillsEnabled:
+		return after.projectSettings.EffectiveSkills().Enabled != before.projectSettings.EffectiveSkills().Enabled
+	case settingsRowSkillsAutoDetect:
+		return after.projectSettings.EffectiveSkills().AutoDetect != before.projectSettings.EffectiveSkills().AutoDetect
+	case settingsRowSkillsLocal:
+		return after.projectSettings.EffectiveSkills().IncludeLocal != before.projectSettings.EffectiveSkills().IncludeLocal
+	case settingsRowSkillsGlobal:
+		return after.projectSettings.EffectiveSkills().IncludeGlobal != before.projectSettings.EffectiveSkills().IncludeGlobal
+	case settingsRowSkillsRemember:
+		return after.projectSettings.EffectiveSkills().Remember != before.projectSettings.EffectiveSkills().Remember
+	case settingsRowSkillsMaxMatches:
+		return after.projectSettings.EffectiveSkills().MaxAutoMatches != before.projectSettings.EffectiveSkills().MaxAutoMatches
 	case settingsRowLimit:
 		return after.projectSettings.Slot.LimitEnabled != before.projectSettings.Slot.LimitEnabled
 	case settingsRowSteps:

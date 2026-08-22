@@ -30,6 +30,16 @@ func TestMemoryDocumentRoundTrip(t *testing.T) {
 		Seq:       4,
 		SeenAtUTC: "2026-08-22T12:00:00Z",
 	})
+	document.Skills = append(document.Skills, MemorySkillReference{
+		ID:               "skill_review",
+		Name:             "review",
+		Scope:            "local",
+		Path:             "skills/review/SKILL.md",
+		ContentHash:      "abc123",
+		UseCount:         1,
+		LastUsedUTC:      "2026-08-22T12:00:00Z",
+		SourceMessageIDs: []string{"msg_4"},
+	})
 	raw, err := RenderMemoryDocument(document)
 	if err != nil {
 		t.Fatalf("RenderMemoryDocument: %v", err)
@@ -38,11 +48,14 @@ func TestMemoryDocumentRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseMemoryDocument: %v\n%s", err, raw)
 	}
-	if got.LastSessionID != document.LastSessionID || got.LastMessageID != document.LastMessageID || len(got.Preferences) != 1 || len(got.Sources) != 1 {
+	if got.LastSessionID != document.LastSessionID || got.LastMessageID != document.LastMessageID || len(got.Preferences) != 1 || len(got.Sources) != 1 || len(got.Skills) != 1 {
 		t.Fatalf("round trip = %+v, want %+v", got, document)
 	}
 	if got.Preferences[0].Text != document.Preferences[0].Text || got.Sources[0].MessageID != "msg_4" {
 		t.Fatalf("round-trip content = %+v", got)
+	}
+	if got.Skills[0].Name != "review" || got.Skills[0].Path != "skills/review/SKILL.md" {
+		t.Fatalf("round-trip skills = %+v", got.Skills)
 	}
 }
 

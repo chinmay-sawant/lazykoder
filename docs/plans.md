@@ -95,10 +95,11 @@ human runs them.
   avoid rules, questions, and recent context, and is searched before the
   existing recap artifacts. Phases 6-8 are complete. Phase 9 automated gates
   are complete; live terminal inspection remains open.
-- v0.0.10 skills extension: Phase 10 is planned. It will discover both
-  project-local and configured global skill descriptors, expose `/skills`,
-  select bounded untrusted skill context before the first ordinary request,
-  and add reusable skill paths to the memory aggregate.
+- v0.0.10 skills extension: Phase 10 implementation is landed with bounded
+  project-local and configured global descriptor discovery, `/skills` and
+  `/skill`, first-request untrusted context injection, child propagation of
+  explicit contexts, and reusable code-owned skill references in memory.
+  Automated gates are being closed; live terminal evidence remains open.
 
 ## What 0.0.1 deliberately does not do
 

@@ -270,7 +270,7 @@ func spliceDisplay(dst, src string, left int) string {
 // a dark background with bright text so the input stays clearly readable.
 // A bottom margin lifts it one row above the bottom edge.
 func (m Model) showLiveStatus() bool {
-	return m.busy || m.recallScanning || m.memoryScanJobs > 0 || strings.TrimSpace(m.activity) != ""
+	return m.busy || m.recallScanning || m.skillsScanning || m.memoryScanJobs > 0 || strings.TrimSpace(m.activity) != ""
 }
 
 func (m Model) liveStatusView() string {
@@ -279,6 +279,9 @@ func (m Model) liveStatusView() string {
 	mark := m.workRailMark()
 	if m.recallScanning {
 		label = "scanning memory patterns"
+		mark = m.memoryScanMark()
+	} else if m.skillsScanning {
+		label = "scanning approved skills"
 		mark = m.memoryScanMark()
 	} else if !m.busy && m.memoryScanJobs > 0 {
 		label = "updating memories.md"

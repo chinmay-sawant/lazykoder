@@ -130,7 +130,15 @@ One user turn runs in `internal/agent.Send` with a hard step bound (default
    Provider, validation, and artifact failures mark that record failed with a
    bounded error. `/agents` reloads the record and displays that error while
    keeping the worker out of the transcript.
-9. After every successful completed main-session turn, a separate hidden memory
+9. Before the first ordinary provider request for a parent turn, the agent
+   runs the bounded recall and skill providers after persisting the user row.
+   Skills come from `<workdir>/skills`, `<workdir>/.agents/skills`, and the
+   configured global roots. Explicit activation precedes local and then global
+   automatic matches. The selected bodies are one untrusted, wire-only system
+   block and are never stored in SQLite, recap artifacts, or the memory file.
+   Skill scans do not run for tool follow-ups, `/continue`, compaction, child
+   sessions, or hidden workers. The TUI reports a separate skill-scan status.
+10. After every successful completed main-session turn, a separate hidden memory
    worker uses a bounded two-to-five-message snapshot. It reads the
    current project `knowledge-base/memories.md` and a bounded grep of related
    local knowledge evidence, then asks the selected recap model for a strict
@@ -145,7 +153,7 @@ no in-memory tool state for the parent transcript.
 
 ### First-request recall
 
-When `recap.enabled` is true, `internal/ui/chat` runs one bounded, quoted
+When `recap.enabled` or `skills.enabled` is true, `internal/ui/chat` runs one bounded, quoted
 grep after persisting a new parent user message and before its first ordinary
 provider request when the prompt contains recall language. It searches
 `knowledge-base/memories.md` first, then `knowledge-base/recaps/`, and finally
@@ -155,6 +163,19 @@ block is marked untrusted and is not persisted. Tool follow-ups, `/continue`,
 compaction, and child sessions do not repeat the lookup. Missing or malformed
 memory files are treated as empty recall sources. The chat status line uses a
 separate animated marker while this lookup or the hidden memory update runs.
+
+### Skill catalog and settings
+
+`internal/skills` resolves only approved project and configured global roots.
+It accepts `SKILL.md` and legacy `SKILLS.md`, parses bounded metadata, rejects
+symlinked roots and files, and returns deterministic diagnostics instead of
+failing the chat turn. `/skills` and `/skill` use the model-drawer interaction
+family to list and activate a descriptor for the next parent request. The
+persisted `skills` settings group controls discovery, automatic matching,
+source scopes, reference remembering, and byte limits. Skill references are
+merged into the version 2 `Skills` section of `knowledge-base/memories.md`
+using code-owned paths and hashes. Skill bodies are never accepted from the
+model memory envelope.
 
 ## Compaction
 

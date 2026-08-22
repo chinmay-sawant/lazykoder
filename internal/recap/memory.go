@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	memoryFormatVersion      = 1
+	memoryFormatVersion      = 2
 	memoryMaxBytes           = 64 * 1024
 	memoryMaxEntriesPerPart  = 32
 	memoryMaxSourceEntries   = 128
@@ -30,6 +30,8 @@ const (
 	memorySectionAvoid       = "things_to_avoid"
 	memorySectionQuestions   = "questions"
 	memorySectionRecent      = "recent_context"
+	memorySectionSkills      = "skills"
+	memoryMaxSkillEntries    = 64
 )
 
 // MemoryEntry is one source-backed fact in the project aggregate.
@@ -51,6 +53,19 @@ type MemorySource struct {
 	SeenAtUTC string `json:"seen_at_utc"`
 }
 
+// MemorySkillReference records a discovered or explicitly activated skill.
+// It stores provenance, not the descriptor body.
+type MemorySkillReference struct {
+	ID               string   `json:"id"`
+	Name             string   `json:"name"`
+	Scope            string   `json:"scope"`
+	Path             string   `json:"path"`
+	ContentHash      string   `json:"content_hash"`
+	UseCount         int      `json:"use_count"`
+	LastUsedUTC      string   `json:"last_used_utc"`
+	SourceMessageIDs []string `json:"source_message_ids"`
+}
+
 // MemoryDocument is the application-owned representation of memories.md.
 // Recap artifacts remain the detailed session evidence ledger.
 type MemoryDocument struct {
@@ -64,6 +79,7 @@ type MemoryDocument struct {
 	ThingsToAvoid  []MemoryEntry
 	Questions      []MemoryEntry
 	RecentContext  []MemoryEntry
+	Skills         []MemorySkillReference
 	Sources        []MemorySource
 }
 
@@ -102,6 +118,7 @@ func NewMemoryDocument() MemoryDocument {
 		ThingsToAvoid: make([]MemoryEntry, 0),
 		Questions:     make([]MemoryEntry, 0),
 		RecentContext: make([]MemoryEntry, 0),
+		Skills:        make([]MemorySkillReference, 0),
 		Sources:       make([]MemorySource, 0),
 	}
 }
@@ -227,11 +244,19 @@ func validMemorySection(value string) bool {
 
 // MergeMemory applies a validated envelope to the existing aggregate.
 func MergeMemory(previous MemoryDocument, envelope MemoryEnvelope, snapshot Snapshot, now time.Time) (MemoryDocument, error) {
+	return MergeMemoryWithSkills(previous, envelope, snapshot, nil, now)
+}
+
+// MergeMemoryWithSkills applies model facts and request-time skill provenance.
+func MergeMemoryWithSkills(previous MemoryDocument, envelope MemoryEnvelope, snapshot Snapshot, skillRefs []MemorySkillReference, now time.Time) (MemoryDocument, error) {
 	if err := validateMemoryEnvelope(envelope, snapshot); err != nil {
 		return MemoryDocument{}, err
 	}
 	document := cloneMemoryDocument(previous)
 	if document.FormatVersion == 0 {
+		document.FormatVersion = memoryFormatVersion
+	}
+	if document.FormatVersion == 1 {
 		document.FormatVersion = memoryFormatVersion
 	}
 	if document.FormatVersion != memoryFormatVersion {
@@ -255,11 +280,71 @@ func MergeMemory(previous MemoryDocument, envelope MemoryEnvelope, snapshot Snap
 	mergeMemoryFacts(&document.ThingsToAvoid, memorySectionAvoid, envelope.ThingsToAvoid, nowUTC)
 	mergeMemoryFacts(&document.Questions, memorySectionQuestions, envelope.Questions, nowUTC)
 	mergeMemoryFacts(&document.RecentContext, memorySectionRecent, envelope.RecentContext, nowUTC)
+	mergeMemorySkills(&document.Skills, skillRefs, snapshot.SourceEndMessageID, nowUTC)
 	trimMemoryDocument(&document)
 	if _, err := RenderMemoryDocument(document); err != nil {
 		return MemoryDocument{}, err
 	}
 	return document, nil
+}
+
+func mergeMemorySkills(target *[]MemorySkillReference, refs []MemorySkillReference, sourceMessageID, nowUTC string) {
+	for _, ref := range refs {
+		ref.Name = strings.TrimSpace(ref.Name)
+		ref.Scope = strings.TrimSpace(ref.Scope)
+		ref.Path = strings.TrimSpace(ref.Path)
+		if ref.Name == "" || ref.Path == "" {
+			continue
+		}
+		if ref.ID == "" {
+			ref.ID = memorySkillKey(ref.Name, ref.Scope, ref.Path)
+		}
+		if ref.LastUsedUTC == "" {
+			ref.LastUsedUTC = nowUTC
+		}
+		if len(ref.SourceMessageIDs) == 0 && sourceMessageID != "" {
+			ref.SourceMessageIDs = []string{sourceMessageID}
+		}
+		found := -1
+		for index := range *target {
+			if (*target)[index].ID == ref.ID {
+				found = index
+				break
+			}
+		}
+		if found < 0 {
+			if ref.UseCount <= 0 {
+				ref.UseCount = 1
+			}
+			*target = append(*target, ref)
+			continue
+		}
+		entry := &(*target)[found]
+		entry.Name = ref.Name
+		entry.Scope = ref.Scope
+		entry.Path = ref.Path
+		entry.ContentHash = ref.ContentHash
+		entry.UseCount += maxInt(1, ref.UseCount)
+		entry.LastUsedUTC = ref.LastUsedUTC
+		entry.SourceMessageIDs = mergeStrings(entry.SourceMessageIDs, ref.SourceMessageIDs)
+	}
+}
+
+func memorySkillKey(name, scope, path string) string {
+	digest := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(scope)) + "\x00" + strings.ToLower(strings.TrimSpace(name)) + "\x00" + filepath.Clean(path)))
+	return fmt.Sprintf("skill_%x", digest[:8])
+}
+
+// SkillReferenceID returns the stable identifier used in memories.md.
+func SkillReferenceID(name, scope, path string) string {
+	return memorySkillKey(name, scope, path)
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func mergeMemoryFacts(target *[]MemoryEntry, category string, facts []MemoryFact, nowUTC string) {
@@ -387,6 +472,15 @@ func trimMemoryDocument(document *MemoryDocument) {
 			*target = (*target)[:memoryMaxEntriesPerPart]
 		}
 	}
+	sort.SliceStable(document.Skills, func(i, j int) bool {
+		if document.Skills[i].LastUsedUTC != document.Skills[j].LastUsedUTC {
+			return document.Skills[i].LastUsedUTC > document.Skills[j].LastUsedUTC
+		}
+		return document.Skills[i].ID < document.Skills[j].ID
+	})
+	if len(document.Skills) > memoryMaxSkillEntries {
+		document.Skills = document.Skills[:memoryMaxSkillEntries]
+	}
 }
 
 func cloneMemoryDocument(document MemoryDocument) MemoryDocument {
@@ -396,6 +490,7 @@ func cloneMemoryDocument(document MemoryDocument) MemoryDocument {
 	clone.ThingsToAvoid = append([]MemoryEntry{}, document.ThingsToAvoid...)
 	clone.Questions = append([]MemoryEntry{}, document.Questions...)
 	clone.RecentContext = append([]MemoryEntry{}, document.RecentContext...)
+	clone.Skills = append([]MemorySkillReference{}, document.Skills...)
 	clone.Sources = append([]MemorySource{}, document.Sources...)
 	for _, entries := range []*[]MemoryEntry{
 		&clone.Preferences,
@@ -407,6 +502,9 @@ func cloneMemoryDocument(document MemoryDocument) MemoryDocument {
 		for index := range *entries {
 			(*entries)[index].SourceMessageIDs = append([]string{}, (*entries)[index].SourceMessageIDs...)
 		}
+	}
+	for index := range clone.Skills {
+		clone.Skills[index].SourceMessageIDs = append([]string{}, clone.Skills[index].SourceMessageIDs...)
 	}
 	return clone
 }
@@ -446,6 +544,9 @@ func RenderMemoryDocument(document MemoryDocument) ([]byte, error) {
 	if document.FormatVersion == 0 {
 		document.FormatVersion = memoryFormatVersion
 	}
+	if document.FormatVersion == 1 {
+		document.FormatVersion = memoryFormatVersion
+	}
 	if document.FormatVersion != memoryFormatVersion {
 		return nil, fmt.Errorf("memory: unsupported format version %d", document.FormatVersion)
 	}
@@ -474,6 +575,12 @@ func renderMemoryDocumentRaw(document MemoryDocument) []byte {
 	renderMemorySection(&b, "Things to avoid", document.ThingsToAvoid)
 	renderMemorySection(&b, "Open questions", document.Questions)
 	renderMemorySection(&b, "Recent context", document.RecentContext)
+	b.WriteString("## Skills\n\n")
+	for _, skill := range document.Skills {
+		raw, _ := json.Marshal(skill)
+		fmt.Fprintf(&b, "- %s\n", raw)
+	}
+	b.WriteString("\n")
 	b.WriteString("## Source ledger\n\n")
 	for _, source := range document.Sources {
 		raw, _ := json.Marshal(source)
@@ -518,6 +625,10 @@ func fitMemoryDocument(document *MemoryDocument) error {
 		}
 		if bestSection >= 0 {
 			*sections[bestSection] = (*sections[bestSection])[:len(*sections[bestSection])-1]
+			continue
+		}
+		if len(document.Skills) > 0 {
+			document.Skills = document.Skills[:len(document.Skills)-1]
 			continue
 		}
 		if len(document.Sources) > 0 {
@@ -593,6 +704,9 @@ func ParseMemoryDocument(raw []byte) (MemoryDocument, error) {
 	if frontEnd < 0 {
 		return MemoryDocument{}, errors.New("memory: missing front matter terminator")
 	}
+	if document.FormatVersion == 1 {
+		document.FormatVersion = memoryFormatVersion
+	}
 	section := ""
 	var current *MemoryEntry
 	for _, line := range lines[frontEnd+1:] {
@@ -615,6 +729,15 @@ func ParseMemoryDocument(raw []byte) (MemoryDocument, error) {
 					return MemoryDocument{}, err
 				}
 				document.Sources = append(document.Sources, source)
+				continue
+			}
+			if section == memorySectionSkills {
+				value := strings.TrimSpace(strings.TrimPrefix(trimmed, "- "))
+				var skill MemorySkillReference
+				if err := json.Unmarshal([]byte(value), &skill); err != nil {
+					return MemoryDocument{}, fmt.Errorf("memory: skill entry: %w", err)
+				}
+				document.Skills = append(document.Skills, skill)
 				continue
 			}
 			entries := memorySection(&document, section)
@@ -653,6 +776,8 @@ func memoryHeadingSection(heading string) string {
 		return memorySectionQuestions
 	case "Recent context":
 		return memorySectionRecent
+	case "Skills":
+		return memorySectionSkills
 	case "Source ledger":
 		return "source_ledger"
 	default:
@@ -729,6 +854,22 @@ func validateMemoryDocument(document MemoryDocument) error {
 				return err
 			}
 		}
+	}
+	if len(document.Skills) > memoryMaxSkillEntries {
+		return errors.New("memory: too many skills")
+	}
+	seenSkills := make(map[string]struct{}, len(document.Skills))
+	for index, skill := range document.Skills {
+		if strings.TrimSpace(skill.ID) == "" || strings.TrimSpace(skill.Name) == "" || strings.TrimSpace(skill.Scope) == "" || strings.TrimSpace(skill.Path) == "" {
+			return fmt.Errorf("memory: incomplete skill entry %d", index)
+		}
+		if skill.UseCount <= 0 || strings.TrimSpace(skill.LastUsedUTC) == "" || len(skill.SourceMessageIDs) == 0 || len(skill.SourceMessageIDs) > memoryMaxSourceIDs {
+			return fmt.Errorf("memory: invalid skill entry %d provenance", index)
+		}
+		if _, exists := seenSkills[skill.ID]; exists {
+			return fmt.Errorf("memory: duplicate skill entry %d", index)
+		}
+		seenSkills[skill.ID] = struct{}{}
 	}
 	if len(document.Sources) > memoryMaxSourceEntries {
 		return errors.New("memory: too many source entries")

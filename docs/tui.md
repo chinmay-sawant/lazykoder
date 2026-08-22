@@ -301,6 +301,8 @@ and keyboard hint rows keep the card's opaque neutral-charcoal background.
 | recaps enabled | on/off for hidden recap generation and first-request local recall (default off) |
 | recap model | model for hidden recap generation (default `deepseek-v4-flash`) |
 | recap after chats | successful main-chat turns before scheduling (1-20, default 2) |
+| skills enabled | on/off for discovery, activation, and request-time injection (default on) |
+| skill settings | discovery toggles and automatic-match limit; body/context caps remain JSON controls |
 | sub-agents | on/off for parent `task` tools |
 | default role | `explore` / `plan` / `general` when `task` omits role |
 | max concurrent | concurrent child agents (1-20, default 4) |
@@ -351,6 +353,17 @@ recent snapshot, the previous memory document, and related local knowledge
 evidence. Explicit user instructions are decoded into their durable section.
 While local memory patterns are being searched or the hidden update is
 running, the status line shows a separate animated memory marker.
+
+`/skills` and `/skill` open the same drawer family as `/model`. The drawer
+rescans approved project and configured global roots, labels each descriptor
+as local or global, and lets Enter activate one bounded skill for the next
+ordinary parent request. `/skills <query>` filters the catalog without a
+provider call. The prompt status shows `scanning approved skills` during the
+request-time lookup. Skill bodies are untrusted, wire-only context and do not
+appear in the visible transcript, SQLite history, recap artifacts, or memory.
+The persisted `skills` settings group contains `enabled`, `auto_detect`,
+`include_local`, `include_global`, `remember`, `max_auto_matches`,
+`max_body_bytes`, and `max_context_bytes`.
 
 When the step limit is off the agent still has a large safety bound so a
 runaway loop cannot run forever. `/model` and `/variant` still change only

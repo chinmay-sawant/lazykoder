@@ -1,7 +1,7 @@
 # v0.0.10 - Local recap, questions, recall, and durable memory
 
 > **Parent:** Current chat, settings, SQLite, first-request agent path, and local knowledge base
-> **Status:** recap and durable memory shipped; skills discovery planned; live TTY gate open 2026-08-22
+> **Status:** recap, durable memory, and skills discovery implementation landed; automated gates in progress; live TTY gate open 2026-08-22
 > **Estimated effort:** recap baseline 6-8 days; memory extension 5-8 days
 > **Priority:** P1
 > **Skill:** `skills/phase-wise-checklist/SKILLS.md`
@@ -24,10 +24,10 @@ format and atomic writes. A hidden memory worker uses the configured recap
 model, returns structured evidence, and changes the file only after code
 validation.
 
-The planned skills extension adds `/skills` discovery for project-local and
-configured global `SKILL.md` or `SKILLS.md` files. It can select a bounded set
-of relevant skills before the first ordinary provider request and records
-code-owned skill references in a new `Skills` section of `memories.md`.
+The skills extension adds `/skills` discovery for project-local and configured
+global `SKILL.md` or `SKILLS.md` files. It selects a bounded set of relevant
+skills before the first ordinary provider request and records code-owned skill
+references in a new `Skills` section of `memories.md`.
 
 The worker has its own setting. It defaults to `deepseek-v4-flash`, which is
 the built-in new-session default and is present in the cached model catalog.
@@ -152,7 +152,7 @@ with each path and SHA-256 for recovery and audit.
    before recap files and preserve the first-request wire-only boundary.
 9. [~] [Phase 9](phase-9-memory-docs-and-gates.md): document, test, and verify
    the memory lifecycle without adding a visible worker row.
-10. [ ] [Phase 10](phase-10-skills-discovery.md): discover project and global
+10. [~] [Phase 10](phase-10-skills-discovery.md): discover project and global
     skills, expose `/skills`, inject bounded matches, and persist skill paths.
 
 ## First-request recall

@@ -1,7 +1,7 @@
 # v0.0.10 / Phase 10 - Global and local skill discovery
 
 > **Parent:** `plans/v0.0.10/README.md`
-> **Status:** planned
+> **Status:** implementation landed; automated gates in progress; live TTY evidence open
 > **Estimated effort:** 3-5 days
 > **Priority:** P1
 > **Gate:** `/skills` lists valid project and global skills, a selected or
@@ -66,41 +66,41 @@ skill body in the transcript or in `memories.md`.
 
 ### 10.1.1 Resolve the roots safely
 
-- [ ] Add a focused `internal/skills` package with a root resolver that
+- [x] Add a focused `internal/skills` package with a root resolver that
       expands the local project roots and the configured global roots above.
       Keep environment lookup at this boundary and pass resolved roots into
       pure catalog functions.
-- [ ] Reject empty, non-directory, unreadable, and duplicate roots. Do not
+- [~] Reject empty, non-directory, unreadable, and duplicate roots. Do not
       scan the whole home directory, follow directory symlinks, or accept a
       root supplied by the model. Keep the global root allowlist explicit.
-- [ ] Bound directory depth, descriptor size, total descriptors, and scan
+- [~] Bound directory depth, descriptor size, total descriptors, and scan
       time. Return a partial catalog plus per-root diagnostics when one root
       fails so an unavailable global directory does not hide local skills.
 
 ### 10.1.2 Parse one canonical skill descriptor
 
-- [ ] Define `Skill`, `SkillScope`, `SkillRoot`, and `SkillDiagnostic` types
+- [x] Define `Skill`, `SkillScope`, `SkillRoot`, and `SkillDiagnostic` types
       with a canonical path, display path, name, description, triggers,
       source scope, content hash, and descriptor path.
-- [ ] Accept `SKILL.md` and `SKILLS.md` at each bounded skill directory.
+- [x] Accept `SKILL.md` and `SKILLS.md` at each bounded skill directory.
       Prefer `SKILL.md` when both exist and record a duplicate diagnostic.
-- [ ] Parse only the front matter and bounded headings needed for discovery.
+- [x] Parse only the front matter and bounded headings needed for discovery.
       Keep the complete body available through an explicit read method with a
       separate byte cap. Reject malformed metadata without executing or
       silently repairing the descriptor.
-- [ ] Normalize names, triggers, and paths for comparison while preserving a
+- [x] Normalize names, triggers, and paths for comparison while preserving a
       human-readable path for `/skills` and the memory file. Use a stable
       identity based on scope, canonical path, and content hash.
 
 ### 10.1.3 Index, rank, and deduplicate
 
-- [ ] Build a deterministic catalog sorted by normalized name, scope, and
+- [x] Build a deterministic catalog sorted by normalized name, scope, and
       display path. Preserve local-before-global precedence for automatic
       matching and retain shadowed entries for manual selection.
-- [ ] Implement bounded query matching for exact name, prefix, trigger phrase,
+- [x] Implement bounded query matching for exact name, prefix, trigger phrase,
       description terms, and heading terms. Return scores and reasons so the
       UI and tests can explain why a skill matched.
-- [ ] Add tests for both descriptor filenames, missing and malformed front
+- [~] Add tests for both descriptor filenames, missing and malformed front
       matter, duplicate names, local-over-global precedence, root failures,
       symlink rejection, path normalization, deterministic order, caps, and
       content hashes.
@@ -109,162 +109,163 @@ skill body in the transcript or in `memories.md`.
 
 ### 10.2.1 Wire the slash command
 
-- [ ] Add `/skills` and `/skill` to `slashCommands`, the grouped palette, help
+- [x] Add `/skills` and `/skill` to `slashCommands`, the grouped palette, help
       text, keymap documentation, and slash-menu tests.
-- [ ] Route `/skills` through the same picker or drawer interaction family as
+- [~] Route `/skills` through the same picker or drawer interaction family as
       `/model` and `/agents`. Rescan the catalog when the view opens and offer
       a bounded refresh action for changed skill files.
-- [ ] Support `/skills <query>` by filtering the catalog without sending a
+- [x] Support `/skills <query>` by filtering the catalog without sending a
       provider request. Show separate local and global labels, the descriptor
       path, the description, a shadowed marker, and scan diagnostics.
 
 ### 10.2.2 Make activation explicit and reversible
 
-- [ ] Let the user select one or more skills with the existing arrow, enter,
+- [~] Let the user select one or more skills with the existing arrow, enter,
       escape, and mouse behavior. Entering a skill opens a read-only detail
       view; an explicit activate action queues the skill for the next ordinary
       parent request.
-- [ ] Keep activation state in the chat model only until the next eligible
+- [x] Keep activation state in the chat model only until the next eligible
       request. Clear it after injection, cancellation, session change, or
       disabling skills. Never write activation state to the chat transcript.
-- [ ] Make malformed or unreadable skills visible in the picker while keeping
+- [~] Make malformed or unreadable skills visible in the picker while keeping
       them unavailable for activation. A scan error must not block normal chat.
-- [ ] Add keyboard, mouse, filtering, duplicate-source, empty-catalog, and
+- [~] Add keyboard, mouse, filtering, duplicate-source, empty-catalog, and
       narrow-terminal tests. Verify the full-screen view at 120x36 and 80x24.
 
 ## Phase 10.3: Persist skill settings and enforce context budgets
 
 ### 10.3.1 Extend project settings
 
-- [ ] Add a `Skills` settings group under `.lazykoder/settings.json` with
+- [x] Add a `Skills` settings group under `.lazykoder/settings.json` with
       `enabled`, `auto_detect`, `include_local`, `include_global`,
       `remember`, `max_auto_matches`, and bounded content limits. Normalize
       missing or invalid values to safe defaults without changing existing
       recap or agent settings.
-- [ ] Add settings-card rows for discovery, automatic selection, source
+- [x] Add settings-card rows for discovery, automatic selection, source
       scopes, and remembering references. Use the same model-drawer-like
       selection behavior and persistence tests as the existing recap rows.
-- [ ] Keep discovery available when auto-detection is off. Turning skills off
+- [x] Keep discovery available when auto-detection is off. Turning skills off
       suppresses `/skills` activation and provider injection but does not
       delete the existing `Skills` memory entries.
 
 ### 10.3.2 Bound content before it reaches the provider
 
-- [ ] Cap the number of automatic and explicit skills, each descriptor body,
+- [x] Cap the number of automatic and explicit skills, each descriptor body,
       the combined skill context, and the number of metadata terms. Truncate
       at rune boundaries and include an explicit truncation note.
-- [ ] Reject binary or secret-like skill content before injection. Treat
+- [~] Reject binary or secret-like skill content before injection. Treat
       skill paths and descriptions as untrusted data. Keep the model's safety,
       project instructions, and user request higher priority than skill text.
-- [ ] Add unit tests for total and per-skill caps, invalid UTF-8, secret-like
+- [~] Add unit tests for total and per-skill caps, invalid UTF-8, secret-like
       content, and a missing descriptor during activation.
 
 ## Phase 10.4: Auto-detect skills before the first provider request
 
 ### 10.4.1 Share the first-request boundary with recall
 
-- [ ] Add a skill provider seam to `internal/agent.Options` alongside recall.
+- [x] Add a skill provider seam to `internal/agent.Options` alongside recall.
       Prepare it after the parent user message is persisted and before the
       first ordinary `Chat` or `ChatStream` call.
-- [ ] Keep lookup order deterministic: explicit activated skills first,
+- [x] Keep lookup order deterministic: explicit activated skills first,
       local automatic matches next, and global automatic matches last. Do not
       run the catalog for tool-result follow-ups, `/continue`, compaction,
       child sessions, or hidden recap and memory workers.
-- [ ] Inject one wire-only block after project instructions and historical
+- [x] Inject one wire-only block after project instructions and historical
       recall hints, with stable headers, scope labels, display paths, match
       reasons, and bounded bodies. Clear the block after the first ordinary
       response and reuse it for one context-overflow retry.
-- [ ] Emit scan-start and scan-finished events or equivalent UI messages so
+- [x] Emit scan-start and scan-finished events or equivalent UI messages so
       the TUI shows a distinct `scanning skills` status. Lookup errors remain
       nonfatal and produce no empty or misleading provider block.
 
 ### 10.4.2 Test keyword detection and request ordering
 
-- [ ] Reuse the recall tokenizer and stop-word policy for skill terms. Add
+- [~] Reuse the recall tokenizer and stop-word policy for skill terms. Add
       tests for exact names, prefixes, trigger phrases, descriptions,
       punctuation, short prompts, no matches, duplicate names, and explicit
       selection overriding a global automatic match.
-- [ ] Add agent tests proving that skill scanning happens once after the user
+- [x] Add agent tests proving that skill scanning happens once after the user
       row is persisted, before the first provider request, and never for tool
       follow-ups, `/continue`, compaction, or child agents.
-- [ ] Add tests proving skill text is absent from SQLite history, recap files,
+- [~] Add tests proving skill text is absent from SQLite history, recap files,
       memory source text, tool definitions, and task-tool responses.
 
 ## Phase 10.5: Add the memory `Skills` section
 
 ### 10.5.1 Extend the application-owned document
 
-- [ ] Add a typed `MemorySkillReference` with stable ID, state, name, scope,
+- [~] Add a typed `MemorySkillReference` with stable ID, state, name, scope,
       display path, descriptor path, description, trigger terms, content hash,
       first-seen UTC, last-detected UTC, last-used UTC, and source message IDs.
       Keep paths and hashes code-owned rather than model-authored.
-- [ ] Add the `Skills` heading and deterministic entry renderer to
+- [x] Add the `Skills` heading and deterministic entry renderer to
       `internal/recap/memory.go`. Store local paths relative to the workdir
       and global paths relative to a named global root or with a normalized
       home prefix so the file remains portable and useful.
-- [ ] Bump the memory document format to version 2. Parse version 1 files,
+- [x] Bump the memory document format to version 2. Parse version 1 files,
       retain all existing sections, and write the new section only after a
       successful validated update. Keep the 64 KiB aggregate cap and add a
       skill-entry count cap.
-- [ ] Keep the model envelope unchanged for skill paths. Merge validated
+- [x] Keep the model envelope unchanged for skill paths. Merge validated
       runtime skill-use records after model facts are validated. Mark removed
       or changed skills superseded instead of allowing a model to delete a
       reference silently.
 
 ### 10.5.2 Connect skill use to the memory worker
 
-- [ ] Add a bounded skill-use payload to the successful parent turn's memory
+- [x] Add a bounded skill-use payload to the successful parent turn's memory
       update input. Record only skills that were explicitly activated or
       automatically injected, not every descriptor found during a scan.
-- [ ] Reuse the existing idempotent `memory_updates` source anchor. A replayed
+- [x] Reuse the existing idempotent `memory_updates` source anchor. A replayed
       completion must not duplicate a skill reference or rewrite the file
       with a different order.
-- [ ] Define the setting boundary in code and docs: `skills.remember` controls
+- [x] Define the setting boundary in code and docs: `skills.remember` controls
       skill-reference persistence, while `recap.after_chats` controls detailed
       recap artifacts. If skill remembering is enabled while recaps are off,
       schedule only the code-owned memory merge for turns that used a skill.
-- [ ] Add tests for version 1 migration, section ordering, path display,
+- [~] Add tests for version 1 migration, section ordering, path display,
       duplicate use, superseded content hashes, disabled remembering, replayed
       completion, cap pruning, and atomic write recovery.
 
 ## Phase 10.6: Carry explicit skills into agent work safely
 
-- [ ] Pass explicitly activated skill references and bounded bodies through
+- [x] Pass explicitly activated skill references and bounded bodies through
       the parent agent options without rescanning global roots in child
       sessions. Child agents receive only the selected context, never the
       entire catalog.
-- [ ] Keep automatic detection parent-only unless a future child policy
+- [x] Keep automatic detection parent-only unless a future child policy
       explicitly opts in. Sub-agent jobs must not write skill references to
       the parent memory file or receive hidden global instructions.
-- [ ] Add tests for parent-to-child propagation, child exclusion from scans,
+- [~] Add tests for parent-to-child propagation, child exclusion from scans,
       restart and resume behavior, task-tool summaries, and cancellation.
 
 ## Phase 10.7: Synchronize documentation and close the gates
 
 ### 10.7.1 Update committed documentation and local knowledge
 
-- [ ] Update `docs/architecture.md` with the catalog roots, first-request
+- [x] Update `docs/architecture.md` with the catalog roots, first-request
       injection boundary, precedence, context caps, and trust rules.
-- [ ] Add `docs/skills.md` with the descriptor format, `/skills` interaction,
+- [x] Add `docs/skills.md` with the descriptor format, `/skills` interaction,
       settings, source precedence, and error behavior.
-- [ ] Update `docs/tui.md`, `docs/plans.md`, and the v0.0.10 parent plan with
+- [x] Update `docs/tui.md`, `docs/plans.md`, and the v0.0.10 parent plan with
       the shipped command, settings rows, scan status, and manual terminal
       evidence.
-- [ ] Add or update `knowledge-base/03-concepts/skills.md`,
+- [x] Add or update `knowledge-base/03-concepts/skills.md`,
       `knowledge-base/03-concepts/memory.md`, `knowledge-base/02-architecture/data-flow.md`,
       and `knowledge-base/README.md`. State which behavior is shipped and
       which paths are local conventions or configured global roots.
-- [ ] Run the unslop pass over all new prose. Check that no em dashes,
+- [~] Run the unslop pass over all new prose. Check that no em dashes,
       unsupported claims, raw absolute secrets, or stale "planned" labels
       remain after implementation.
 
 ### 10.7.2 Run automated and live gates
 
-- [ ] Run focused `internal/skills`, settings, agent, recap, and chat tests.
-- [ ] Run `go build ./...`, `make test`, `make lint`, and `make vet`; record
-      each command and exit code beside the closure rows.
-- [ ] Run race tests for catalog refresh, first-request injection, memory
-      merging, and concurrent skill activation.
+- [x] Run focused `internal/skills`, settings, agent, recap, and chat tests
+      (`go test ... -count=1`, exit 0).
+- [x] Run `go build ./...` (exit 0), `make test` (exit 0), `make lint`
+      (exit 0), and `make vet` (exit 0).
+- [x] Run race tests for catalog refresh, first-request injection, memory
+      merging, and concurrent skill activation (`go test -race ...`, exit 0).
 - [ ] In a real TTY at 120x36 and 80x24, create one local skill and expose one
       global fixture through the configured root. Verify `/skills`, filtering,
       duplicate precedence, activation, auto-detection, scan status, and the
@@ -290,8 +291,9 @@ skill body in the transcript or in `memories.md`.
 
 ## Closure gate
 
-- [ ] All discovery, activation, injection, memory, documentation, and live
-      terminal rows have current source or runtime evidence.
+- [~] Automated discovery, activation, injection, memory, documentation, and
+      race rows have current source or test evidence. Live terminal and
+      post-run memory inspection remain open for a human session.
 - [ ] `/skills` exposes both local and configured global catalogs without
       executing skill files or allowing a global skill to override local
       project or safety instructions.

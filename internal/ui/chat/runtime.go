@@ -18,6 +18,7 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 	"github.com/chinmay-sawant/lazykoder/internal/recap"
 	"github.com/chinmay-sawant/lazykoder/internal/settings"
+	"github.com/chinmay-sawant/lazykoder/internal/skills"
 	"github.com/chinmay-sawant/lazykoder/internal/subagent"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/grep"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/question"
@@ -59,6 +60,7 @@ func (m Model) attachSubMgr(cfg settings.Settings, recoverJobs bool) Model {
 		Profiles: m.subagentModelProfiles(),
 		Confirm:  m.confirmHook,
 		Ask:      m.runtimeAsk,
+		Skills:   m.explicitSkillContexts(context.Background()),
 	}
 	if recoverJobs && m.store != nil {
 		if err := m.subMgr.Boot(context.Background(), m.store, rt, runner); err != nil {
@@ -107,6 +109,9 @@ func (m Model) agentOptions() agent.Options {
 	if m.projectSettings.EffectiveRecap().Enabled {
 		opts.Recall = m.recall
 	}
+	if m.projectSettings.EffectiveSkills().Enabled {
+		opts.Skills = m.skillProvider
+	}
 	if m.subMgr == nil || !m.projectSettings.EffectiveAgents().Enabled {
 		return opts
 	}
@@ -117,6 +122,74 @@ func (m Model) agentOptions() agent.Options {
 	}
 	opts.Host = host
 	return opts
+}
+
+// skillProvider discovers approved roots and reads only the selected,
+// bounded descriptors needed for the current request. It never writes to the
+// transcript or executes descriptor content.
+func (m Model) skillProvider(ctx context.Context, _ string, userText string) ([]skills.Context, error) {
+	cfg := m.projectSettings.EffectiveSkills()
+	if !cfg.Enabled {
+		return nil, nil
+	}
+	opts := skills.DefaultOptions(m.workdir)
+	opts.IncludeLocal = cfg.IncludeLocal
+	opts.IncludeGlobal = cfg.IncludeGlobal
+	opts.MaxAutoMatches = cfg.MaxAutoMatches
+	opts.MaxBody = cfg.MaxBodyBytes
+	catalog, err := skills.Discover(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	selected := make([]skills.Match, 0, cfg.MaxAutoMatches)
+	seen := make(map[string]struct{})
+	for _, skill := range m.activeSkills {
+		for _, candidate := range catalog.Skills {
+			if candidate.DescriptorPath != skill.DescriptorPath {
+				continue
+			}
+			selected = append(selected, skills.Match{Skill: candidate, Reasons: []string{"explicit"}})
+			seen[strings.ToLower(candidate.Name)] = struct{}{}
+			break
+		}
+	}
+	if cfg.AutoDetect {
+		for _, match := range catalog.AutoMatches(userText, cfg.MaxAutoMatches) {
+			key := strings.ToLower(match.Skill.Name)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			selected = append(selected, match)
+			seen[key] = struct{}{}
+			if len(selected) >= cfg.MaxAutoMatches {
+				break
+			}
+		}
+	}
+	var out []skills.Context
+	used := 0
+	for _, match := range selected {
+		body, readErr := skills.ReadBody(ctx, match.Skill, cfg.MaxBodyBytes)
+		if readErr != nil {
+			continue
+		}
+		remaining := cfg.MaxContextBytes - used
+		if remaining <= 0 {
+			break
+		}
+		body = truncateRecall(body, remaining)
+		used += len([]rune(body))
+		out = append(out, skills.Context{
+			Name:        match.Skill.Name,
+			Description: match.Skill.Description,
+			Scope:       match.Skill.Scope,
+			Path:        match.Skill.DisplayPath,
+			ContentHash: match.Skill.ContentHash,
+			Reasons:     append([]string{}, match.Reasons...),
+			Body:        body,
+		})
+	}
+	return out, nil
 }
 
 // recall searches local memory sources before the first ordinary parent
@@ -271,7 +344,39 @@ func (m Model) wireSubMgrRuntime() {
 		Profiles: m.subagentModelProfiles(),
 		Confirm:  m.confirmHook,
 		Ask:      m.runtimeAsk,
+		Skills:   m.explicitSkillContexts(context.Background()),
 	})
+}
+
+func (m Model) explicitSkillContexts(ctx context.Context) []skills.Context {
+	if !m.projectSettings.EffectiveSkills().Enabled || len(m.activeSkills) == 0 {
+		return nil
+	}
+	cfg := m.projectSettings.EffectiveSkills()
+	opts := skills.DefaultOptions(m.workdir)
+	opts.IncludeLocal = cfg.IncludeLocal
+	opts.IncludeGlobal = cfg.IncludeGlobal
+	catalog, err := skills.Discover(ctx, opts)
+	if err != nil {
+		return nil
+	}
+	var out []skills.Context
+	for _, active := range m.activeSkills {
+		for _, candidate := range catalog.Skills {
+			if candidate.DescriptorPath != active.DescriptorPath {
+				continue
+			}
+			body, readErr := skills.ReadBody(ctx, candidate, cfg.MaxBodyBytes)
+			if readErr != nil {
+				continue
+			}
+			out = append(out, skills.Context{
+				Name: candidate.Name, Description: candidate.Description, Scope: candidate.Scope,
+				Path: candidate.DisplayPath, ContentHash: candidate.ContentHash, Body: body,
+			})
+		}
+	}
+	return out
 }
 
 func (m Model) subagentModelProfiles() []subagent.ModelProfile {
@@ -301,6 +406,7 @@ func (m Model) startTurn(start turnStart) (Model, tea.Cmd) {
 	m.turnGenTokens = 0
 	m.tpsSamples = nil
 	m.stepMetrics = false
+	m.pendingSkillRefs = nil
 	m.syncTranscript()
 	m.turnSeq++
 	seq := m.turnSeq
@@ -324,10 +430,11 @@ func (m Model) startTurn(start turnStart) (Model, tea.Cmd) {
 }
 
 func (m Model) successfulTurnEligible(err error) bool {
-	if err != nil {
-		return false
-	}
-	if !m.projectSettings.EffectiveRecap().Enabled || !m.turnHasNewUser {
+	return m.parentTurnEligible(err) && m.projectSettings.EffectiveRecap().Enabled
+}
+
+func (m Model) parentTurnEligible(err error) bool {
+	if err != nil || !m.turnHasNewUser {
 		return false
 	}
 	if m.store == nil || m.client == nil || m.session == nil {
@@ -344,7 +451,7 @@ func (m Model) recapEligible(err error) bool {
 }
 
 func (m Model) memoryEligible(err error) bool {
-	return m.successfulTurnEligible(err)
+	return m.parentTurnEligible(err) && (m.projectSettings.EffectiveRecap().Enabled || m.projectSettings.EffectiveSkills().Remember)
 }
 
 // scheduleRecap returns a hidden background command. It deliberately creates
@@ -417,12 +524,16 @@ func (m Model) scheduleRecap() tea.Cmd {
 // successful parent turn. It owns a fresh context because finishTurn cancels
 // the interactive turn context.
 func (m Model) scheduleMemoryUpdate() tea.Cmd {
-	cfg := m.projectSettings.EffectiveRecap()
-	if !cfg.Enabled || m.store == nil || m.client == nil || m.session == nil {
+	recapCfg := m.projectSettings.EffectiveRecap()
+	skillCfg := m.projectSettings.EffectiveSkills()
+	if (!recapCfg.Enabled && !skillCfg.Remember) || m.store == nil || m.client == nil || m.session == nil {
 		return nil
 	}
 	sessionID := m.session.ID
-	model := cfg.Model
+	model := recapCfg.Model
+	if !recapCfg.Enabled {
+		model = m.projectSettings.EffectiveModel()
+	}
 	workdir, err := filepath.Abs(m.workdir)
 	if err != nil {
 		return nil
@@ -438,27 +549,18 @@ func (m Model) scheduleMemoryUpdate() tea.Cmd {
 	var anchorErr error
 	if snapshotErr != nil && errors.Is(snapshotErr, recap.ErrInsufficientMessages) {
 		anchor, anchorErr = recap.BuildAnchorSnapshot(context.Background(), store, sessionID)
+		if anchorErr == nil {
+			snapshot = anchor
+			snapshotErr = nil
+		}
 	}
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), recapTimeout)
 		defer cancel()
-		if !recapEnabledAtPath(settingsPath) {
+		if !memoryEnabledAtPath(settingsPath) {
 			return memoryDoneMsg{}
 		}
-		if snapshotErr != nil {
-			if !errors.Is(snapshotErr, recap.ErrInsufficientMessages) || anchorErr != nil {
-				return memoryDoneMsg{}
-			}
-			record, created, reserveErr := store.ReserveMemoryUpdate(ctx, db.MemoryUpdate{
-				Workdir:            workdir,
-				SourceSessionID:    anchor.SessionID,
-				SourceEndSeq:       anchor.SourceEndSeq,
-				SourceEndMessageID: anchor.SourceEndMessageID,
-				Model:              model,
-			})
-			if reserveErr == nil && created {
-				_ = store.FailMemoryUpdate(ctx, record.ID, snapshotErr.Error())
-			}
+		if snapshotErr != nil || anchorErr != nil {
 			return memoryDoneMsg{}
 		}
 		record, created, err := store.ReserveMemoryUpdate(ctx, db.MemoryUpdate{
@@ -483,7 +585,7 @@ func (m Model) scheduleMemoryUpdate() tea.Cmd {
 				return memoryDoneMsg{}
 			}
 		}
-		if !recapEnabledAtPath(settingsPath) {
+		if !memoryEnabledAtPath(settingsPath) {
 			return memoryDoneMsg{}
 		}
 		workerModel := record.Model
@@ -493,12 +595,13 @@ func (m Model) scheduleMemoryUpdate() tea.Cmd {
 		}
 		worker := recap.NewMemoryWorker(client, workerModel, workerInfo, "")
 		runErr := recap.RunMemoryUpdate(ctx, recap.MemoryRunInput{
-			Store:    store,
-			Record:   record,
-			Snapshot: snapshot,
-			Workdir:  workdir,
-			Worker:   worker,
-			Enabled:  func() bool { return recapEnabledAtPath(settingsPath) },
+			Store:           store,
+			Record:          record,
+			Snapshot:        snapshot,
+			Workdir:         workdir,
+			Worker:          worker,
+			SkillReferences: append([]recap.MemorySkillReference{}, m.pendingSkillRefs...),
+			Enabled:         func() bool { return memoryEnabledAtPath(settingsPath) },
 		})
 		return memoryDoneMsg{err: runErr}
 	}
@@ -513,6 +616,17 @@ func recapEnabledAtPath(settingsPath string) bool {
 		return true
 	}
 	return cfg.EffectiveRecap().Enabled
+}
+
+func memoryEnabledAtPath(settingsPath string) bool {
+	if strings.TrimSpace(settingsPath) == "" {
+		return true
+	}
+	cfg, err := settings.LoadFile(settingsPath)
+	if err != nil {
+		return true
+	}
+	return cfg.EffectiveRecap().Enabled || cfg.EffectiveSkills().Remember
 }
 
 // recoverRecaps resumes queued or interrupted records for the current main
@@ -562,7 +676,7 @@ func (m Model) recoverRecaps() tea.Msg {
 // workdir. The source message anchor makes recovery independent of newer chat
 // messages added after the process stopped.
 func (m Model) recoverMemoryUpdates() tea.Msg {
-	if !m.projectSettings.EffectiveRecap().Enabled || m.store == nil || m.client == nil || (m.session != nil && (m.session.Kind == db.SessionKindSubagent || m.session.ParentSessionID != nil)) {
+	if (!m.projectSettings.EffectiveRecap().Enabled && !m.projectSettings.EffectiveSkills().Remember) || m.store == nil || m.client == nil || (m.session != nil && (m.session.Kind == db.SessionKindSubagent || m.session.ParentSessionID != nil)) {
 		return nil
 	}
 	workdir, err := filepath.Abs(m.workdir)
@@ -597,7 +711,7 @@ func (m Model) recoverMemoryUpdates() tea.Msg {
 			Snapshot: snapshot,
 			Workdir:  workdir,
 			Worker:   worker,
-			Enabled:  func() bool { return recapEnabledAtPath(m.settingsPath) },
+			Enabled:  func() bool { return memoryEnabledAtPath(m.settingsPath) },
 		})
 	}
 	return nil

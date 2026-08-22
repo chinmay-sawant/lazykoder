@@ -56,6 +56,12 @@ func TestDefault(t *testing.T) {
 	if s.Recap.Enabled || s.Recap.Model != DefaultModelID || s.Recap.AfterChats != DefaultRecapAfterChats {
 		t.Fatalf("recap defaults %+v", s.Recap)
 	}
+	if !s.Skills.Enabled || !s.Skills.AutoDetect || !s.Skills.IncludeLocal || !s.Skills.IncludeGlobal || !s.Skills.Remember {
+		t.Fatalf("skills defaults %+v", s.Skills)
+	}
+	if s.Skills.MaxAutoMatches != DefaultSkillMaxAutoMatches {
+		t.Fatalf("skill match default = %d", s.Skills.MaxAutoMatches)
+	}
 }
 
 func TestLoadMissingReturnsDefault(t *testing.T) {
@@ -120,6 +126,36 @@ func TestRecapAfterChatsNormalizes(t *testing.T) {
 	}
 	if s.EffectiveRecap().AfterChats != DefaultRecapAfterChats {
 		t.Fatalf("after chats = %d, want %d", s.EffectiveRecap().AfterChats, DefaultRecapAfterChats)
+	}
+}
+
+func TestLegacySettingsNormalizeSkills(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte(`{"model":{"default":"claude-4"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.EffectiveSkills().Enabled || s.EffectiveSkills().MaxAutoMatches != DefaultSkillMaxAutoMatches {
+		t.Fatalf("skills = %+v", s.EffectiveSkills())
+	}
+}
+
+func TestSkillsBoundsNormalize(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	data := `{"skills":{"enabled":true,"max_auto_matches":99,"max_body_bytes":-1,"max_context_bytes":999999}}`
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := s.EffectiveSkills()
+	if got.MaxAutoMatches != DefaultSkillMaxAutoMatches || got.MaxBodyBytes != DefaultSkillMaxBodyBytes || got.MaxContextBytes != DefaultSkillMaxContextBytes {
+		t.Fatalf("skills bounds = %+v", got)
 	}
 }
 

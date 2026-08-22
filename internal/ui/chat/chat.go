@@ -19,7 +19,9 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/db"
 	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
+	"github.com/chinmay-sawant/lazykoder/internal/recap"
 	"github.com/chinmay-sawant/lazykoder/internal/settings"
+	"github.com/chinmay-sawant/lazykoder/internal/skills"
 	"github.com/chinmay-sawant/lazykoder/internal/subagent"
 	"github.com/chinmay-sawant/lazykoder/internal/tips"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/question"
@@ -81,6 +83,7 @@ const (
 	pickerDrawerChrome = 2
 	pickerKindModel    = "model"
 	pickerKindVariant  = "variant"
+	pickerKindSkills   = "skills"
 	// pulseInterval and pulseSteps throb the in-progress reply rail.
 	pulseInterval = 70 * time.Millisecond
 	pulseSteps    = 16
@@ -199,6 +202,10 @@ type Model struct {
 	cachePath            string
 	activity             string
 	recallScanning       bool
+	skillsScanning       bool
+	skillsCatalog        skills.Catalog
+	activeSkills         []skills.Skill
+	pendingSkillRefs     []recap.MemorySkillReference
 	memoryScanJobs       int
 	tokensUsed           int64
 	compacting           bool
@@ -281,6 +288,7 @@ type Model struct {
 	pickerMode       bool
 	pickerKind       string
 	pickerFromPrompt bool
+	pickerSkillItems []skills.Skill
 
 	sessionPickerMode bool
 	sessionItems      []db.Session
@@ -391,6 +399,7 @@ var slashCommands = []slashCmd{
 	{name: "/refresh", description: "reload the model list into models.json"},
 	{name: "/usage", description: "show OpenCode Go plan usage (rolling, weekly, monthly)"},
 	{name: "/status", description: "open the status drawer and toggle details"},
+	{name: "/skills", description: "discover and activate local and global skills", aliases: []string{"skill"}},
 	{name: "/settings", description: "project defaults (model, agents, compaction, safety)", aliases: []string{"slot"}},
 	{name: "/continue", description: "resume after a step-limit stop (or send continue)"},
 	{name: "/compact", description: "summarize older context now (optional notes)"},
@@ -403,6 +412,11 @@ type modelsMsg struct {
 	err       error
 	fromCache bool
 	notice    string
+}
+
+type skillsMsg struct {
+	catalog skills.Catalog
+	err     error
 }
 
 type eventMsg struct {
@@ -635,7 +649,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(memoryCmd, recapCmd)
 	case pulseMsg:
 		// Keep throbbing for live sub-agents even after the parent turn ends.
-		if !m.busy && !m.hasLiveSubagents() && !m.recallScanning && m.memoryScanJobs == 0 {
+		if !m.busy && !m.hasLiveSubagents() && !m.recallScanning && !m.skillsScanning && m.memoryScanJobs == 0 {
 			m.pulseOn = false
 			return m, nil
 		}
@@ -683,6 +697,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.notice != "" {
 			m.copyNotice = msg.notice
 			return m, clearCopyNotice()
+		}
+		return m, nil
+	case skillsMsg:
+		m.skillsScanning = false
+		m.skillsCatalog = msg.catalog
+		m.pickerSkillItems = append([]skills.Skill{}, msg.catalog.Skills...)
+		if msg.err != nil {
+			m.modelsErr = msg.err.Error()
+		}
+		if m.pickerMode && m.pickerKind == pickerKindSkills {
+			m.applyFilter()
 		}
 		return m, nil
 	case usageMsg:
@@ -963,6 +988,26 @@ func (m Model) applyEvent(ev agent.Event) Model {
 		if m.busy {
 			m.activity = "thinking"
 		}
+	case agent.EventSkillsStarted:
+		m.skillsScanning = true
+		m.activity = "scanning skills"
+		m.pulseOn = true
+	case agent.EventSkillsFinished:
+		m.skillsScanning = false
+		m.pendingSkillRefs = m.pendingSkillRefs[:0]
+		for _, skill := range ev.Skills {
+			m.pendingSkillRefs = append(m.pendingSkillRefs, recap.MemorySkillReference{
+				ID:          recap.SkillReferenceID(skill.Name, string(skill.Scope), skill.Path),
+				Name:        skill.Name,
+				Scope:       string(skill.Scope),
+				Path:        skill.Path,
+				ContentHash: skill.ContentHash,
+				UseCount:    1,
+			})
+		}
+		if m.busy {
+			m.activity = "thinking"
+		}
 	case agent.EventMessage:
 		if ev.Role == "user" && m.pendingHistoryIndex >= 0 && m.pendingHistoryIndex < len(m.inputHistory) {
 			m.inputHistory[m.pendingHistoryIndex].messageID = ev.MessageID
@@ -1091,12 +1136,14 @@ func (m Model) finishTurn(err error) Model {
 	m.turnHasNewUser = false
 	m.pending = nil
 	m.pendingAsk = nil
+	m.activeSkills = nil
 	m = m.clearFocus(focusConfirm)
 	m = m.clearFocus(focusAsk)
 	m.eventCh = nil
 	m.errCh = nil
 	m.activity = ""
 	m.recallScanning = false
+	m.skillsScanning = false
 	m.collapseLiveReasoning()
 	// Refresh sub-agent rows after the turn; drawer stays as the user left it
 	// (only a new spawn re-opens it via openSubagentDrawerIfNew).

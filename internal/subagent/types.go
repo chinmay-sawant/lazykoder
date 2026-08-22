@@ -6,6 +6,7 @@ import (
 
 	"github.com/chinmay-sawant/lazykoder/internal/policy"
 	"github.com/chinmay-sawant/lazykoder/internal/roles"
+	"github.com/chinmay-sawant/lazykoder/internal/skills"
 )
 
 // Status is the lifecycle state of a sub-agent job.
@@ -106,6 +107,7 @@ type Job struct {
 	MaxDepth int
 	// Tools is the child tool allowlist (no task tools when Host is nil).
 	Tools   []string
+	Skills  []skills.Context
 	Confirm func(dec policy.Decision, subject string) (bool, error)
 	// Ask may be nil when the parent has no question UI.
 	Ask func(question string, options []string) (int, error)
@@ -138,4 +140,5 @@ type Runtime struct {
 	Profiles []ModelProfile
 	Confirm  func(dec policy.Decision, subject string) (bool, error)
 	Ask      func(question string, options []string) (int, error)
+	Skills   []skills.Context
 }

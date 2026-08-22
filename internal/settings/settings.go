@@ -62,6 +62,20 @@ const (
 	MinRecapAfterChats = 1
 	// MaxRecapAfterChats caps the recap scheduling threshold.
 	MaxRecapAfterChats = 20
+	// DefaultSkillMaxAutoMatches limits automatic skill context injection.
+	DefaultSkillMaxAutoMatches = 2
+	// MinSkillMaxAutoMatches is the smallest automatic skill match count.
+	MinSkillMaxAutoMatches = 1
+	// MaxSkillMaxAutoMatches caps automatic skill context injection.
+	MaxSkillMaxAutoMatches = 12
+	// DefaultSkillMaxBodyBytes bounds one descriptor in a model request.
+	DefaultSkillMaxBodyBytes = 48 * 1024
+	// MaxSkillMaxBodyBytes caps one descriptor body read.
+	MaxSkillMaxBodyBytes = 256 * 1024
+	// DefaultSkillMaxContextBytes bounds the combined skill context block.
+	DefaultSkillMaxContextBytes = 96 * 1024
+	// MaxSkillMaxContextBytes caps the combined skill context block.
+	MaxSkillMaxContextBytes = 256 * 1024
 	// defaultCompactPercent / defaultKeepTokens mirror agent.DefaultCompact*
 	// (agent owns the named runtime constants; settings only persists knobs).
 	defaultCompactPercent = 80
@@ -138,6 +152,18 @@ type Recap struct {
 	AfterChats int `json:"after_chats"`
 }
 
+// Skills controls bounded discovery and request-time skill context.
+type Skills struct {
+	Enabled         bool `json:"enabled"`
+	AutoDetect      bool `json:"auto_detect"`
+	IncludeLocal    bool `json:"include_local"`
+	IncludeGlobal   bool `json:"include_global"`
+	Remember        bool `json:"remember"`
+	MaxAutoMatches  int  `json:"max_auto_matches"`
+	MaxBodyBytes    int  `json:"max_body_bytes"`
+	MaxContextBytes int  `json:"max_context_bytes"`
+}
+
 // Settings is the on-disk project config under .lazykoder/settings.json.
 type Settings struct {
 	Appearance Appearance `json:"appearance"`
@@ -146,6 +172,7 @@ type Settings struct {
 	Agents     Agents     `json:"agents"`
 	Compaction Compaction `json:"compaction"`
 	Recap      Recap      `json:"recap"`
+	Skills     Skills     `json:"skills"`
 }
 
 // Default returns the built-in defaults.
@@ -182,6 +209,16 @@ func Default() Settings {
 			Enabled:    false,
 			Model:      DefaultModelID,
 			AfterChats: DefaultRecapAfterChats,
+		},
+		Skills: Skills{
+			Enabled:         true,
+			AutoDetect:      true,
+			IncludeLocal:    true,
+			IncludeGlobal:   true,
+			Remember:        true,
+			MaxAutoMatches:  DefaultSkillMaxAutoMatches,
+			MaxBodyBytes:    DefaultSkillMaxBodyBytes,
+			MaxContextBytes: DefaultSkillMaxContextBytes,
 		},
 	}
 }
@@ -253,6 +290,11 @@ func (s Settings) EffectiveRecap() Recap {
 	return s.normalized().Recap
 }
 
+// EffectiveSkills returns normalized skill discovery preferences.
+func (s Settings) EffectiveSkills() Skills {
+	return s.normalized().Skills
+}
+
 // EffectiveTimeout is the sub-agent timeout duration.
 // Zero DefaultTimeoutSec means no timeout from settings.
 func (a Agents) EffectiveTimeout() time.Duration {
@@ -283,6 +325,7 @@ func (s Settings) normalized() Settings {
 	s.Agents = s.Agents.normalized()
 	s.Compaction = s.Compaction.normalized()
 	s.Recap = s.Recap.normalized()
+	s.Skills = s.Skills.normalized()
 	return s
 }
 
@@ -295,6 +338,19 @@ func (r Recap) normalized() Recap {
 		r.AfterChats = DefaultRecapAfterChats
 	}
 	return r
+}
+
+func (s Skills) normalized() Skills {
+	if s.MaxAutoMatches < MinSkillMaxAutoMatches || s.MaxAutoMatches > MaxSkillMaxAutoMatches {
+		s.MaxAutoMatches = DefaultSkillMaxAutoMatches
+	}
+	if s.MaxBodyBytes <= 0 || s.MaxBodyBytes > MaxSkillMaxBodyBytes {
+		s.MaxBodyBytes = DefaultSkillMaxBodyBytes
+	}
+	if s.MaxContextBytes <= 0 || s.MaxContextBytes > MaxSkillMaxContextBytes {
+		s.MaxContextBytes = DefaultSkillMaxContextBytes
+	}
+	return s
 }
 
 // NormalizeTheme converts an on-disk theme value to a supported mode.
@@ -423,6 +479,9 @@ func NormalizeAfterLoad(s Settings, raw []byte) Settings {
 	}
 	if !jsonHasKey(raw, "recap") {
 		s.Recap = Default().Recap
+	}
+	if !jsonHasKey(raw, "skills") {
+		s.Skills = Default().Skills
 	}
 	return s.normalized()
 }

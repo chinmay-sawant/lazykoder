@@ -25,6 +25,12 @@ const (
 	settingsRowRecapEnabled
 	settingsRowRecapModel
 	settingsRowRecapAfterChats
+	settingsRowSkillsEnabled
+	settingsRowSkillsAutoDetect
+	settingsRowSkillsLocal
+	settingsRowSkillsGlobal
+	settingsRowSkillsRemember
+	settingsRowSkillsMaxMatches
 	settingsRowLimit
 	settingsRowSteps
 	settingsRowCompactAuto
@@ -257,6 +263,7 @@ func (m Model) settingsPaintLines(innerW int) []settingsPaintLine {
 		exploreVal = "inherit"
 	}
 	recap := m.projectSettings.EffectiveRecap()
+	skillCfg := m.projectSettings.EffectiveSkills()
 	recapModelVal := recap.Model
 	if recapModelVal == "" {
 		recapModelVal = settings.DefaultModelID
@@ -323,8 +330,42 @@ func (m Model) settingsPaintLines(innerW int) []settingsPaintLine {
 		m.settingsPaintRow(settingsRowBashConfirm, "◂ "+confirmVal+" ▸", innerW, false),
 		m.settingsPaintRow(settingsRowAllowlistEnabled, "["+boolOn(m.projectSettings.Agents.BashAllowlistEnabled)+"]", innerW, false),
 		m.settingsPaintRow(settingsRowAllowlist, allowlistVal, innerW, false),
-		settingsPaintLine{kind: settingsLineHint, row: -1, text: "children are not filtered by this list"},
 	)
+	if m.height < settingsUsageMinHeight || m.usageLoaded {
+		// Keep compact and usage cards stable. The master switch remains
+		// visible; the detailed skill controls appear when the full card has
+		// room for them.
+		insertAt := 0
+		for index, line := range out {
+			if line.kind == settingsLineHeader && line.text == "agent loop" {
+				insertAt = index
+				break
+			}
+		}
+		out = append(out, settingsPaintLine{})
+		copy(out[insertAt+1:], out[insertAt:])
+		out[insertAt] = m.settingsPaintRow(settingsRowSkillsEnabled, "["+boolOn(skillCfg.Enabled)+"]", innerW, false)
+	} else {
+		insertAt := 0
+		for index, line := range out {
+			if line.kind == settingsLineHeader && line.text == "agent loop" {
+				insertAt = index
+				break
+			}
+		}
+		skillLines := []settingsPaintLine{
+			{kind: settingsLineHeader, row: -1, text: "skills"},
+			m.settingsPaintRow(settingsRowSkillsEnabled, "["+boolOn(skillCfg.Enabled)+"]", innerW, false),
+			m.settingsPaintRow(settingsRowSkillsAutoDetect, "["+boolOn(skillCfg.AutoDetect)+"]", innerW, false),
+			m.settingsPaintRow(settingsRowSkillsLocal, "["+boolOn(skillCfg.IncludeLocal)+"]", innerW, false),
+			m.settingsPaintRow(settingsRowSkillsGlobal, "["+boolOn(skillCfg.IncludeGlobal)+"]", innerW, false),
+			m.settingsPaintRow(settingsRowSkillsRemember, "["+boolOn(skillCfg.Remember)+"]", innerW, false),
+			m.settingsPaintRow(settingsRowSkillsMaxMatches, fmt.Sprintf("◂ %d ▸", skillCfg.MaxAutoMatches), innerW, false),
+		}
+		out = append(out, make([]settingsPaintLine, len(skillLines))...)
+		copy(out[insertAt+len(skillLines):], out[insertAt:])
+		copy(out[insertAt:], skillLines)
+	}
 	if m.height >= settingsUsageMinHeight && m.usageLoaded {
 		out = append(out, settingsPaintLine{kind: settingsLineHeader, row: -1, text: "opencode usage"})
 		out = append(out,
@@ -380,6 +421,18 @@ func settingsRowLabel(row int) string {
 		return "recap model"
 	case settingsRowRecapAfterChats:
 		return "recap after chats"
+	case settingsRowSkillsEnabled:
+		return "skills enabled"
+	case settingsRowSkillsAutoDetect:
+		return "skills auto-detect"
+	case settingsRowSkillsLocal:
+		return "skills local source"
+	case settingsRowSkillsGlobal:
+		return "skills global source"
+	case settingsRowSkillsRemember:
+		return "remember skill references"
+	case settingsRowSkillsMaxMatches:
+		return "skill auto matches"
 	case settingsRowLimit:
 		return "step limit"
 	case settingsRowSteps:
@@ -548,6 +601,21 @@ func (m Model) activateSettingsRow() (Model, tea.Cmd) {
 			v, _ := strconv.Atoi(val)
 			return mod.setRecapAfterChats(v), nil
 		})
+	case settingsRowSkillsEnabled:
+		return m.setSkillsEnabled(!m.projectSettings.EffectiveSkills().Enabled), nil
+	case settingsRowSkillsAutoDetect:
+		return m.setSkillsAutoDetect(!m.projectSettings.EffectiveSkills().AutoDetect), nil
+	case settingsRowSkillsLocal:
+		return m.setSkillsIncludeLocal(!m.projectSettings.EffectiveSkills().IncludeLocal), nil
+	case settingsRowSkillsGlobal:
+		return m.setSkillsIncludeGlobal(!m.projectSettings.EffectiveSkills().IncludeGlobal), nil
+	case settingsRowSkillsRemember:
+		return m.setSkillsRemember(!m.projectSettings.EffectiveSkills().Remember), nil
+	case settingsRowSkillsMaxMatches:
+		return m.openSettingInputForm("Skill auto matches", "Automatic skills per request", strconv.Itoa(m.projectSettings.EffectiveSkills().MaxAutoMatches), validateSkillMaxMatches, func(mod Model, val string) (Model, tea.Cmd) {
+			v, _ := strconv.Atoi(val)
+			return mod.setSkillsMaxMatches(v), nil
+		})
 	case settingsRowLimit:
 		return m.setLimitEnabled(!m.projectSettings.Slot.LimitEnabled), nil
 	case settingsRowSteps:
@@ -633,6 +701,14 @@ func validateRecapAfterChats(s string) error {
 	return nil
 }
 
+func validateSkillMaxMatches(s string) error {
+	v, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil || v < settings.MinSkillMaxAutoMatches || v > settings.MaxSkillMaxAutoMatches {
+		return fmt.Errorf("must be between %d and %d", settings.MinSkillMaxAutoMatches, settings.MaxSkillMaxAutoMatches)
+	}
+	return nil
+}
+
 func (m Model) setAllowlistEnabled(on bool) Model {
 	m.projectSettings.Agents.BashAllowlistEnabled = on
 	return m.persistSettings()
@@ -660,6 +736,31 @@ func (m Model) adjustSettings(delta int) Model {
 		return m.cycleRecapModel(delta)
 	case settingsRowRecapAfterChats:
 		return m.setRecapAfterChats(m.projectSettings.EffectiveRecap().AfterChats + delta)
+	case settingsRowSkillsEnabled:
+		if delta > 0 {
+			return m.setSkillsEnabled(true)
+		}
+		if delta < 0 {
+			return m.setSkillsEnabled(false)
+		}
+	case settingsRowSkillsAutoDetect:
+		if delta != 0 {
+			return m.setSkillsAutoDetect(delta > 0)
+		}
+	case settingsRowSkillsLocal:
+		if delta != 0 {
+			return m.setSkillsIncludeLocal(delta > 0)
+		}
+	case settingsRowSkillsGlobal:
+		if delta != 0 {
+			return m.setSkillsIncludeGlobal(delta > 0)
+		}
+	case settingsRowSkillsRemember:
+		if delta != 0 {
+			return m.setSkillsRemember(delta > 0)
+		}
+	case settingsRowSkillsMaxMatches:
+		return m.setSkillsMaxMatches(m.projectSettings.EffectiveSkills().MaxAutoMatches + delta)
 	case settingsRowLimit:
 		if delta > 0 {
 			return m.setLimitEnabled(true)
@@ -764,6 +865,18 @@ func (m Model) toggleSettingsRow() Model {
 		return m.setRecapEnabled(!m.projectSettings.EffectiveRecap().Enabled)
 	case settingsRowRecapModel:
 		return m.cycleRecapModel(1)
+	case settingsRowSkillsEnabled:
+		return m.setSkillsEnabled(!m.projectSettings.EffectiveSkills().Enabled)
+	case settingsRowSkillsAutoDetect:
+		return m.setSkillsAutoDetect(!m.projectSettings.EffectiveSkills().AutoDetect)
+	case settingsRowSkillsLocal:
+		return m.setSkillsIncludeLocal(!m.projectSettings.EffectiveSkills().IncludeLocal)
+	case settingsRowSkillsGlobal:
+		return m.setSkillsIncludeGlobal(!m.projectSettings.EffectiveSkills().IncludeGlobal)
+	case settingsRowSkillsRemember:
+		return m.setSkillsRemember(!m.projectSettings.EffectiveSkills().Remember)
+	case settingsRowSkillsMaxMatches:
+		return m.setSkillsMaxMatches(m.projectSettings.EffectiveSkills().MaxAutoMatches + 1)
 	}
 	return m
 }
@@ -1004,6 +1117,45 @@ func (m Model) setRecapAfterChats(value int) Model {
 		value = settings.MaxRecapAfterChats
 	}
 	m.projectSettings.Recap.AfterChats = value
+	return m.persistSettings()
+}
+
+func (m Model) setSkillsEnabled(on bool) Model {
+	m.projectSettings.Skills.Enabled = on
+	if !on {
+		m.activeSkills = nil
+	}
+	return m.persistSettings()
+}
+
+func (m Model) setSkillsAutoDetect(on bool) Model {
+	m.projectSettings.Skills.AutoDetect = on
+	return m.persistSettings()
+}
+
+func (m Model) setSkillsIncludeLocal(on bool) Model {
+	m.projectSettings.Skills.IncludeLocal = on
+	return m.persistSettings()
+}
+
+func (m Model) setSkillsIncludeGlobal(on bool) Model {
+	m.projectSettings.Skills.IncludeGlobal = on
+	return m.persistSettings()
+}
+
+func (m Model) setSkillsRemember(on bool) Model {
+	m.projectSettings.Skills.Remember = on
+	return m.persistSettings()
+}
+
+func (m Model) setSkillsMaxMatches(value int) Model {
+	if value < settings.MinSkillMaxAutoMatches {
+		value = settings.MinSkillMaxAutoMatches
+	}
+	if value > settings.MaxSkillMaxAutoMatches {
+		value = settings.MaxSkillMaxAutoMatches
+	}
+	m.projectSettings.Skills.MaxAutoMatches = value
 	return m.persistSettings()
 }
 
@@ -1309,6 +1461,24 @@ func (m Model) settingsHit(x, y int, button tea.MouseButton) (Model, tea.Cmd, bo
 			return next, cmd, true
 		}
 		return m.setRecapAfterChats(current + 1), nil, true
+	case settingsRowSkillsEnabled:
+		return m.setSkillsEnabled(!m.projectSettings.EffectiveSkills().Enabled), nil, true
+	case settingsRowSkillsAutoDetect:
+		return m.setSkillsAutoDetect(!m.projectSettings.EffectiveSkills().AutoDetect), nil, true
+	case settingsRowSkillsLocal:
+		return m.setSkillsIncludeLocal(!m.projectSettings.EffectiveSkills().IncludeLocal), nil, true
+	case settingsRowSkillsGlobal:
+		return m.setSkillsIncludeGlobal(!m.projectSettings.EffectiveSkills().IncludeGlobal), nil, true
+	case settingsRowSkillsRemember:
+		return m.setSkillsRemember(!m.projectSettings.EffectiveSkills().Remember), nil, true
+	case settingsRowSkillsMaxMatches:
+		current := m.projectSettings.EffectiveSkills().MaxAutoMatches
+		if dec, inc := hitStepChevrons(line, x); dec {
+			return m.setSkillsMaxMatches(current - 1), nil, true
+		} else if inc {
+			return m.setSkillsMaxMatches(current + 1), nil, true
+		}
+		return m.setSkillsMaxMatches(current + 1), nil, true
 	case settingsRowLimit:
 		return m.setLimitEnabled(!m.projectSettings.Slot.LimitEnabled), nil, true
 	case settingsRowCompactAuto:
