@@ -198,6 +198,8 @@ type Model struct {
 	modelsCached         bool // models came from the cache, not a live fetch
 	cachePath            string
 	activity             string
+	recallScanning       bool
+	memoryScanJobs       int
 	tokensUsed           int64
 	compacting           bool
 	compactHint          string
@@ -417,6 +419,10 @@ type pulseMsg struct{}
 
 type recapDoneMsg struct{}
 
+type memoryDoneMsg struct {
+	err error
+}
+
 type tipsTickMsg struct{}
 
 // New returns a chat model for the given options.
@@ -490,8 +496,8 @@ func New(opts Options) Model {
 // Init starts the fetch and watcher commands.
 func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{m.confirmWatch(), m.askWatch(), m.fetchModels, tipsTick()}
-	if m.projectSettings.EffectiveRecap().Enabled && m.session != nil && m.store != nil && m.client != nil {
-		cmds = append(cmds, m.recoverRecaps)
+	if m.projectSettings.EffectiveRecap().Enabled && m.store != nil && m.client != nil {
+		cmds = append(cmds, m.recoverRecaps, m.recoverMemoryUpdates)
 	}
 	if m.projectInstructionsNotice != "" {
 		cmds = append(cmds, clearProjectInstructionsNotice())
@@ -600,6 +606,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		successfulTurn := m.successfulTurnEligible(msg.err)
+		memoryEligible := m.memoryEligible(msg.err)
 		recapEligible := m.recapEligible(msg.err)
 		if successfulTurn {
 			if recapEligible {
@@ -609,18 +616,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m = m.finishTurn(msg.err)
+		memoryCmd := tea.Cmd(nil)
+		if memoryEligible {
+			memoryCmd = m.scheduleMemoryUpdate()
+			if memoryCmd != nil {
+				m.memoryScanJobs++
+				m.pulseOn = true
+			}
+		}
 		var recapCmd tea.Cmd
 		if recapEligible {
 			recapCmd = m.scheduleRecap()
 		}
 		// Continue diamond throb while background sub-agents are still live.
-		if m.hasLiveSubagents() {
-			return m, tea.Batch(recapCmd, pulseTick())
+		if m.hasLiveSubagents() || m.memoryScanJobs > 0 {
+			return m, tea.Batch(memoryCmd, recapCmd, pulseTick())
 		}
-		return m, recapCmd
+		return m, tea.Batch(memoryCmd, recapCmd)
 	case pulseMsg:
 		// Keep throbbing for live sub-agents even after the parent turn ends.
-		if !m.busy && !m.hasLiveSubagents() {
+		if !m.busy && !m.hasLiveSubagents() && !m.recallScanning && m.memoryScanJobs == 0 {
 			m.pulseOn = false
 			return m, nil
 		}
@@ -636,6 +651,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m = m.reloadSubagentRows()
 		if m.subagentPickerMode && !m.subagentLogMode {
 			return m.resizeSubagentDrawer(), nil
+		}
+		return m, nil
+	case memoryDoneMsg:
+		if m.memoryScanJobs > 0 {
+			m.memoryScanJobs--
+		}
+		if msg.err != nil && m.err == "" {
+			m.copyNotice = "memory update failed"
+			return m, clearCopyNotice()
 		}
 		return m, nil
 	case tipsTickMsg:
@@ -930,6 +954,15 @@ func (m Model) applyEvent(ev agent.Event) Model {
 	switch ev.Kind {
 	case agent.EventSessionCreated:
 		m = m.adoptSession(ev.SessionID)
+	case agent.EventRecallStarted:
+		m.recallScanning = true
+		m.activity = "scanning memory patterns"
+		m.pulseOn = true
+	case agent.EventRecallFinished:
+		m.recallScanning = false
+		if m.busy {
+			m.activity = "thinking"
+		}
 	case agent.EventMessage:
 		if ev.Role == "user" && m.pendingHistoryIndex >= 0 && m.pendingHistoryIndex < len(m.inputHistory) {
 			m.inputHistory[m.pendingHistoryIndex].messageID = ev.MessageID
@@ -1063,6 +1096,7 @@ func (m Model) finishTurn(err error) Model {
 	m.eventCh = nil
 	m.errCh = nil
 	m.activity = ""
+	m.recallScanning = false
 	m.collapseLiveReasoning()
 	// Refresh sub-agent rows after the turn; drawer stays as the user left it
 	// (only a new spawn re-opens it via openSubagentDrawerIfNew).

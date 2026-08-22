@@ -1,7 +1,7 @@
 # v0.0.10 / Phase 7 - Per-request memory update worker
 
 > **Parent:** `plans/v0.0.10/README.md`
-> **Status:** planned
+> **Status:** complete
 > **Estimated effort:** 2-3 days
 > **Priority:** P0
 > **Gate:** each successful parent user request can schedule one hidden,
@@ -27,53 +27,57 @@ model, then runs with its own timeout and context.
 
 ### 7.1 Build bounded memory input
 
-- [ ] Reuse the recap snapshot selector for the newest four or five complete
+- [x] Reuse the recap snapshot selector for the newest two to five complete
       main-session messages, including bounded completed, denied, and failed
-      tool facts.
-- [ ] Read the current `memories.md` through a strict parser. A missing file
+      tool facts. Detailed recap artifacts retain the four-message minimum.
+- [x] Read the current `memories.md` through a strict parser. A missing file
       means an empty document. A malformed or oversized file is recorded as a
       worker failure and is never sent as unchecked instructions.
-- [ ] Include only the current source window, the parsed memory entries, and
-      relevant existing recap evidence. Keep the prompt under an explicit
-      input limit and never include secrets or arbitrary files.
+- [x] Include only the current source window, the parsed memory entries, and
+      relevant existing recap or knowledge-base evidence. Keep the prompt under
+      an explicit input limit and never include secrets or arbitrary files.
+- [x] Extract explicit user-authored preferences, decisions or constraints,
+      avoid rules, and open questions before the model call. Restore those
+      signals into the correct section if the model omits or miscategorizes
+      them, while keeping recent context model-derived.
 
 ### 7.2 Run one hidden model update
 
-- [ ] Add a versioned memory prompt that requests one strict JSON envelope.
+- [x] Add a versioned memory prompt that requests one strict JSON envelope.
       It must distinguish user preferences, project decisions, avoid rules,
       open questions, recent context, and explicit supersessions.
-- [ ] Use the configured recap model and its catalog endpoint. Send no tool
+- [x] Use the configured recap model and its catalog endpoint. Send no tool
       definitions, create no child session, and emit no `agent.Event`.
-- [ ] Run the worker after every successful parent user request when recaps
+- [x] Run the worker after every successful parent user request when recaps
       are enabled. Do not use `recap.after_chats` to skip the memory update;
       that setting remains the artifact-recap threshold.
-- [ ] Make provider errors, validation errors, disabled settings, and
+- [x] Make provider errors, validation errors, disabled settings, and
       insufficient source context nonfatal to the completed parent turn.
       Record the failure in `memory_updates` for diagnosis and retry.
 
 ### 7.3 Merge and render deterministically
 
-- [ ] Merge new facts with the prior document by normalized category and
+- [x] Merge new facts with the prior document by normalized category and
       stable content key. A newer explicit user correction supersedes an older
       preference or decision, but the source ledger retains both anchors.
-- [ ] Preserve active entries that the new envelope does not mention. The
+- [x] Preserve active entries that the new envelope does not mention. The
       model may propose a supersession only when it cites supplied evidence.
-- [ ] Order active entries by last-seen source sequence, then stable key. Keep
+- [x] Order active entries by last-seen source sequence, then stable key. Keep
       recent context newest first and render the source ledger oldest first for
       auditability.
-- [ ] Generate all Markdown and front matter in application code. Never append
+- [x] Generate all Markdown and front matter in application code. Never append
       unvalidated model text directly to the file.
 
 ### 7.4 Make writes crash-safe and restart-safe
 
-- [ ] Reserve and claim one `memory_updates` row before the provider call.
+- [x] Reserve and claim one `memory_updates` row before the provider call.
       A repeated event for the same source anchor must reuse the row.
-- [ ] Serialize writers for one project and write to a temporary file in the
+- [x] Serialize writers for one project and write to a temporary file in the
       destination directory, sync, close, and rename. Update the ledger only
       after the rename and digest calculation succeed.
-- [ ] On startup or session resume, retry queued or interrupted memory updates
+- [x] On startup or session resume, retry queued or interrupted memory updates
       in order. Never replace a newer aggregate with an older source anchor.
-- [ ] Test concurrent completions, process restart, provider timeout, partial
+- [x] Test concurrent completions, process restart, provider timeout, partial
       write, duplicate event replay, and a settings toggle during the request.
 
 ## Dependencies
@@ -84,5 +88,12 @@ model, then runs with its own timeout and context.
 
 ## Closure gate
 
-- [ ] `go test ./internal/recap ./internal/db ./internal/ui/chat -count=1`
+- [x] `go test ./internal/recap ./internal/db ./internal/ui/chat -count=1`
       exits 0, with the command and exit code recorded here.
+
+Evidence: `go test ./internal/recap ./internal/db ./internal/ui/chat -count=1`
+exited 0 on 2026-08-22. `go test -race ./internal/db ./internal/recap
+./internal/ui/chat -count=1` also exited 0. The writer lock, atomic rename,
+source-anchor guard, retry ledger, and startup recovery are implemented in
+`internal/recap/memory_run.go`, `internal/recap/artifacts.go`, and
+`internal/ui/chat/runtime.go`.

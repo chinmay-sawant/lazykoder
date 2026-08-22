@@ -14,10 +14,10 @@ owns the tool loop: it is not a wrapper around the OpenCode CLI or its global
 | --- | --- |
 | `main.go` | init workspace, load key, start the tea program |
 | `internal/workspace` | create `.lazykoder/`, open + migrate the db, ensure `.gitignore` |
-| `internal/db` | numbered migrations + session/message/part/tool/recap store |
+| `internal/db` | numbered migrations + session/message/part/tool/recap/memory store |
 | `internal/provider/opencode` | HTTP client for the OpenCode Go API |
 | `internal/agent` | turn loop, `buildHistory`, compact policy and summarizer run |
-| `internal/recap` | time-windowed snapshots, hidden no-tools worker, and atomic local artifacts |
+| `internal/recap` | time-windowed snapshots, hidden no-tools workers, and atomic local artifacts |
 | `internal/prompts` | embedded `compact.md` via `go:embed` (`prompts.Must`) |
 | `internal/subagent` | Manager + Host + AgentRunner for concurrent children |
 | `internal/policy` | bash classifier returning Allow/Ask/Deny |
@@ -130,6 +130,15 @@ One user turn runs in `internal/agent.Send` with a hard step bound (default
    Provider, validation, and artifact failures mark that record failed with a
    bounded error. `/agents` reloads the record and displays that error while
    keeping the worker out of the transcript.
+9. After every successful completed main-session turn, a separate hidden memory
+   worker uses a bounded two-to-five-message snapshot. It reads the
+   current project `knowledge-base/memories.md` and a bounded grep of related
+   local knowledge evidence, then asks the selected recap model for a strict
+   JSON memory envelope. Explicit user signals are restored into their
+   authoritative sections before valid facts are merged into the aggregate and
+   written with an atomic rename. A SQLite `memory_updates` row records the
+   source anchor, model, attempts, digest, and any failure so restarts can
+   retry safely.
 
 Everything the loop needs for a resumed session lives in the store; there is
 no in-memory tool state for the parent transcript.
@@ -137,11 +146,15 @@ no in-memory tool state for the parent transcript.
 ### First-request recall
 
 When `recap.enabled` is true, `internal/ui/chat` runs one bounded, quoted
-grep under `knowledge-base/recaps/` after persisting a new parent user message
-and before its first ordinary provider request. Matches are inserted as a
-wire-only system block after `AGENTS.md` instructions. The block is marked
-untrusted and is not persisted. Tool follow-ups, `/continue`, compaction, and
-child sessions do not repeat the lookup.
+grep after persisting a new parent user message and before its first ordinary
+provider request when the prompt contains recall language. It searches
+`knowledge-base/memories.md` first, then `knowledge-base/recaps/`, and finally
+the broader Markdown knowledge base only when earlier sources have no match.
+Matches become one wire-only system block after `AGENTS.md` instructions. The
+block is marked untrusted and is not persisted. Tool follow-ups, `/continue`,
+compaction, and child sessions do not repeat the lookup. Missing or malformed
+memory files are treated as empty recall sources. The chat status line uses a
+separate animated marker while this lookup or the hidden memory update runs.
 
 ## Compaction
 

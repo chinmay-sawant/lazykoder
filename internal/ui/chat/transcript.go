@@ -62,14 +62,15 @@ type transcriptItem struct {
 }
 
 const (
-	roleYou       = "you"
-	roleAssistant = "assistant"
-	thinkingLabel = "thinking"
-	maxToolTitle  = 72
-	workBracket   = "["
-	workRail      = "│"
-	workRailCols  = 2
-	streamCursor  = "▌"
+	roleYou          = "you"
+	roleAssistant    = "assistant"
+	thinkingLabel    = "thinking"
+	maxToolTitle     = 72
+	workBracket      = "["
+	workRail         = "│"
+	workRailCols     = 2
+	streamCursor     = "▌"
+	memoryScanFrames = "⌕∘⊙∘"
 )
 
 func (m *Model) replay(sessionID string) {

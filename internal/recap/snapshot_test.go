@@ -99,6 +99,29 @@ func TestBuildSnapshotRequiresFourAndExcludesCompactionAndIncomplete(t *testing.
 	}
 }
 
+func TestBuildSnapshotSupportsSmallerMemoryWindow(t *testing.T) {
+	store := openRecapStore(t)
+	sess, err := store.CreateSession(context.Background(), db.Session{Directory: t.TempDir(), ID: "ses_memory_window"})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	now := time.UnixMilli(4_500_000)
+	addRecapMessage(t, store, sess.ID, "user", "Remember this preference.", now.Add(-time.Minute), true)
+	addRecapMessage(t, store, sess.ID, "assistant", "I will keep it in project memory.", now, true)
+
+	snapshot, err := BuildSnapshot(context.Background(), store, sess.ID, SnapshotOptions{
+		Now:                 now,
+		MinimumMessageCount: memoryMinimumMessageCount,
+		MessageLimit:        defaultMessageLimit,
+	})
+	if err != nil {
+		t.Fatalf("BuildSnapshot memory window: %v", err)
+	}
+	if len(snapshot.Messages) != 2 || snapshot.SourceEndSeq != 2 {
+		t.Fatalf("memory snapshot = %+v, want two newest complete messages", snapshot)
+	}
+}
+
 func TestBuildSnapshotTieBreaksBySequence(t *testing.T) {
 	store := openRecapStore(t)
 	sess, err := store.CreateSession(context.Background(), db.Session{Directory: t.TempDir(), ID: "ses_ties"})

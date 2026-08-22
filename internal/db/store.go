@@ -194,7 +194,8 @@ const (
 	migrationSegments   = 10
 	migrationStatusV2   = 11
 	migrationRecaps     = 12
-	schemaVersion       = migrationRecaps
+	migrationMemories   = 13
+	schemaVersion       = migrationMemories
 )
 
 // Migrate runs numbered migrations. schema_migrations records the applied
@@ -260,6 +261,27 @@ func (s *Store) Migrate(ctx context.Context) error {
 				`CREATE UNIQUE INDEX IF NOT EXISTS idx_recap_records_session_end ON recap_records(session_id, source_end_message_id)`,
 				`CREATE INDEX IF NOT EXISTS idx_recap_records_open ON recap_records(status, time_created, id) WHERE status IN ('queued', 'running')`,
 				`CREATE INDEX IF NOT EXISTS idx_recap_records_session_seq ON recap_records(session_id, source_end_seq, id)`,
+			})
+		case migrationMemories:
+			err = s.applyMigration(ctx, migrationMemories, []string{
+				`CREATE TABLE IF NOT EXISTS memory_updates (
+  id                    TEXT PRIMARY KEY,
+  workdir               TEXT NOT NULL,
+  source_session_id     TEXT NOT NULL,
+  source_end_seq        INTEGER NOT NULL,
+  source_end_message_id TEXT NOT NULL,
+  model                 TEXT NOT NULL,
+  status                TEXT NOT NULL,
+  attempts              INTEGER NOT NULL DEFAULT 0,
+  sha256                TEXT,
+  error                 TEXT,
+  time_created          INTEGER NOT NULL,
+  time_started          INTEGER,
+  time_finished         INTEGER
+)`,
+				`CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_updates_source ON memory_updates(workdir, source_session_id, source_end_message_id)`,
+				`CREATE INDEX IF NOT EXISTS idx_memory_updates_open ON memory_updates(status, time_created, id) WHERE status IN ('queued', 'running')`,
+				`CREATE INDEX IF NOT EXISTS idx_memory_updates_workdir_seq ON memory_updates(workdir, source_end_seq, id)`,
 			})
 		default:
 			if i < 1 || i > len(schemaMigrations) {

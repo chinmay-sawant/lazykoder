@@ -1,7 +1,7 @@
 # v0.0.10 - Local recap, questions, recall, and durable memory
 
 > **Parent:** Current chat, settings, SQLite, first-request agent path, and local knowledge base
-> **Status:** recap shipped; durable memory extension planned 2026-08-22
+> **Status:** recap and durable memory shipped; live TTY gate open 2026-08-22
 > **Estimated effort:** recap baseline 6-8 days; memory extension 5-8 days
 > **Priority:** P1
 > **Skill:** `skills/phase-wise-checklist/SKILLS.md`
@@ -16,13 +16,13 @@ Recaps are optional local memory. A completed main-chat turn starts a hidden
 worker. It writes a recap, unresolved questions for a future agent, and
 concrete things to avoid based on user corrections and tool failures.
 
-The next extension adds one curated project file at
-`knowledge-base/memories.md`. It will hold stable user preferences, project
+The durable extension adds one curated project file at
+`knowledge-base/memories.md`. It holds stable user preferences, project
 decisions, things to avoid, open questions, recent context, and source links.
 The file is a bounded aggregate, not a transcript. The application owns its
-format and atomic writes. A hidden memory worker may use the configured recap
-model, but it must return structured evidence that code validates before the
-file changes.
+format and atomic writes. A hidden memory worker uses the configured recap
+model, returns structured evidence, and changes the file only after code
+validation.
 
 The worker has its own setting. It defaults to `deepseek-v4-flash`, which is
 the built-in new-session default and is present in the cached model catalog.
@@ -48,6 +48,11 @@ do not repeat the lookup.
   qualify, then keeps the newest four or five text-bearing messages in
   newest-to-oldest order. Compaction checkpoints are excluded. Completed,
   denied, and failed tool facts are bounded and kept as evidence.
+- The durable memory worker uses the same time windows and five-message cap,
+  but accepts a two-message minimum. A direct user instruction and its
+  completed assistant response can therefore create the first aggregate
+  without waiting for four separate turns. Detailed recap artifacts still
+  require four messages.
 - One recap is scheduled per terminal source message. Its durable unique key
   is `(session_id, source_end_message_id)`, so a redraw, restart, or repeated
   completion event cannot create a duplicate.
@@ -77,6 +82,9 @@ do not repeat the lookup.
   then returns typed entries for preferences, decisions, avoid rules,
   questions, and recent context. It cannot write Markdown or front matter
   directly. Code renders the canonical layout and keeps source message IDs.
+  Explicit user preferences, decisions or constraints, avoid rules, and open
+  questions are extracted first and restored into their authoritative section
+  if the model omits or miscategorizes them.
 - The memory file has a fixed schema with `format_version`, UTC update time,
   last source session and message, then these sections: User preferences,
   Decisions and constraints, Things to avoid, Open questions, Recent context,
@@ -85,10 +93,13 @@ do not repeat the lookup.
   superseded entries are pruned only after their source remains in the ledger,
   and secrets are rejected before persistence. Every write uses a temporary
   file, sync, close, and rename.
-- First-request recall checks `memories.md` before the existing recap tree.
-  Both results remain bounded, untrusted, and wire-only. The same keyword
-  extraction and quoted internal grep path are reused, with explicit tests
-  for prompts about recent work, preferences, decisions, and things to avoid.
+- First-request recall checks `memories.md` before the existing recap tree and
+  falls back to the broader Markdown knowledge base only when earlier sources
+  have no match. Searches are gated by explicit recall language, bounded,
+  untrusted, and wire-only. The same quoted internal grep path is reused, with
+  explicit tests for prompts about recent work, preferences, decisions, and
+  things to avoid. The TUI shows a separate memory-pattern animation while
+  the lookup or hidden update is active.
 
 ## Identity, ordering, and timestamps
 
@@ -124,22 +135,24 @@ with each path and SHA-256 for recovery and audit.
    attach worker and recall services, then schedule successful parent turns.
 5. [~] [Phase 5](phase-5-docs-and-gates.md): synchronize docs and run the
    complete automated and terminal checks.
-6. [ ] [Phase 6](phase-6-memory-contract.md): define the durable `memories.md`
+6. [x] [Phase 6](phase-6-memory-contract.md): define the durable `memories.md`
    schema, source identity, limits, and database update ledger.
-7. [ ] [Phase 7](phase-7-memory-update-worker.md): update the aggregate after
+7. [x] [Phase 7](phase-7-memory-update-worker.md): update the aggregate after
    each successful parent request with an idempotent hidden worker.
-8. [ ] [Phase 8](phase-8-memory-recall-and-lifecycle.md): search the aggregate
+8. [x] [Phase 8](phase-8-memory-recall-and-lifecycle.md): search the aggregate
    before recap files and preserve the first-request wire-only boundary.
-9. [ ] [Phase 9](phase-9-memory-docs-and-gates.md): document, test, and verify
+9. [~] [Phase 9](phase-9-memory-docs-and-gates.md): document, test, and verify
    the memory lifecycle without adding a visible worker row.
 
 ## First-request recall
 
 After `Agent.Send` persists the new user message and before `runSteps`
 makes its first ordinary `Chat` or `ChatStream` request, code runs
-`internal/tools/grep.Run` under `knowledge-base/recaps`. It uses a
-750-millisecond deadline, `*.md`, case-insensitive search, and at most 20
-matches. The query contains three to eight meaningful prompt words. Code
+`internal/tools/grep.Run` under `knowledge-base/memories.md` first and
+`knowledge-base/recaps` second, then the broader Markdown knowledge base only
+when earlier sources have no match. It uses a 750-millisecond deadline,
+`*.md`, case-insensitive search, and at most 20 matches. The query is only
+created for explicit recall language and contains bounded prompt words. Code
 quotes each word with `regexp.QuoteMeta` before joining them with `|`; raw
 user text never becomes a regular expression.
 
@@ -177,13 +190,13 @@ No new third-party dependency is planned.
       completion cannot produce a second file for the same end message.
 - [x] A related next user turn makes one internal grep lookup before its first
       ordinary request. Tool follow-ups and `/continue` make no lookup.
-- [ ] A successful parent request updates `knowledge-base/memories.md` at most
+- [x] A successful parent request updates `knowledge-base/memories.md` at most
       once for its source message, and replaying the completion event does not
       change the file a second time.
-- [ ] `memories.md` follows the fixed section schema, stays below 64 KiB, has
+- [x] `memories.md` follows the fixed section schema, stays below 64 KiB, has
       source IDs for every entry, and contains no secret-like values.
-- [ ] The next ordinary parent request searches `memories.md` before recap
+- [x] The next ordinary parent request searches `memories.md` before recap
       artifacts and injects one bounded, untrusted block. Tool follow-ups,
       `/continue`, compaction, and child agents do not search it.
-- [ ] A restart resumes one open memory update without losing the previous
+- [x] A restart resumes one open memory update without losing the previous
       aggregate or producing a partial file.

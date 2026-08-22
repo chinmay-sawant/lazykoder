@@ -2,6 +2,8 @@ package chat
 
 import (
 	"context"
+	"errors"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -28,6 +30,7 @@ const (
 	maxRecallTerms   = 12
 	maxRecallOutput  = 12_000
 	maxRecallMatches = 20
+	maxMemoryRecall  = 4_000
 )
 
 // turnRun is the agent call for one start-turn path (send / compact / continue).
@@ -116,15 +119,19 @@ func (m Model) agentOptions() agent.Options {
 	return opts
 }
 
-// recall searches the local recap tree before the first ordinary parent
-// request. The pattern is built from quoted words so user text never becomes
-// executable regular expression syntax.
+// recall searches local memory sources before the first ordinary parent
+// request when the prompt asks for historical context. The pattern is built
+// from quoted words so user text never becomes executable regular expression
+// syntax.
 func (m Model) recall(ctx context.Context, _ string, userText string) (string, error) {
 	if m.workdir == "" || strings.TrimSpace(userText) == "" {
 		return "", nil
 	}
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if !recallRequested(userText) {
+		return "", nil
 	}
 	terms := recallTerms(userText)
 	if len(terms) == 0 {
@@ -136,25 +143,86 @@ func (m Model) recall(ctx context.Context, _ string, userText string) (string, e
 	}
 	searchCtx, cancel := context.WithTimeout(ctx, recallTimeout)
 	defer cancel()
-	result, err := grep.Run(searchCtx, m.workdir, grep.Options{
-		Pattern:         strings.Join(quoted, "|"),
-		Path:            "knowledge-base/recaps",
-		Glob:            "*.md",
-		CaseInsensitive: true,
-		MaxMatches:      maxRecallMatches,
-	}, nil)
-	if err != nil || strings.TrimSpace(result.Output) == "" || strings.TrimSpace(result.Output) == "no matches" {
-		return "", nil
+	pattern := strings.Join(quoted, "|")
+	var parts []string
+	sources := []struct {
+		label string
+		path  string
+		cap   int
+		valid bool
+	}{
+		{label: "MEMORY", path: "knowledge-base/memories.md", cap: maxMemoryRecall, valid: true},
+		{label: "RECAP", path: "knowledge-base/recaps", cap: maxRecallOutput},
 	}
-	return truncateRecall(result.Output), nil
+	for index, source := range sources {
+		if source.valid {
+			if _, err := recap.ReadMemoryDocument(m.workdir); err != nil {
+				continue
+			}
+		}
+		result, err := grep.Run(searchCtx, m.workdir, grep.Options{
+			Pattern:         pattern,
+			Path:            source.path,
+			Glob:            "*.md",
+			CaseInsensitive: true,
+			MaxMatches:      maxRecallMatches,
+		}, nil)
+		if err != nil || strings.TrimSpace(result.Output) == "" || strings.TrimSpace(result.Output) == "no matches" {
+			continue
+		}
+		parts = append(parts, source.label+"\n"+truncateRecall(result.Output, source.cap))
+		if index == 0 {
+			return truncateRecall(strings.Join(parts, "\n\n"), maxRecallOutput), nil
+		}
+	}
+	if len(parts) == 0 {
+		result, err := grep.Run(searchCtx, m.workdir, grep.Options{
+			Pattern:         pattern,
+			Path:            "knowledge-base",
+			Glob:            "*.md",
+			CaseInsensitive: true,
+			MaxMatches:      maxRecallMatches,
+		}, nil)
+		if err == nil && strings.TrimSpace(result.Output) != "" && strings.TrimSpace(result.Output) != "no matches" {
+			parts = append(parts, "KNOWLEDGE-BASE\n"+truncateRecall(result.Output, maxRecallOutput))
+		}
+	}
+	return truncateRecall(strings.Join(parts, "\n\n"), maxRecallOutput), nil
 }
 
-func truncateRecall(value string) string {
+func recallRequested(text string) bool {
+	normalized := strings.ToLower(strings.Join(strings.Fields(text), " "))
+	for _, phrase := range []string{"last session", "what did we decide"} {
+		if strings.Contains(normalized, phrase) {
+			return true
+		}
+	}
+	words := strings.FieldsFunc(normalized, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsNumber(r)
+	})
+	triggers := map[string]struct{}{
+		"memory": {}, "remember": {}, "recall": {}, "recap": {}, "recent": {},
+		"previous": {}, "earlier": {}, "preference": {}, "decision": {},
+		"avoid": {}, "mistake": {}, "history": {}, "context": {},
+	}
+	for _, word := range words {
+		if _, ok := triggers[word]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func truncateRecall(value string, limit ...int) string {
+	max := maxRecallOutput
+	if len(limit) > 0 && limit[0] > 0 {
+		max = limit[0]
+	}
 	runes := []rune(value)
-	if len(runes) <= maxRecallOutput {
+	if len(runes) <= max {
 		return value
 	}
-	return string(runes[:maxRecallOutput])
+	return string(runes[:max])
 }
 
 func recallTerms(text string) []string {
@@ -275,6 +343,10 @@ func (m Model) recapEligible(err error) bool {
 	return m.successfulRecapChats+1 >= m.projectSettings.EffectiveRecap().AfterChats
 }
 
+func (m Model) memoryEligible(err error) bool {
+	return m.successfulTurnEligible(err)
+}
+
 // scheduleRecap returns a hidden background command. It deliberately creates
 // its own context because finishTurn cancels the interactive turn context.
 func (m Model) scheduleRecap() tea.Cmd {
@@ -341,6 +413,97 @@ func (m Model) scheduleRecap() tea.Cmd {
 	}
 }
 
+// scheduleMemoryUpdate returns a hidden background command for every
+// successful parent turn. It owns a fresh context because finishTurn cancels
+// the interactive turn context.
+func (m Model) scheduleMemoryUpdate() tea.Cmd {
+	cfg := m.projectSettings.EffectiveRecap()
+	if !cfg.Enabled || m.store == nil || m.client == nil || m.session == nil {
+		return nil
+	}
+	sessionID := m.session.ID
+	model := cfg.Model
+	workdir, err := filepath.Abs(m.workdir)
+	if err != nil {
+		return nil
+	}
+	settingsPath := m.settingsPath
+	store := m.store
+	client := m.client
+	info := m.recapModelInfo(model)
+	snapshot, snapshotErr := recap.BuildSnapshot(context.Background(), store, sessionID, recap.SnapshotOptions{
+		MinimumMessageCount: recap.MemoryMinimumMessageCount,
+	})
+	var anchor recap.Snapshot
+	var anchorErr error
+	if snapshotErr != nil && errors.Is(snapshotErr, recap.ErrInsufficientMessages) {
+		anchor, anchorErr = recap.BuildAnchorSnapshot(context.Background(), store, sessionID)
+	}
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), recapTimeout)
+		defer cancel()
+		if !recapEnabledAtPath(settingsPath) {
+			return memoryDoneMsg{}
+		}
+		if snapshotErr != nil {
+			if !errors.Is(snapshotErr, recap.ErrInsufficientMessages) || anchorErr != nil {
+				return memoryDoneMsg{}
+			}
+			record, created, reserveErr := store.ReserveMemoryUpdate(ctx, db.MemoryUpdate{
+				Workdir:            workdir,
+				SourceSessionID:    anchor.SessionID,
+				SourceEndSeq:       anchor.SourceEndSeq,
+				SourceEndMessageID: anchor.SourceEndMessageID,
+				Model:              model,
+			})
+			if reserveErr == nil && created {
+				_ = store.FailMemoryUpdate(ctx, record.ID, snapshotErr.Error())
+			}
+			return memoryDoneMsg{}
+		}
+		record, created, err := store.ReserveMemoryUpdate(ctx, db.MemoryUpdate{
+			Workdir:            workdir,
+			SourceSessionID:    snapshot.SessionID,
+			SourceEndSeq:       snapshot.SourceEndSeq,
+			SourceEndMessageID: snapshot.SourceEndMessageID,
+			Model:              model,
+		})
+		if err != nil {
+			return memoryDoneMsg{}
+		}
+		if !created {
+			switch record.Status {
+			case db.MemoryUpdateStatusCompleted, db.MemoryUpdateStatusQueued, db.MemoryUpdateStatusRunning:
+				return memoryDoneMsg{}
+			case db.MemoryUpdateStatusFailed:
+				if err := store.RequeueMemoryUpdate(ctx, record.ID); err != nil {
+					return memoryDoneMsg{}
+				}
+			default:
+				return memoryDoneMsg{}
+			}
+		}
+		if !recapEnabledAtPath(settingsPath) {
+			return memoryDoneMsg{}
+		}
+		workerModel := record.Model
+		workerInfo := info
+		if workerModel != model {
+			workerInfo = m.recapModelInfo(workerModel)
+		}
+		worker := recap.NewMemoryWorker(client, workerModel, workerInfo, "")
+		runErr := recap.RunMemoryUpdate(ctx, recap.MemoryRunInput{
+			Store:    store,
+			Record:   record,
+			Snapshot: snapshot,
+			Workdir:  workdir,
+			Worker:   worker,
+			Enabled:  func() bool { return recapEnabledAtPath(settingsPath) },
+		})
+		return memoryDoneMsg{err: runErr}
+	}
+}
+
 func recapEnabledAtPath(settingsPath string) bool {
 	if strings.TrimSpace(settingsPath) == "" {
 		return true
@@ -388,6 +551,51 @@ func (m Model) recoverRecaps() tea.Msg {
 			Record:   record,
 			Snapshot: snapshot,
 			Workdir:  m.workdir,
+			Worker:   worker,
+			Enabled:  func() bool { return recapEnabledAtPath(m.settingsPath) },
+		})
+	}
+	return nil
+}
+
+// recoverMemoryUpdates resumes queued or interrupted updates for the current
+// workdir. The source message anchor makes recovery independent of newer chat
+// messages added after the process stopped.
+func (m Model) recoverMemoryUpdates() tea.Msg {
+	if !m.projectSettings.EffectiveRecap().Enabled || m.store == nil || m.client == nil || (m.session != nil && (m.session.Kind == db.SessionKindSubagent || m.session.ParentSessionID != nil)) {
+		return nil
+	}
+	workdir, err := filepath.Abs(m.workdir)
+	if err != nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), recapTimeout)
+	defer cancel()
+	updates, err := m.store.ListMemoryUpdatesForRecovery(ctx, workdir)
+	if err != nil {
+		return nil
+	}
+	for _, update := range updates {
+		if update.Status == db.MemoryUpdateStatusRunning || update.Status == db.MemoryUpdateStatusFailed {
+			if err := m.store.RequeueMemoryUpdate(ctx, update.ID); err != nil {
+				continue
+			}
+			update.Status = db.MemoryUpdateStatusQueued
+		}
+		snapshot, err := recap.BuildSnapshot(ctx, m.store, update.SourceSessionID, recap.SnapshotOptions{
+			AnchorMessageID:     update.SourceEndMessageID,
+			MinimumMessageCount: recap.MemoryMinimumMessageCount,
+		})
+		if err != nil {
+			_ = m.store.FailMemoryUpdate(ctx, update.ID, "source snapshot unavailable: "+err.Error())
+			continue
+		}
+		worker := recap.NewMemoryWorker(m.client, update.Model, m.recapModelInfo(update.Model), "")
+		_ = recap.RunMemoryUpdate(ctx, recap.MemoryRunInput{
+			Store:    m.store,
+			Record:   update,
+			Snapshot: snapshot,
+			Workdir:  workdir,
 			Worker:   worker,
 			Enabled:  func() bool { return recapEnabledAtPath(m.settingsPath) },
 		})

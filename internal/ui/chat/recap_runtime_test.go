@@ -10,6 +10,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/chinmay-sawant/lazykoder/internal/db"
+	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
+	"github.com/chinmay-sawant/lazykoder/internal/recap"
 	"github.com/chinmay-sawant/lazykoder/internal/settings"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
@@ -24,12 +26,85 @@ func TestRecallSearchesOnlyLocalRecapFilesWithQuotedTerms(t *testing.T) {
 		t.Fatalf("write recap: %v", err)
 	}
 	m := New(Options{Workdir: workdir})
-	got, err := m.recall(context.Background(), "session", "parser.v2 migration")
+	got, err := m.recall(context.Background(), "session", "recall parser.v2 migration")
 	if err != nil {
 		t.Fatalf("recall: %v", err)
 	}
 	if !strings.Contains(got, "avoid.md") || !strings.Contains(got, "parser.v2") {
 		t.Fatalf("recall = %q, want matching recap hit", got)
+	}
+}
+
+func TestRecallSearchesMemoryBeforeRecaps(t *testing.T) {
+	workdir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workdir, "knowledge-base", "recaps"), 0o755); err != nil {
+		t.Fatalf("mkdir recaps: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(workdir, "knowledge-base"), 0o755); err != nil {
+		t.Fatalf("mkdir knowledge base: %v", err)
+	}
+	document := recap.NewMemoryDocument()
+	document.Preferences = append(document.Preferences, recap.MemoryEntry{
+		ID:               "mem_test",
+		State:            "active",
+		Text:             "Keep memory local.",
+		Evidence:         "The test records a project preference.",
+		SourceMessageIDs: []string{"msg_1"},
+		FirstSeenUTC:     "2026-08-22T12:00:00Z",
+		LastSeenUTC:      "2026-08-22T12:00:00Z",
+	})
+	if _, err := recap.WriteMemoryDocument(context.Background(), workdir, document); err != nil {
+		t.Fatalf("write memory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workdir, "knowledge-base", "recaps", "recent.md"), []byte("keep memory recent\n"), 0o600); err != nil {
+		t.Fatalf("write recap: %v", err)
+	}
+	m := New(Options{Workdir: workdir})
+	got, err := m.recall(context.Background(), "session", "memory recent")
+	if err != nil {
+		t.Fatalf("recall: %v", err)
+	}
+	if !strings.Contains(got, "MEMORY") || strings.Contains(got, "RECAP") {
+		t.Fatalf("recall = %q, want memory hit to stop broader search", got)
+	}
+}
+
+func TestRecallSkipsMalformedMemoryAndUsesRecaps(t *testing.T) {
+	workdir := t.TempDir()
+	recapDir := filepath.Join(workdir, "knowledge-base", "recaps")
+	if err := os.MkdirAll(recapDir, 0o755); err != nil {
+		t.Fatalf("mkdir recaps: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workdir, "knowledge-base", "memories.md"), []byte("not an application-owned memory document\n"), 0o600); err != nil {
+		t.Fatalf("write malformed memory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(recapDir, "recent.md"), []byte("keep memory recent\n"), 0o600); err != nil {
+		t.Fatalf("write recap: %v", err)
+	}
+	got, err := (New(Options{Workdir: workdir})).recall(context.Background(), "session", "memory recent")
+	if err != nil {
+		t.Fatalf("recall: %v", err)
+	}
+	if strings.Contains(got, "MEMORY") || !strings.Contains(got, "RECAP") {
+		t.Fatalf("recall = %q, want recap-only result", got)
+	}
+}
+
+func TestRecallFallsBackToKnowledgeBaseAfterNoMemoryMatch(t *testing.T) {
+	workdir := t.TempDir()
+	path := filepath.Join(workdir, "knowledge-base", "03-concepts", "memory.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir knowledge base: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("parser.v2 is documented in the project memory contract\n"), 0o600); err != nil {
+		t.Fatalf("write knowledge-base page: %v", err)
+	}
+	got, err := (New(Options{Workdir: workdir})).recall(context.Background(), "session", "check recent parser.v2")
+	if err != nil {
+		t.Fatalf("recall: %v", err)
+	}
+	if !strings.Contains(got, "KNOWLEDGE-BASE") || !strings.Contains(got, "parser.v2") {
+		t.Fatalf("recall = %q, want knowledge-base fallback", got)
 	}
 }
 
@@ -43,6 +118,22 @@ func TestRecallIgnoresEmptyOrUnhelpfulPrompts(t *testing.T) {
 		if got != "" {
 			t.Fatalf("recall %q = %q, want empty", prompt, got)
 		}
+	}
+}
+
+func TestMemoryScanUsesDistinctVisibleActivity(t *testing.T) {
+	m := New(Options{Workdir: t.TempDir()})
+	m.width = 80
+	m.height = 24
+	m.busy = true
+	m.recallScanning = true
+	m.activity = "scanning memory patterns"
+	text := stripANSI(viewText(m))
+	if !strings.Contains(text, "scanning memory patterns") {
+		t.Fatalf("scan activity missing: %q", text)
+	}
+	if !strings.Contains(text, "⌕") && !strings.Contains(text, "∘") && !strings.Contains(text, "⊙") {
+		t.Fatalf("distinct scan marker missing: %q", text)
 	}
 }
 
@@ -70,6 +161,128 @@ func TestRecapEligibilitySurvivesPersistedUserEcho(t *testing.T) {
 	}
 }
 
+func TestMemoryScheduleCreatesFileFromOneCompletedTurn(t *testing.T) {
+	store := newTestStore(t)
+	workdir := t.TempDir()
+	session, err := store.CreateSession(context.Background(), db.Session{
+		Directory: workdir,
+		Model:     "deepseek-v4-flash",
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	userText := "Remember that plans should stay focused."
+	user, err := store.InsertMessage(context.Background(), db.Message{SessionID: session.ID, Role: "user"})
+	if err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+	if _, err := store.InsertPart(context.Background(), db.Part{MessageID: user.ID, Type: "text", Text: &userText}); err != nil {
+		t.Fatalf("insert user text: %v", err)
+	}
+	assistantText := "I will keep the plan focused."
+	assistant, err := store.InsertMessage(context.Background(), db.Message{SessionID: session.ID, Role: "assistant"})
+	if err != nil {
+		t.Fatalf("insert assistant: %v", err)
+	}
+	if _, err := store.InsertPart(context.Background(), db.Part{MessageID: assistant.ID, Type: "text", Text: &assistantText}); err != nil {
+		t.Fatalf("insert assistant text: %v", err)
+	}
+	finish := "stop"
+	if _, err := store.InsertPart(context.Background(), db.Part{MessageID: assistant.ID, Type: "step-finish", FinishReason: &finish}); err != nil {
+		t.Fatalf("insert assistant finish: %v", err)
+	}
+	content := `{"preferences":[{"text":"Keep plans focused","evidence":"The user explicitly requested focused plans.","source_message_ids":["` + user.ID + `"]}],"decisions":[],"things_to_avoid":[],"questions":[],"recent_context":[],"supersessions":[]}`
+	fake := newFakeProvider(t, 0, respBody(content, "stop", nil))
+	cfg := settings.Default()
+	cfg.Recap.Enabled = true
+	cfg.Recap.Model = "deepseek-v4-flash"
+	m := New(Options{
+		Store:    store,
+		Client:   opencode.NewClient("test-key", opencode.WithBaseURL(fake.srv.URL)),
+		Workdir:  workdir,
+		Session:  &session,
+		Settings: &cfg,
+	})
+	cmd := m.scheduleMemoryUpdate()
+	if cmd == nil {
+		t.Fatal("scheduleMemoryUpdate returned nil")
+	}
+	_ = cmd()
+	body, err := os.ReadFile(filepath.Join(workdir, "knowledge-base", "memories.md"))
+	if err != nil {
+		t.Fatalf("memories.md was not created: %v", err)
+	}
+	if !strings.Contains(string(body), "Keep plans focused") || !strings.Contains(string(body), user.ID) {
+		t.Fatalf("memories.md = %q", body)
+	}
+}
+
+func TestMemoryRecoveryRetriesInsufficientContextFailure(t *testing.T) {
+	store := newTestStore(t)
+	workdir := t.TempDir()
+	session, err := store.CreateSession(context.Background(), db.Session{Directory: workdir, Model: "deepseek-v4-flash"})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	userText := "Remember to keep the implementation focused."
+	user, err := store.InsertMessage(context.Background(), db.Message{SessionID: session.ID, Role: "user"})
+	if err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+	if _, err := store.InsertPart(context.Background(), db.Part{MessageID: user.ID, Type: "text", Text: &userText}); err != nil {
+		t.Fatalf("insert user text: %v", err)
+	}
+	assistantText := "The implementation will stay focused."
+	assistant, err := store.InsertMessage(context.Background(), db.Message{SessionID: session.ID, Role: "assistant"})
+	if err != nil {
+		t.Fatalf("insert assistant: %v", err)
+	}
+	if _, err := store.InsertPart(context.Background(), db.Part{MessageID: assistant.ID, Type: "text", Text: &assistantText}); err != nil {
+		t.Fatalf("insert assistant text: %v", err)
+	}
+	finish := "stop"
+	if _, err := store.InsertPart(context.Background(), db.Part{MessageID: assistant.ID, Type: "step-finish", FinishReason: &finish}); err != nil {
+		t.Fatalf("insert assistant finish: %v", err)
+	}
+	record, _, err := store.ReserveMemoryUpdate(context.Background(), db.MemoryUpdate{
+		Workdir:            workdir,
+		SourceSessionID:    session.ID,
+		SourceEndSeq:       assistant.Seq,
+		SourceEndMessageID: assistant.ID,
+		Model:              "deepseek-v4-flash",
+	})
+	if err != nil {
+		t.Fatalf("reserve memory update: %v", err)
+	}
+	if err := store.ClaimMemoryUpdate(context.Background(), record.ID); err != nil {
+		t.Fatalf("claim memory update: %v", err)
+	}
+	if err := store.FailMemoryUpdate(context.Background(), record.ID, "recap: fewer than four complete messages"); err != nil {
+		t.Fatalf("fail memory update: %v", err)
+	}
+	content := `{"preferences":[{"text":"Keep implementation focused","evidence":"The user explicitly requested focused implementation.","source_message_ids":["` + user.ID + `"]}],"decisions":[],"things_to_avoid":[],"questions":[],"recent_context":[],"supersessions":[]}`
+	fake := newFakeProvider(t, 0, respBody(content, "stop", nil))
+	cfg := settings.Default()
+	cfg.Recap.Enabled = true
+	cfg.Recap.Model = "deepseek-v4-flash"
+	m := New(Options{Store: store, Client: opencode.NewClient("test-key", opencode.WithBaseURL(fake.srv.URL)), Workdir: workdir, Session: &session, Settings: &cfg})
+	_ = m.recoverMemoryUpdates()
+	body, err := os.ReadFile(filepath.Join(workdir, "knowledge-base", "memories.md"))
+	if err != nil {
+		t.Fatalf("recovered memories.md: %v", err)
+	}
+	if !strings.Contains(string(body), "Keep implementation focused") {
+		t.Fatalf("recovered memories.md = %q", body)
+	}
+	got, err := store.GetMemoryUpdate(context.Background(), record.ID)
+	if err != nil {
+		t.Fatalf("get recovered update: %v", err)
+	}
+	if got.Status != db.MemoryUpdateStatusCompleted {
+		t.Fatalf("recovered update = %+v", got)
+	}
+}
+
 func TestRecapSchedulesAfterConfiguredSuccessfulChats(t *testing.T) {
 	store := newTestStore(t)
 	session, err := store.CreateSession(context.Background(), db.Session{Directory: t.TempDir(), Model: "deepseek-v4-flash"})
@@ -85,15 +298,15 @@ func TestRecapSchedulesAfterConfiguredSuccessfulChats(t *testing.T) {
 	m.turnHasNewUser = true
 	first, firstCmd := m.Update(eventDoneMsg{seq: 1})
 	m = first.(Model)
-	if firstCmd != nil || m.successfulRecapChats != 1 {
-		t.Fatalf("after first chat: cmd=%v count=%d, want no command and count 1", firstCmd != nil, m.successfulRecapChats)
+	if firstCmd == nil || m.successfulRecapChats != 1 || m.memoryScanJobs != 1 {
+		t.Fatalf("after first chat: cmd=%v count=%d memory_jobs=%d, want memory update and count 1", firstCmd != nil, m.successfulRecapChats, m.memoryScanJobs)
 	}
 	m.busy = true
 	m.turnHasNewUser = true
 	second, secondCmd := m.Update(eventDoneMsg{seq: 1})
 	m = second.(Model)
-	if secondCmd == nil || m.successfulRecapChats != 0 {
-		t.Fatalf("after second chat: cmd=%v count=%d, want recap command and reset", secondCmd != nil, m.successfulRecapChats)
+	if secondCmd == nil || m.successfulRecapChats != 0 || m.memoryScanJobs != 2 {
+		t.Fatalf("after second chat: cmd=%v count=%d memory_jobs=%d, want independent memory update and recap reset", secondCmd != nil, m.successfulRecapChats, m.memoryScanJobs)
 	}
 }
 

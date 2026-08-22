@@ -31,11 +31,11 @@ func TestMigrateIdempotent(t *testing.T) {
 
 	var n int
 	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master
-WHERE type = 'table' AND name IN ('sessions', 'messages', 'parts', 'tool_calls', 'subagent_jobs', 'todos', 'recap_records', 'schema_migrations')`).Scan(&n); err != nil {
+WHERE type = 'table' AND name IN ('sessions', 'messages', 'parts', 'tool_calls', 'subagent_jobs', 'todos', 'recap_records', 'memory_updates', 'schema_migrations')`).Scan(&n); err != nil {
 		t.Fatalf("count tables: %v", err)
 	}
-	if n != 8 {
-		t.Fatalf("got %d tables, want 8", n)
+	if n != 9 {
+		t.Fatalf("got %d tables, want 9", n)
 	}
 
 	if err := s.Migrate(ctx); err != nil {
@@ -759,6 +759,9 @@ func TestLegacyStatusSegmentsExpandOnMigration(t *testing.T) {
 	}
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM schema_migrations WHERE version = ?`, migrationRecaps); err != nil {
 		t.Fatalf("rewind recap migration: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM schema_migrations WHERE version = ?`, migrationMemories); err != nil {
+		t.Fatalf("rewind memory migration: %v", err)
 	}
 	if err := s.Migrate(ctx); err != nil {
 		t.Fatalf("Migrate: %v", err)

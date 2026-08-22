@@ -343,6 +343,15 @@ the newest recap row and opens its context on `enter`, `right`, or a click. A
 later parent turn performs one bounded local grep before its first provider
 request and sends matching lines as untrusted historical hints.
 
+The same `recap.enabled` and `recap.model` settings also control the hidden
+memory worker. It runs after each successful parent turn, stays out of the
+transcript and drawer, and updates the project-scoped
+`knowledge-base/memories.md` aggregate. The worker receives only the bounded
+recent snapshot, the previous memory document, and related local knowledge
+evidence. Explicit user instructions are decoded into their durable section.
+While local memory patterns are being searched or the hidden update is
+running, the status line shows a separate animated memory marker.
+
 When the step limit is off the agent still has a large safety bound so a
 runaway loop cannot run forever. `/model` and `/variant` still change only
 the **current session**; the settings card is the project default.

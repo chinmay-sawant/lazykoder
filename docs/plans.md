@@ -88,11 +88,12 @@ human runs them.
   request. Automated
   gates are green; live-terminal settings inspection remains open. Ledger:
   `plans/v0.0.10/`.
-- v0.0.10 memory extension: planned durable `knowledge-base/memories.md`.
-  The aggregate will be refreshed after successful parent requests, retain
-  source-backed preferences, decisions, avoid rules, questions, and recent
-  context, and be searched before the existing recap artifacts. The memory
-  phases are not implemented or validated yet.
+- v0.0.10 memory extension: durable `knowledge-base/memories.md` is
+  implemented. A hidden worker refreshes the bounded aggregate after each
+  successful parent request, retains source-backed preferences, decisions,
+  avoid rules, questions, and recent context, and is searched before the
+  existing recap artifacts. Phases 6-8 are complete. Phase 9 automated gates
+  are complete; live terminal inspection remains open.
 
 ## What 0.0.1 deliberately does not do
 

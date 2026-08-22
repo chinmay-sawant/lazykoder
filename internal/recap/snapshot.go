@@ -13,14 +13,19 @@ import (
 )
 
 const (
-	defaultRecentWindow    = time.Hour
-	defaultMaximumWindow   = 2 * time.Hour
-	defaultMessageLimit    = 5
-	minimumMessageCount    = 4
-	maxToolFactsPerMessage = 8
-	maxToolFactOutput      = 800
-	maxToolFactTitle       = 200
+	defaultRecentWindow       = time.Hour
+	defaultMaximumWindow      = 2 * time.Hour
+	defaultMessageLimit       = 5
+	minimumMessageCount       = 4
+	memoryMinimumMessageCount = 2
+	maxToolFactsPerMessage    = 8
+	maxToolFactOutput         = 800
+	maxToolFactTitle          = 200
 )
+
+// MemoryMinimumMessageCount is the smallest complete context window used by
+// the project memory updater. Recap artifacts continue to require four.
+const MemoryMinimumMessageCount = memoryMinimumMessageCount
 
 var (
 	// ErrInsufficientMessages means a session has no four-message recap window.
@@ -36,6 +41,9 @@ type SnapshotOptions struct {
 	RecentWindow  time.Duration
 	MaximumWindow time.Duration
 	MessageLimit  int
+	// MinimumMessageCount overrides the default four-message recap threshold
+	// for bounded consumers such as the project memory updater.
+	MinimumMessageCount int
 	// AnchorMessageID rebuilds the window ending at a durable source message.
 	// It lets restart recovery reproduce the reservation even after newer
 	// messages have been added to the session.
@@ -116,6 +124,10 @@ func BuildSnapshot(ctx context.Context, store *db.Store, sessionID string, opts 
 	if limit <= 0 {
 		limit = defaultMessageLimit
 	}
+	minimum := minimumMessageCount
+	if opts.MinimumMessageCount > 0 {
+		minimum = opts.MinimumMessageCount
+	}
 	candidates := snapshotCandidates(graph)
 	if len(candidates) == 0 {
 		return Snapshot{}, ErrInsufficientMessages
@@ -142,13 +154,51 @@ func BuildSnapshot(ctx context.Context, store *db.Store, sessionID string, opts 
 		return candidates[i].message.Seq > candidates[j].message.Seq
 	})
 	selected := selectWindow(candidates, now.Add(-recentWindow).UnixMilli(), limit)
-	if len(selected) < minimumMessageCount {
+	if len(selected) < minimum {
 		selected = selectWindow(candidates, now.Add(-maximumWindow).UnixMilli(), limit)
 	}
-	if len(selected) < minimumMessageCount {
+	if len(selected) < minimum {
 		return Snapshot{}, ErrInsufficientMessages
 	}
 	return makeSnapshot(sessionID, selected), nil
+}
+
+// BuildAnchorSnapshot returns the newest eligible source message even when a
+// full four-message window is not available. It is used only to reserve a
+// durable failed memory attempt so insufficient context is observable and can
+// be retried after the next successful turn.
+func BuildAnchorSnapshot(ctx context.Context, store *db.Store, sessionID string) (Snapshot, error) {
+	if store == nil {
+		return Snapshot{}, errors.New("recap: store is required")
+	}
+	if strings.TrimSpace(sessionID) == "" {
+		return Snapshot{}, errors.New("recap: session id is required")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	sess, err := store.GetSession(ctx, sessionID)
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("recap: get session: %w", err)
+	}
+	if sess.Kind == db.SessionKindSubagent || sess.ParentSessionID != nil {
+		return Snapshot{}, ErrSubagentSession
+	}
+	graph, err := store.LoadSessionGraph(ctx, sessionID)
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("recap: load session graph: %w", err)
+	}
+	candidates := snapshotCandidates(graph)
+	if len(candidates) == 0 {
+		return Snapshot{}, ErrInsufficientMessages
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].message.TimeCreated != candidates[j].message.TimeCreated {
+			return candidates[i].message.TimeCreated > candidates[j].message.TimeCreated
+		}
+		return candidates[i].message.Seq > candidates[j].message.Seq
+	})
+	return makeSnapshot(sessionID, candidates[:1]), nil
 }
 
 func findAnchor(candidates []snapshotCandidate, id string) (snapshotCandidate, bool) {

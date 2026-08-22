@@ -231,6 +231,10 @@ const (
 	EventCompacting
 	// EventCompacted fires after a checkpoint is persisted.
 	EventCompacted
+	// EventRecallStarted fires before the local memory lookup for a parent send.
+	EventRecallStarted
+	// EventRecallFinished fires after the local memory lookup completes.
+	EventRecallFinished
 )
 
 // Event is one streamed write or error during Send.
@@ -266,7 +270,9 @@ func (a *Agent) Send(ctx context.Context, userText string, events chan<- Event) 
 	if err = a.writeUserTurn(ctx, userText, events); err != nil {
 		return err
 	}
+	a.emit(events, Event{Kind: EventRecallStarted, SessionID: a.sessionID()})
 	a.prepareRecall(ctx, userText)
+	a.emit(events, Event{Kind: EventRecallFinished, SessionID: a.sessionID()})
 	return a.runSteps(ctx, events)
 }
 

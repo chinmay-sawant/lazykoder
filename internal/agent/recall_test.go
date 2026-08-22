@@ -35,8 +35,21 @@ func TestSendInjectsRecallAfterProjectInstructions(t *testing.T) {
 		},
 	})
 
-	if _, err := sendAndCollect(t, a, "fix the parser"); err != nil {
+	events, err := sendAndCollect(t, a, "fix the parser")
+	if err != nil {
 		t.Fatalf("Send: %v", err)
+	}
+	start, finish := -1, -1
+	for index, event := range events {
+		switch event.Kind {
+		case EventRecallStarted:
+			start = index
+		case EventRecallFinished:
+			finish = index
+		}
+	}
+	if start < 0 || finish <= start {
+		t.Fatalf("recall events = start %d finish %d, want ordered scan lifecycle", start, finish)
 	}
 	if calls != 1 {
 		t.Fatalf("recall calls = %d, want 1", calls)
