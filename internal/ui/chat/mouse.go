@@ -297,7 +297,7 @@ func (m Model) transcriptTop() int {
 	// headerView has no trailing newline; the \n after it in chatScreen
 	// only ends that row, it does not insert a blank line. Same for the
 	// todo strip. Adding 1 here pushed every click target one row below
-	// the painted ▸ / ◆ headers (web terminals made that obvious).
+	// the painted ▸ / baton headers (web terminals made that obvious).
 	top := lipgloss.Height(m.headerView())
 	if panel := m.todoPanelView(); panel != "" {
 		top += lipgloss.Height(panel)

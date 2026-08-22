@@ -14,9 +14,10 @@ pickers are centered cards.
   the header. It collapses to `▸ thinking` as soon as the assistant
   reply, a tool card, or the end of the turn arrives. The same clock
   sits on the far right. Tool runs are
-  full-width cards that start collapsed (`◆  ▸  bash  title` on the left,
-  `15:32:05` on the far right). The diamond is the only status mark: white
-  while pending or running, green on success, red on error or deny. `ctrl+e`
+  full-width cards that start collapsed (`|  ▸  bash  title` on the left,
+  `15:32:05` on the far right). The baton mark spins in green while the
+  command is pending or running, stays static and green on success, and stays
+  static and red on error or deny. `ctrl+e`
   expands all tools when they are all closed, or collapses all tools otherwise.
   `ctrl+p` applies the same rule to all thinking blocks. Plain `t` and `e`
   always type into the composer. Tool-card header clicks toggle their body;
@@ -170,11 +171,11 @@ draft in the input box (**edit**). Actions:
 After the parent spawns sub-agents (`task` tools), a **drawer above the
 prompt** opens (same layout family as `/model`): one row per sub-agent.
 
-| Diamond | Meaning |
+| Baton mark | Meaning |
 | --- | --- |
-| Throbbing `◆` | running / queued (pulses with the work rail) |
-| Green `◆` | completed |
-| Red `◆` | failed, cancelled, or timed out |
+| Spinning baton | running / queued (continues until the call reaches a terminal status) |
+| Green baton | completed |
+| Red baton | failed, cancelled, or timed out |
 
 The right side of each row includes the resolved model and, when it fits, a
 one-liner for the latest tool activity (for example `bash  go test ./...` or
@@ -198,7 +199,7 @@ cost adds those children as `subs $X`; footer cost uses `+$X`.
   (100% terminal) log
   for that child, using the same design as the main chat: `you` / `assistant`
   roles, collapsible **thinking** (expanded by default), tool cards with
-  status diamonds, and the vertical work rail (`│`).
+  baton status marks, and the vertical work rail (`│`).
 - In the log view: `↑`/`↓` scrolls, `→` opens the next agent's log, and `←`
   returns to the drawer. `ctrl+p` expands or collapses all thinking, `ctrl+e`
   expands or collapses all tools, and `enter` toggles the selected block;

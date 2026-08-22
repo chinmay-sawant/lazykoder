@@ -69,6 +69,18 @@ func TestPulseAssistant(t *testing.T) {
 	}
 }
 
+func TestStatusBatonFrames(t *testing.T) {
+	if got := StatusBatonFrame(0); got != "|" {
+		t.Fatalf("first baton frame = %q, want |", got)
+	}
+	if got := StatusBatonFrame(len([]rune(StatusBatonFrames))); got != "|" {
+		t.Fatalf("baton spinner should wrap, got %q", got)
+	}
+	if got := StatusBatonFrame(-1); got != "|" {
+		t.Fatalf("negative baton frame = %q, want |", got)
+	}
+}
+
 func TestHexRGB(t *testing.T) {
 	r, g, b := hexRGB("#4d6b78")
 	if r != 0x4d || g != 0x6b || b != 0x78 {

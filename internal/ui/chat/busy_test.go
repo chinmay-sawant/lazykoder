@@ -6,6 +6,10 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+
+	"github.com/chinmay-sawant/lazykoder/internal/db"
+	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
 
 func TestBusyStatusShowsWorkingAndActions(t *testing.T) {
@@ -110,18 +114,133 @@ func TestEscWhileBusyCancels(t *testing.T) {
 	}
 }
 
-func TestWorkRailAssistantColor(t *testing.T) {
+func TestLiveWorkRailUsesPulsingVerticalMark(t *testing.T) {
 	m := New(Options{Workdir: t.TempDir()})
 	m.busy = true
 	m.pulseOn = true
 	m.pulse = 0
 	railDim := m.workRailLive(true)
+	m.pulse = 1
+	railLit := m.workRailLive(true)
 	railStatic := m.workRailLive(false)
 
-	if !strings.Contains(railDim, workRail) {
-		t.Fatalf("workRailLive(true) should contain %q, got %q", workRail, railDim)
+	if stripANSI(railDim) != workRail || stripANSI(railLit) != workRail {
+		t.Fatalf("live work rail should stay a vertical mark, got dim=%q lit=%q", railDim, railLit)
 	}
-	if !strings.Contains(railStatic, workRail) {
-		t.Fatalf("workRailLive(false) should contain %q, got %q", workRail, railStatic)
+	if railDim == railLit {
+		t.Fatalf("live work rail should pulse as the frame advances: dim=%q lit=%q", railDim, railLit)
+	}
+	if stripANSI(railStatic) != workRail {
+		t.Fatalf("workRailLive(false) should contain only %q, got %q", workRail, railStatic)
+	}
+}
+
+func TestToolStatusMarkUsesGreenAnimatedBatonWhileRunning(t *testing.T) {
+	m := New(Options{Workdir: t.TempDir()})
+	m.pulse = 0
+	first := m.toolStatusMark("running")
+	m.pulse = 1
+	second := m.toolStatusMark("running")
+	wantFirst := lipgloss.NewStyle().Foreground(theme.ColorGood()).Render(theme.StatusBatonFrame(0))
+
+	if first != wantFirst {
+		t.Fatalf("running mark = %q, want green baton frame %q", first, wantFirst)
+	}
+	if first == second {
+		t.Fatalf("running mark should animate until completion: first=%q second=%q", first, second)
+	}
+}
+
+func TestToolStatusMarkUsesStaticRedBatonOnFailure(t *testing.T) {
+	m := New(Options{Workdir: t.TempDir()})
+	m.pulse = 4
+	got := m.toolStatusMark("failed")
+	want := lipgloss.NewStyle().Foreground(theme.ColorDanger()).Render(theme.StatusBatonFrame(0))
+
+	if got != want {
+		t.Fatalf("failed mark = %q, want static red baton frame %q", got, want)
+	}
+}
+
+func TestPulseStaysOnUntilInFlightToolCompletes(t *testing.T) {
+	m := New(Options{Workdir: t.TempDir()})
+	m.busy = true
+	m.pulseOn = true
+	m.items = []transcriptItem{{
+		kind: itemTool,
+		tool: db.ToolCall{Tool: "reboot", Status: "running"},
+	}}
+
+	m = m.finishTurn(nil)
+	if !m.pulseOn {
+		t.Fatal("pulse should remain active while the reboot call is still running")
+	}
+	first := m.pulse
+	next, _ := m.Update(pulseMsg{})
+	m = next.(Model)
+	if !m.pulseOn || m.pulse == first {
+		t.Fatalf("pulse should advance for an in-flight reboot call: on=%v pulse=%d first=%d", m.pulseOn, m.pulse, first)
+	}
+
+	m.items[0].tool.Status = "completed"
+	next, _ = m.Update(pulseMsg{})
+	m = next.(Model)
+	if m.pulseOn {
+		t.Fatal("pulse should stop after the reboot call reaches a terminal status")
+	}
+}
+
+func TestBusyStatusUsesPlasmaBlobUntilTurnEnds(t *testing.T) {
+	m := New(Options{Workdir: t.TempDir()})
+	m.busy = true
+	m.pulseOn = true
+	m.activity = "running"
+
+	working := stripANSI(m.liveStatusView())
+	if !strings.Contains(working, stripANSI(m.plasmaBlob())) {
+		t.Fatalf("busy status should use plasma blob: %q", working)
+	}
+
+	m.busy = false
+	finished := stripANSI(m.liveStatusView())
+	if !strings.Contains(finished, workRail) {
+		t.Fatalf("finished activity should use the fixed work rail: %q", finished)
+	}
+}
+
+func TestPlasmaBlobAnimatesWithPulse(t *testing.T) {
+	m := New(Options{Workdir: t.TempDir()})
+	m.pulseOn = true
+
+	m.pulse = 0
+	first := stripANSI(m.plasmaBlob())
+	m.pulse = pulseSteps / 2
+	if stripANSI(m.plasmaBlob()) == first {
+		t.Fatal("plasma blob did not advance with the pulse")
+	}
+}
+
+func TestPlasmaBlobUsesAccentGlyphsWithoutBrackets(t *testing.T) {
+	m := New(Options{Workdir: t.TempDir()})
+	rendered := stripANSI(m.plasmaBlob())
+
+	if strings.ContainsAny(rendered, "[]") {
+		t.Fatalf("plasma blob should not contain traffic brackets: %q", rendered)
+	}
+	if len([]rune(rendered)) != plasmaBlobWidth {
+		t.Fatalf("plasma blob width = %d, want %d: %q", len([]rune(rendered)), plasmaBlobWidth, rendered)
+	}
+}
+
+func TestWorkingMarkUsesPlasmaBlock(t *testing.T) {
+	m := New(Options{Workdir: t.TempDir()})
+	m.pulseOn = true
+	rendered := stripANSI(m.plasmaBlob())
+
+	if strings.ContainsAny(rendered, "[]") {
+		t.Fatalf("working mark should not contain traffic brackets: %q", rendered)
+	}
+	if !strings.ContainsAny(rendered, "░▒▓█") {
+		t.Fatalf("working mark should contain plasma blocks: %q", rendered)
 	}
 }

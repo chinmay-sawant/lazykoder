@@ -81,8 +81,8 @@ func TestSubagentPickerListsChildrenAndShowsLog(t *testing.T) {
 	if !strings.Contains(v, "agent_alpha") {
 		t.Fatalf("drawer missing child name: %q", v)
 	}
-	if !strings.Contains(v, theme.StatusDiamond) {
-		t.Fatalf("drawer missing status diamond: %q", v)
+	if !strings.Contains(v, theme.StatusBatonFrame(0)) {
+		t.Fatalf("drawer missing baton status mark: %q", v)
 	}
 
 	m, _ = m.openSelectedSubagentLog()
@@ -104,15 +104,15 @@ func TestSubagentPickerListsChildrenAndShowsLog(t *testing.T) {
 	if !strings.Contains(logView, "explore the tree") {
 		t.Fatalf("log missing prompt: %q", logView)
 	}
-	// Main chat design: expanded thinking, tool diamond, work rail.
+	// Main chat design: expanded thinking, baton status mark, work rail.
 	if !strings.Contains(logView, thinkingLabel) {
 		t.Fatalf("log missing thinking header: %q", logView)
 	}
 	if !strings.Contains(logView, "scanning packages carefully") {
 		t.Fatalf("thinking should be expanded by default: %q", logView)
 	}
-	if !strings.Contains(logView, theme.StatusDiamond) {
-		t.Fatalf("log missing tool diamond: %q", logView)
+	if !strings.Contains(logView, theme.StatusBatonFrame(0)) {
+		t.Fatalf("log missing baton status mark: %q", logView)
 	}
 	if !strings.Contains(logView, workRail) {
 		t.Fatalf("log missing work rail: %q", logView)

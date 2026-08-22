@@ -950,7 +950,7 @@ func (m Model) subagentDrawerRow(row subagentRow, selected bool, width int) stri
 
 	available := max(1, width-subagentDrawerRowChrome)
 	leftNeeded := lipgloss.Width(prefix) +
-		lipgloss.Width(theme.StatusDiamond) +
+		lipgloss.Width(theme.StatusBatonFrame(0)) +
 		subagentDrawerColumnGap +
 		lipgloss.Width(leftText)
 	metaNeeded := lipgloss.Width(meta)
@@ -976,8 +976,11 @@ func (m Model) subagentDrawerRow(row subagentRow, selected bool, width int) stri
 		leftWidth = max(1, width-metaWidth-activityWidth-subagentDrawerColumnGap)
 	}
 
-	leftBudget := max(1, leftWidth-lipgloss.Width(prefix)-lipgloss.Width(theme.StatusDiamond)-subagentDrawerColumnGap)
-	left := prefix + m.subagentDiamond(row) + "  " + truncateRunes(status+"  "+name, leftBudget)
+	leftBudget := max(
+		1,
+		leftWidth-lipgloss.Width(prefix)-lipgloss.Width(theme.StatusBatonFrame(0))-subagentDrawerColumnGap,
+	)
+	left := prefix + m.subagentStatusMark(row) + "  " + truncateRunes(status+"  "+name, leftBudget)
 	metaStr := truncateRunes(meta, metaWidth)
 	activity := truncateRunes(singleLine(firstNonEmptyStr(strings.TrimSpace(row.Activity), "·")), activityWidth)
 
@@ -1024,22 +1027,18 @@ func (m Model) subagentRowRight(row subagentRow, available int) string {
 	return truncateRunes(identity, available)
 }
 
-// subagentDiamond is the status mark: throb when live, green when done, red on crash.
-func (m Model) subagentDiamond(row subagentRow) string {
-	style := lipgloss.NewStyle()
+// subagentStatusMark uses a green baton spinner while a sub-agent is live
+// and keeps its first frame as the fixed mark after the job finishes.
+func (m Model) subagentStatusMark(row subagentRow) string {
+	style := lipgloss.NewStyle().Foreground(theme.ColorGood())
+	frame := 0
 	switch {
 	case row.Live || row.Status == string(subagent.StatusQueued) || row.Status == string(subagent.StatusRunning):
-		if m.pulseOn {
-			style = style.Foreground(theme.PulseAccent(m.pulseT()))
-		} else {
-			style = style.Foreground(theme.ColorText())
-		}
+		frame = m.pulse
 	case isFailedSubStatus(row.Status):
 		style = style.Foreground(theme.ColorDanger())
-	default:
-		style = style.Foreground(theme.ColorGood())
 	}
-	return style.Render(theme.StatusDiamond)
+	return style.Render(theme.StatusBatonFrame(frame))
 }
 
 func (m Model) resizeRecapDetail() Model {

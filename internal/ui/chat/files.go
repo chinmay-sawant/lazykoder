@@ -98,7 +98,7 @@ func (m Model) filePickerOverlay() string {
 				rows = append(rows, dim.Width(listW).MaxWidth(listW).Render(atPickerSectionTitle(it.Kind)))
 				lastKind = it.Kind
 			}
-			rows = append(rows, atPickerItemRow(it, i == cursor, listW, sel, dim))
+			rows = append(rows, atPickerItemRow(it, i == cursor, listW, sel, dim, m.pulse))
 		}
 	}
 	body := strings.Join(rows, "\n")
@@ -171,8 +171,7 @@ func atPickerWindow(n, cursor, maxVisible int) (start, end int) {
 	return start, end
 }
 
-func atPickerItemRow(it atPickItem, selected bool, width int, sel, dim lipgloss.Style) string {
-	liveSt := lipgloss.NewStyle().Foreground(theme.ColorAccent())
+func atPickerItemRow(it atPickItem, selected bool, width int, sel, dim lipgloss.Style, frame int) string {
 	goodSt := lipgloss.NewStyle().Foreground(theme.ColorGood())
 	badSt := lipgloss.NewStyle().Foreground(theme.ColorDanger())
 	marker := "  "
@@ -191,10 +190,14 @@ func atPickerItemRow(it atPickItem, selected bool, width int, sel, dim lipgloss.
 	var rightStyle lipgloss.Style
 	if it.Kind == atKindAgent && it.Status != "" {
 		st := it.Status
-		rightPlain = theme.StatusDiamond + " " + st
+		statusFrame := 0
+		if it.Live {
+			statusFrame = frame
+		}
+		rightPlain = theme.StatusBatonFrame(statusFrame) + " " + st
 		rightStyle = dim
 		if it.Live {
-			rightStyle = liveSt
+			rightStyle = goodSt
 		} else if isFailedSubStatus(st) {
 			rightStyle = badSt
 		} else if subagent.IsTerminalStatus(st) {

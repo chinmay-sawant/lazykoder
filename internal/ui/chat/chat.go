@@ -649,14 +649,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if recapEligible {
 			recapCmd = m.scheduleRecap()
 		}
-		// Continue diamond throb while background sub-agents are still live.
-		if m.hasLiveSubagents() || m.memoryScanJobs > 0 {
+		// Continue baton status motion while background sub-agents are live.
+		if m.hasLiveSubagents() || m.hasInFlightTools() || m.memoryScanJobs > 0 {
 			return m, tea.Batch(memoryCmd, recapCmd, pulseTick())
 		}
 		return m, tea.Batch(memoryCmd, recapCmd)
 	case pulseMsg:
 		// Keep throbbing for live sub-agents even after the parent turn ends.
-		if !m.busy && !m.hasLiveSubagents() && !m.recallScanning && !m.skillsScanning && m.memoryScanJobs == 0 {
+		if !m.busy && !m.hasInFlightTools() && !m.hasLiveSubagents() && !m.recallScanning && !m.skillsScanning && m.memoryScanJobs == 0 {
 			m.pulseOn = false
 			return m, nil
 		}
@@ -1030,7 +1030,7 @@ func (m Model) applyEvent(ev agent.Event) Model {
 		// On task tool events: open drawer only when a new job appears.
 		if ev.Tool.Name == "task" || strings.HasPrefix(ev.Tool.Name, "task_") {
 			m = m.openSubagentDrawerIfNew()
-			m.pulseOn = m.busy || m.hasLiveSubagents()
+			m.pulseOn = m.busy || m.hasInFlightTools() || m.hasLiveSubagents()
 		}
 		if ev.Tool.Name == "todowrite" {
 			m = m.applyTodosFromTool(dbToolFromDelta(ev.Tool))
@@ -1155,7 +1155,7 @@ func (m Model) finishTurn(err error) Model {
 	// Refresh sub-agent rows after the turn; drawer stays as the user left it
 	// (only a new spawn re-opens it via openSubagentDrawerIfNew).
 	m = m.syncSubagentDrawer()
-	if m.hasLiveSubagents() {
+	if m.hasLiveSubagents() || m.hasInFlightTools() {
 		m.pulseOn = true
 	} else {
 		m.pulseOn = false

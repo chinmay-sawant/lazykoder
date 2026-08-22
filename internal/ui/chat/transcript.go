@@ -482,7 +482,10 @@ func (m Model) itemInLiveTurn(idx int) bool {
 }
 
 func (m Model) workRailMark() string {
-	return m.workRailLive(m.busy && m.pulseOn)
+	if m.busy && m.pulseOn {
+		return m.plasmaBlob()
+	}
+	return m.workRailLive(false)
 }
 
 func (m Model) workRailLive(throb bool) string {
@@ -907,8 +910,8 @@ func (m Model) renderToolMode(tool db.ToolCall, part db.Part, collapsed bool, wh
 			label += "  " + formatDiffStat(add, del)
 		}
 	}
-	diamond := m.toolDiamond(status)
-	left := diamond + "  " + lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).Render(chevron+"  "+label)
+	statusMark := m.toolStatusMark(status)
+	left := statusMark + "  " + lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).Render(chevron+"  "+label)
 	header := m.alignMeta(left, formatClock(when))
 	bodyWidth := max(minPaneWidth, m.toolCardWidth())
 
@@ -949,7 +952,7 @@ func (m Model) renderToolMode(tool db.ToolCall, part db.Part, collapsed bool, wh
 }
 
 // toolInFlight reports whether a tool-run status means the call has not
-// finished yet, so its diamond should throb instead of sitting on a fixed
+// finished yet, so its baton mark should animate instead of sitting on a fixed
 // status color.
 func toolInFlight(status string) bool {
 	switch strings.ToLower(strings.TrimSpace(status)) {
@@ -958,6 +961,15 @@ func toolInFlight(status string) bool {
 	default:
 		return false
 	}
+}
+
+func (m Model) hasInFlightTools() bool {
+	for _, it := range m.items {
+		if it.kind == itemTool && toolInFlight(toolItemStatus(it)) {
+			return true
+		}
+	}
+	return false
 }
 
 // toolItemStatus resolves the effective status of a transcript tool item,
@@ -972,22 +984,16 @@ func toolItemStatus(it transcriptItem) string {
 	return ""
 }
 
-// toolDiamond is the status mark on a tool card: it throbs with the shared
-// pulse while the call is in flight and locks to the status color (green ok,
-// red failed, text otherwise) once the call is done.
-func (m Model) toolDiamond(status string) string {
-	style := lipgloss.NewStyle()
-	switch {
-	case toolInFlight(status):
-		if m.pulseOn {
-			style = style.Foreground(theme.PulseAccent(m.pulseT()))
-		} else {
-			style = style.Foreground(theme.StatusColor(status))
-		}
-	default:
-		style = style.Foreground(theme.StatusColor(status))
+// toolStatusMark uses a green baton spinner while a call is in flight and
+// its first frame as the fixed status mark after the call finishes.
+func (m Model) toolStatusMark(status string) string {
+	style := lipgloss.NewStyle().Foreground(theme.StatusColor(status))
+	frame := 0
+	if toolInFlight(status) {
+		frame = m.pulse
+		style = style.Foreground(theme.ColorGood())
 	}
-	return style.Render(theme.StatusDiamond)
+	return style.Render(theme.StatusBatonFrame(frame))
 }
 
 // renderEditTool draws the edit tool as a full-width card with soft green/red

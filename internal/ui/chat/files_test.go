@@ -9,6 +9,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+
+	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
 
 func TestAtPickerFilesReachable(t *testing.T) {
@@ -135,7 +137,7 @@ func TestFilePickerOverlaySections(t *testing.T) {
 	if agentLine == "" || !strings.Contains(agentLine, "agent") {
 		t.Fatalf("agent row missing label: %q", overlay)
 	}
-	if !strings.Contains(agentLine, "completed") && !strings.Contains(agentLine, "◆") {
+	if !strings.Contains(agentLine, "completed") && !strings.Contains(agentLine, theme.StatusBatonFrame(0)) {
 		t.Fatalf("agent status not on the same row: %q", agentLine)
 	}
 }
@@ -208,7 +210,7 @@ func TestFilePickerOverlayNoWrap(t *testing.T) {
 	if agentLine == "" {
 		t.Fatalf("missing agent row:\n%s", plain)
 	}
-	if !strings.Contains(agentLine, "timed_out") && !strings.Contains(agentLine, "◆") {
+	if !strings.Contains(agentLine, "timed_out") && !strings.Contains(agentLine, theme.StatusBatonFrame(0)) {
 		t.Fatalf("status not on same row as agent name: %q", agentLine)
 	}
 	if !strings.Contains(plain, "sub-agents") {
