@@ -50,6 +50,7 @@ snapshots:
 | `v0.0.10/phase-7-memory-update-worker.md` | per-request hidden memory update and idempotent writes |
 | `v0.0.10/phase-8-memory-recall-and-lifecycle.md` | memory-first recall and request lifecycle boundaries |
 | `v0.0.10/phase-9-memory-docs-and-gates.md` | memory documentation, tests, and closure gates |
+| `v0.0.10/phase-10-skills-discovery.md` | global and local skill discovery, `/skills`, auto-detection, and memory references |
 
 Each checklist row is marked `[x]` only when the gate actually passed, with
 the command and exit code recorded beside the row. Rows are never checked
@@ -94,6 +95,10 @@ human runs them.
   avoid rules, questions, and recent context, and is searched before the
   existing recap artifacts. Phases 6-8 are complete. Phase 9 automated gates
   are complete; live terminal inspection remains open.
+- v0.0.10 skills extension: Phase 10 is planned. It will discover both
+  project-local and configured global skill descriptors, expose `/skills`,
+  select bounded untrusted skill context before the first ordinary request,
+  and add reusable skill paths to the memory aggregate.
 
 ## What 0.0.1 deliberately does not do
 
