@@ -53,7 +53,7 @@ func TestDefault(t *testing.T) {
 	if !s.Compaction.Auto || s.Compaction.Percent != 80 || s.Compaction.KeepTokens != 15_000 {
 		t.Fatalf("compaction defaults %+v", s.Compaction)
 	}
-	if s.Recap.Enabled || s.Recap.Model != DefaultModelID {
+	if s.Recap.Enabled || s.Recap.Model != DefaultModelID || s.Recap.AfterChats != DefaultRecapAfterChats {
 		t.Fatalf("recap defaults %+v", s.Recap)
 	}
 }
@@ -76,7 +76,7 @@ func TestLoadMissingReturnsDefault(t *testing.T) {
 	if !s.Compaction.Auto || s.Compaction.Percent != 80 {
 		t.Fatalf("compaction %+v", s.Compaction)
 	}
-	if s.Recap.Enabled || s.Recap.Model != DefaultModelID {
+	if s.Recap.Enabled || s.Recap.Model != DefaultModelID || s.Recap.AfterChats != DefaultRecapAfterChats {
 		t.Fatalf("recap %+v", s.Recap)
 	}
 }
@@ -90,7 +90,7 @@ func TestLegacySettingsNormalizeRecapDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.Recap.Enabled || s.Recap.Model != DefaultModelID {
+	if s.Recap.Enabled || s.Recap.Model != DefaultModelID || s.Recap.AfterChats != DefaultRecapAfterChats {
 		t.Fatalf("legacy recap = %+v", s.Recap)
 	}
 }
@@ -104,14 +104,28 @@ func TestRecapModelNormalizesWhitespaceAndEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !s.Recap.Enabled || s.EffectiveRecap().Model != DefaultModelID {
+	if !s.Recap.Enabled || s.EffectiveRecap().Model != DefaultModelID || s.EffectiveRecap().AfterChats != DefaultRecapAfterChats {
 		t.Fatalf("recap = %+v", s.Recap)
+	}
+}
+
+func TestRecapAfterChatsNormalizes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte(`{"recap":{"enabled":true,"after_chats":0}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.EffectiveRecap().AfterChats != DefaultRecapAfterChats {
+		t.Fatalf("after chats = %d, want %d", s.EffectiveRecap().AfterChats, DefaultRecapAfterChats)
 	}
 }
 
 func TestRecapSaveLoadRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.json")
-	want := Settings{Recap: Recap{Enabled: true, Model: "claude-4"}}
+	want := Settings{Recap: Recap{Enabled: true, Model: "claude-4", AfterChats: 3}}
 	if err := Save(path, want); err != nil {
 		t.Fatal(err)
 	}

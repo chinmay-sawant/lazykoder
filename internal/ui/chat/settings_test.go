@@ -36,7 +36,7 @@ func TestSettingsSlashOpensCard(t *testing.T) {
 	if !strings.Contains(v, "SETTINGS") || !strings.Contains(v, "[x]") {
 		t.Fatalf("settings card missing header/x: %q", v)
 	}
-	for _, want := range []string{"theme", "new-session model", "recaps enabled", "recap model", "child timeout", "default role", "child bash confirms", "parent bash allowlist", "auto-compact", "compact at"} {
+	for _, want := range []string{"theme", "new-session model", "recaps enabled", "recap model", "recap after chats", "child timeout", "default role", "child bash confirms", "parent bash allowlist", "auto-compact", "compact at"} {
 		if !strings.Contains(v, want) {
 			t.Fatalf("settings card missing %q: %q", want, v)
 		}
@@ -227,6 +227,9 @@ func TestSettingsRecapToggleAndModelPersist(t *testing.T) {
 	if got := m.projectSettings.EffectiveRecap().Model; got != settings.DefaultModelID {
 		t.Fatalf("recap model = %q, want %q", got, settings.DefaultModelID)
 	}
+	if got := m.projectSettings.EffectiveRecap().AfterChats; got != settings.DefaultRecapAfterChats {
+		t.Fatalf("recap after chats = %d, want %d", got, settings.DefaultRecapAfterChats)
+	}
 	m.settingsCursor = settingsRowRecapEnabled
 	m = upd(m, tea.KeyPressMsg{Code: tea.KeyRight})
 	if !m.projectSettings.Recap.Enabled {
@@ -241,8 +244,86 @@ func TestSettingsRecapToggleAndModelPersist(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !loaded.Recap.Enabled || loaded.Recap.Model != "claude-4" {
+	if !loaded.Recap.Enabled || loaded.Recap.Model != "claude-4" || loaded.Recap.AfterChats != settings.DefaultRecapAfterChats {
 		t.Fatalf("persisted recap settings = %+v", loaded.Recap)
+	}
+}
+
+func TestSettingsRecapAfterChatsAdjustsAndPersists(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	m := New(Options{
+		Store:        newTestStore(t),
+		Client:       deadClient(),
+		Workdir:      dir,
+		SettingsPath: path,
+	}).openSettings()
+	m.settingsCursor = settingsRowRecapAfterChats
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyRight})
+	if got := m.projectSettings.EffectiveRecap().AfterChats; got != settings.DefaultRecapAfterChats+1 {
+		t.Fatalf("after chats = %d, want %d", got, settings.DefaultRecapAfterChats+1)
+	}
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyLeft})
+	if got := m.projectSettings.EffectiveRecap().AfterChats; got != settings.DefaultRecapAfterChats {
+		t.Fatalf("after chats after decrement = %d, want %d", got, settings.DefaultRecapAfterChats)
+	}
+	loaded, err := settings.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.EffectiveRecap().AfterChats != settings.DefaultRecapAfterChats {
+		t.Fatalf("persisted after chats = %d, want %d", loaded.EffectiveRecap().AfterChats, settings.DefaultRecapAfterChats)
+	}
+}
+
+func TestSettingsRecapModelOpensSharedModelDrawer(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	m := New(Options{
+		Store:        newTestStore(t),
+		Client:       deadClient(),
+		Workdir:      dir,
+		SettingsPath: path,
+	}).openSettings()
+	m.models = []string{"deepseek-v4-flash", "claude-4"}
+	m.settingsCursor = settingsRowRecapModel
+
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !m.pickerMode || m.pickerKind != pickerKindModel || !m.settingsPickRecap {
+		t.Fatalf("picker state = mode=%v kind=%q recap=%v, want shared model drawer", m.pickerMode, m.pickerKind, m.settingsPickRecap)
+	}
+	if m.pickerCursor != 0 {
+		t.Fatalf("picker cursor = %d, want current recap model at index 0", m.pickerCursor)
+	}
+	m.pickerCursor = 1
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.pickerMode || !m.settingsMode {
+		t.Fatalf("after selection picker=%v settings=%v, want settings reopened", m.pickerMode, m.settingsMode)
+	}
+	if got := m.projectSettings.EffectiveRecap().Model; got != "claude-4" {
+		t.Fatalf("recap model = %q, want claude-4", got)
+	}
+	loaded, err := settings.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.EffectiveRecap().Model != "claude-4" {
+		t.Fatalf("persisted recap model = %q, want claude-4", loaded.EffectiveRecap().Model)
+	}
+}
+
+func TestSettingsRecapModelMouseOpensSharedModelDrawer(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()}).openSettings()
+	m.models = []string{"deepseek-v4-flash", "claude-4"}
+	m.settingsCursor = settingsRowRecapModel
+	line := settingsPaintedRow(m, "recap model")
+	x0, x1, ok := displaySpan(line, "recap model")
+	if !ok {
+		t.Fatalf("recap model label missing from painted row: %q", line)
+	}
+	next, _, hit := m.settingsHit((x0+x1)/2, settingsPaintedRowY(m, "recap model"), tea.MouseLeft)
+	if !hit || !next.pickerMode || next.pickerKind != pickerKindModel || !next.settingsPickRecap {
+		t.Fatalf("mouse result = hit=%v picker=%v kind=%q recap=%v, want shared model drawer", hit, next.pickerMode, next.pickerKind, next.settingsPickRecap)
 	}
 }
 
@@ -517,6 +598,7 @@ func TestSettingsRecapRowsFitRequestedTerminals(t *testing.T) {
 			}{
 				{id: settingsRowRecapEnabled, label: "recaps enabled"},
 				{id: settingsRowRecapModel, label: "recap model"},
+				{id: settingsRowRecapAfterChats, label: "recap after chats"},
 			} {
 				m.settingsCursor = row.id
 				if y := settingsPaintedRowY(m, row.label); y < 0 {
@@ -730,6 +812,8 @@ func settingsHitChanged(before, after Model, row int) bool {
 		return after.projectSettings.Recap.Enabled != before.projectSettings.Recap.Enabled
 	case settingsRowRecapModel:
 		return after.projectSettings.Recap.Model != before.projectSettings.Recap.Model
+	case settingsRowRecapAfterChats:
+		return after.projectSettings.EffectiveRecap().AfterChats != before.projectSettings.EffectiveRecap().AfterChats
 	case settingsRowLimit:
 		return after.projectSettings.Slot.LimitEnabled != before.projectSettings.Slot.LimitEnabled
 	case settingsRowSteps:

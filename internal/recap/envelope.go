@@ -18,6 +18,7 @@ const (
 	maxQuestions     = 20
 	maxAvoidRules    = 20
 	maxSourceIDs     = 8
+	jsonControlLimit = 0x20
 )
 
 // Envelope is the only model output accepted by a recap worker.
@@ -44,6 +45,7 @@ type AvoidRule struct {
 
 // ParseEnvelope decodes strict JSON and validates every claim's source IDs.
 func ParseEnvelope(raw []byte, snapshot Snapshot) (Envelope, error) {
+	raw = escapeLiteralJSONControls(raw)
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &fields); err != nil {
 		return Envelope{}, fmt.Errorf("recap: decode envelope: %w", err)
@@ -71,6 +73,56 @@ func ParseEnvelope(raw []byte, snapshot Snapshot) (Envelope, error) {
 		return Envelope{}, err
 	}
 	return envelope, nil
+}
+
+// escapeLiteralJSONControls repairs the common model mistake of putting raw
+// Markdown line breaks or other control characters inside a JSON string. The
+// envelope remains strict after this narrow boundary repair: unknown fields,
+// trailing values, and all schema validation still go through encoding/json.
+func escapeLiteralJSONControls(raw []byte) []byte {
+	escaped := make([]byte, 0, len(raw))
+	inString := false
+	escapedString := false
+	const hex = "0123456789abcdef"
+	for _, char := range raw {
+		if escapedString {
+			escaped = append(escaped, char)
+			escapedString = false
+			continue
+		}
+		if !inString {
+			escaped = append(escaped, char)
+			if char == '"' {
+				inString = true
+			}
+			continue
+		}
+		switch char {
+		case '\\':
+			escaped = append(escaped, char)
+			escapedString = true
+		case '"':
+			escaped = append(escaped, char)
+			inString = false
+		case '\n':
+			escaped = append(escaped, '\\', 'n')
+		case '\r':
+			escaped = append(escaped, '\\', 'r')
+		case '\t':
+			escaped = append(escaped, '\\', 't')
+		case '\b':
+			escaped = append(escaped, '\\', 'b')
+		case '\f':
+			escaped = append(escaped, '\\', 'f')
+		default:
+			if char < jsonControlLimit {
+				escaped = append(escaped, '\\', 'u', '0', '0', hex[char>>4], hex[char&0x0f])
+				continue
+			}
+			escaped = append(escaped, char)
+		}
+	}
+	return escaped
 }
 
 func validateEnvelope(envelope Envelope, snapshot Snapshot) error {

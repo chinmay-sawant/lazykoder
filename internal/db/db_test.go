@@ -102,6 +102,13 @@ func TestRecapRecordLifecycleAndOrdering(t *testing.T) {
 	if len(after) != 1 || after[0].SourceEndSeq != second.Seq {
 		t.Fatalf("recaps after = %+v", after)
 	}
+	newest, err := s.ListRecaps(ctx, sess.ID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(newest) != 1 || newest[0].ID != reserved.ID {
+		t.Fatalf("newest recaps = %+v", newest)
+	}
 	if err := s.ClaimRecap(ctx, reserved.ID); err != nil {
 		t.Fatal(err)
 	}

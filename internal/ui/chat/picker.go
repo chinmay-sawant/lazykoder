@@ -249,6 +249,12 @@ func (m Model) selectPickerItem(idx int) (Model, tea.Cmd) {
 		m.settingsPickDefault = false
 		return m.openSettings(), nil
 	}
+	if m.settingsPickRecap {
+		m = m.setRecapModel(m.pickerItems[idx])
+		m = m.finishPickerSelection()
+		m.settingsPickRecap = false
+		return m.openSettings(), nil
+	}
 	if m.pickerKind == pickerKindVariant {
 		m.variant = m.pickerItems[idx]
 		m.syncSessionVariant()
@@ -278,11 +284,12 @@ func (m Model) finishPickerSelection() Model {
 }
 
 func (m Model) closePicker() Model {
-	reopenSettings := m.settingsPickDefault
+	reopenSettings := m.settingsPickDefault || m.settingsPickRecap
 	m = m.clearFocus(focusPicker)
 	m.pickerKind = pickerKindModel
 	m.dragOn = false
 	m.settingsPickDefault = false
+	m.settingsPickRecap = false
 	if reopenSettings {
 		return m.openSettings()
 	}
@@ -388,6 +395,9 @@ func (m Model) pickerSource() []string {
 func (m Model) pickerSelectedValue() string {
 	if m.pickerKind == pickerKindVariant {
 		return m.variant
+	}
+	if m.settingsPickRecap {
+		return m.projectSettings.EffectiveRecap().Model
 	}
 	current := m.model
 	if current == "" && m.client != nil {

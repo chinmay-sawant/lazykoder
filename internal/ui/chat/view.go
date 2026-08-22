@@ -75,6 +75,9 @@ func (m Model) frame() string {
 	case m.sessionPickerMode:
 		return m.sessionPickerScreen()
 	case m.subagentLogMode:
+		if m.recapDetailMode {
+			return m.recapDetailScreen()
+		}
 		return m.subagentLogScreen()
 	case m.settingsMode:
 		if m.layout.settingsPaint != "" {

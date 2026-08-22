@@ -290,6 +290,24 @@ WHERE session_id = ? AND source_end_seq > ? ORDER BY source_end_seq ASC, id ASC`
 	return scanRecapRecords(rows)
 }
 
+// ListRecaps returns the newest recap records for one session. A non-positive
+// limit uses the store's normal bounded UI page size.
+func (s *Store) ListRecaps(ctx context.Context, sessionID string, limit int) ([]RecapRecord, error) {
+	if sessionID == "" {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT `+recapRecordColumns+` FROM recap_records
+WHERE session_id = ? ORDER BY source_end_seq DESC, time_created DESC, id DESC LIMIT ?`, sessionID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("db: list recaps: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	return scanRecapRecords(rows)
+}
+
 func (s *Store) getRecapBySource(ctx context.Context, sessionID, messageID string) (RecapRecord, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT `+recapRecordColumns+` FROM recap_records
 WHERE session_id = ? AND source_end_message_id = ?`, sessionID, messageID)

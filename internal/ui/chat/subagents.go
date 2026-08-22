@@ -3,6 +3,8 @@ package chat
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -13,6 +15,7 @@ import (
 
 	"github.com/chinmay-sawant/lazykoder/internal/db"
 	"github.com/chinmay-sawant/lazykoder/internal/subagent"
+	"github.com/chinmay-sawant/lazykoder/internal/ui/markdown"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
 
@@ -52,6 +55,7 @@ const (
 	subagentDrawerCompactWidth   = 60
 	subagentCompactActivityShare = 4
 	subagentCompactMetadataShare = 3
+	maxRecapDrawerRecords        = 8
 )
 
 // openSubagentPicker opens the model-style drawer above the prompt and
@@ -67,6 +71,9 @@ func (m Model) openSubagentPicker() Model {
 	m.promptUndo = nil
 	m = m.ensureSubagentBuilt()
 	m = m.reloadSubagentRows()
+	if len(m.subagentItems) == 0 && len(m.recapItems) > 0 {
+		m.recapSelected = true
+	}
 	if m.subagentCursor >= len(m.subagentItems) {
 		m.subagentCursor = max(0, len(m.subagentItems)-1)
 	}
@@ -84,7 +91,7 @@ func (m Model) openSubagentPicker() Model {
 func (m Model) collapseSubagentDrawerToSummary() Model {
 	m = m.ensureSubagentBuilt()
 	m = m.reloadSubagentRows()
-	if len(m.subagentItems) == 0 {
+	if len(m.subagentItems) == 0 && len(m.recapItems) == 0 {
 		return m.closeSubagentPicker()
 	}
 	follow := m.transcript.AtBottom()
@@ -124,6 +131,9 @@ func (m Model) closeSubagentPicker() Model {
 	m.subagentLogItems = nil
 	m.subagentLogSelected = -1
 	m.subagentSelected = subagentRow{}
+	m.recapDetailMode = false
+	m.recapSelected = false
+	m.recapDetailRecord = db.RecapRecord{}
 	// Reclaim drawer rows into the transcript and keep following the bottom.
 	m.syncTranscript()
 	if follow {
@@ -140,6 +150,8 @@ func (m Model) ensureSubagentBuilt() Model {
 	m.subagentVp.FillHeight = true
 	m.subagentLogVp = viewport.New(viewport.WithWidth(pickerVpDefaultW), viewport.WithHeight(pickerVpDefaultH))
 	m.subagentLogVp.FillHeight = true
+	m.recapDetailVp = viewport.New(viewport.WithWidth(pickerVpDefaultW), viewport.WithHeight(pickerVpDefaultH))
+	m.recapDetailVp.FillHeight = true
 	m.subagentBuilt = true
 	return m
 }
@@ -155,7 +167,7 @@ func (m Model) syncSubagentDrawer() Model {
 		}
 	}
 	m = m.reloadSubagentRows()
-	if len(m.subagentItems) == 0 {
+	if len(m.subagentItems) == 0 && len(m.recapItems) == 0 {
 		return m
 	}
 	if m.subagentPickerMode {
@@ -201,6 +213,7 @@ func (m Model) openSubagentDrawerIfNew() Model {
 
 func (m Model) reloadSubagentRows() Model {
 	m.subagentItems = m.collectSubagentRows()
+	m = m.reloadRecapRows()
 	for i := range m.subagentItems {
 		m.subagentItems[i].Activity = m.subagentActivityLine(m.subagentItems[i])
 		if sid := m.subagentItems[i].ChildSessionID; sid != "" {
@@ -212,6 +225,18 @@ func (m Model) reloadSubagentRows() Model {
 	}
 	if m.subagentCursor >= len(m.subagentItems) {
 		m.subagentCursor = max(0, len(m.subagentItems)-1)
+	}
+	return m
+}
+
+func (m Model) reloadRecapRows() Model {
+	if m.store == nil || m.session == nil || m.session.Kind == db.SessionKindSubagent || m.session.ParentSessionID != nil {
+		m.recapItems = nil
+		return m
+	}
+	recaps, err := m.store.ListRecaps(context.Background(), m.session.ID, maxRecapDrawerRecords)
+	if err == nil {
+		m.recapItems = recaps
 	}
 	return m
 }
@@ -543,6 +568,9 @@ func (m Model) subagentDrawerVPHeight() int {
 	if m.liveStatusInSubagentDrawer() {
 		reserved += lipgloss.Height(m.liveStatusInDrawerView())
 	}
+	if recap := m.recapDrawerView(m.recapSelected); recap != "" {
+		reserved += lipgloss.Height(recap)
+	}
 	if m.slashMode {
 		reserved += 1 + lipgloss.Height(m.slashView())
 	}
@@ -649,6 +677,9 @@ func (m Model) subagentDrawerView() string {
 	if m.liveStatusInSubagentDrawer() {
 		parts = append(parts, m.liveStatusInDrawerView())
 	}
+	if recap := m.recapDrawerView(m.recapSelected); recap != "" {
+		parts = append(parts, recap)
+	}
 
 	meta := ""
 	if m.subagentDrawerCompact {
@@ -682,12 +713,193 @@ func (m Model) subagentDrawerView() string {
 		body = withScrollbar(m.subagentVp.View(), m.subagentVp.Width(), m.subagentVp.Height(),
 			m.subagentVp.ScrollPercent(), m.subagentVp.TotalLineCount() > m.subagentVp.Height())
 	}
-	footer := "↑/↓ select  •  → logs  •  d cancel live  •  esc close"
+	footer := "↑/↓ select  •  → logs/context  •  d cancel live  •  esc close"
 	drawer := drawerChrome("sub-agents", meta, body, footer, cardW)
 	if len(parts) > 0 {
 		return lipgloss.JoinVertical(lipgloss.Left, append(parts, drawer)...)
 	}
 	return drawer
+}
+
+// recapDrawerView keeps the hidden worker visible as a selectable drawer row.
+// Its green rail separates local memory from blue assistant output. The
+// database record is the source of truth; the full files open from this row.
+func (m Model) recapDrawerView(selected bool) string {
+	if !m.projectSettings.EffectiveRecap().Enabled || m.session == nil || m.session.Kind == db.SessionKindSubagent || m.session.ParentSessionID != nil {
+		return ""
+	}
+	width := max(1, m.pickerDrawerWidth())
+	counts := map[string]int{}
+	for _, record := range m.recapItems {
+		counts[record.Status]++
+	}
+	meta := fmt.Sprintf("%d record", len(m.recapItems))
+	if len(m.recapItems) != 1 {
+		meta += "s"
+	}
+	if counts[db.RecapStatusCompleted] > 0 {
+		meta += fmt.Sprintf("  ·  %d done", counts[db.RecapStatusCompleted])
+	}
+	if open := counts[db.RecapStatusQueued] + counts[db.RecapStatusRunning]; open > 0 {
+		meta += fmt.Sprintf("  ·  %d open", open)
+	}
+	if counts[db.RecapStatusFailed] > 0 {
+		meta += fmt.Sprintf("  ·  %d failed", counts[db.RecapStatusFailed])
+	}
+	if len(m.recapItems) == 0 {
+		return hintStyle.Width(width).MaxWidth(width).Render("recaps  ·  no records yet")
+	}
+	latest := m.recapItems[0]
+	status := strings.TrimSpace(latest.Status)
+	if status == "" {
+		status = "unknown"
+	}
+	label := fmt.Sprintf("recaps  ·  %s  ·  messages %d-%d  ·  %s", status, latest.SourceStartSeq, latest.SourceEndSeq, meta)
+	if latest.Error != "" {
+		label += "  ·  error"
+	}
+	color := lipgloss.Color(recapStatusColor(status))
+	rail := lipgloss.NewStyle().Foreground(color).Render("│")
+	hint := hintStyle.Render("  enter/→ context")
+	labelWidth := max(1, width-lipgloss.Width("  "+rail+" ")-lipgloss.Width(hint))
+	content := lipgloss.NewStyle().Foreground(color).Bold(true).Render(
+		truncateRunes(label, labelWidth),
+	)
+	line := "  " + rail + " " + content + hint
+	lines := []string{line}
+	if latest.Error != "" {
+		errorLine := lipgloss.NewStyle().Foreground(color).Render(
+			truncateRunes("  "+rail+" error="+singleLine(latest.Error), width),
+		)
+		lines = append(lines, errorLine)
+	}
+	line = strings.Join(lines, "\n")
+	if selected {
+		return lipgloss.NewStyle().Width(width).MaxWidth(width).Background(theme.ColorBorder()).Render(line)
+	}
+	return lipgloss.NewStyle().Width(width).MaxWidth(width).Render(line)
+}
+
+func recapStatusColor(status string) string {
+	switch status {
+	case db.RecapStatusCompleted:
+		return theme.Current().Good
+	case db.RecapStatusFailed:
+		return theme.Current().Danger
+	case db.RecapStatusQueued, db.RecapStatusRunning:
+		return theme.Current().Accent
+	default:
+		return theme.Current().Mute
+	}
+}
+
+func (m Model) openSelectedRecapDetail() (Model, tea.Cmd) {
+	if len(m.recapItems) == 0 {
+		return m, nil
+	}
+	m.recapSelected = true
+	m.recapDetailRecord = m.recapItems[0]
+	m.recapDetailMode = true
+	m = m.setFocus(focusSubagentLog)
+	m.recapDetailVp.SetContent(m.recapDetailContent(m.recapDetailRecord))
+	m.recapDetailVp.GotoTop()
+	return m.resizeRecapDetail(), nil
+}
+
+func (m Model) recapDetailContent(record db.RecapRecord) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "status: %s\nsource messages: %d-%d\nmodel: %s\n\n", record.Status, record.SourceStartSeq, record.SourceEndSeq, record.Model)
+	if record.Error != "" {
+		b.WriteString("error: ")
+		b.WriteString(singleLine(record.Error))
+		b.WriteString("\n\n")
+	}
+	sections := []struct {
+		label    string
+		artifact db.RecapArtifact
+	}{
+		{label: "SUMMARY", artifact: record.Artifacts.Sessions},
+		{label: "QUESTIONS", artifact: record.Artifacts.Questions},
+		{label: "THINGS TO AVOID", artifact: record.Artifacts.ThingsToAvoid},
+	}
+	for _, section := range sections {
+		if section.artifact.Path == "" {
+			continue
+		}
+		body, err := m.readRecapArtifact(section.artifact.Path)
+		if err != nil {
+			body = "unable to read artifact: " + err.Error()
+		} else {
+			body = stripRecapFrontMatter(body)
+		}
+		b.WriteString(m.recapArtifactPanel(section.label, section.artifact.Path, body))
+		b.WriteString("\n\n")
+	}
+	if b.Len() == 0 {
+		return "no recap context"
+	}
+	return strings.TrimSuffix(b.String(), "\n\n")
+}
+
+func (m Model) recapArtifactPanel(label, path, body string) string {
+	width := max(1, m.recapDetailVp.Width())
+	innerWidth := max(1, width-cardHorzPad)
+	border := theme.ColorGood()
+	background := theme.ColorEditPanel()
+	switch label {
+	case "QUESTIONS":
+		border = theme.ColorAssistantBorder()
+		background = theme.ColorAssistantPanel()
+	case "THINGS TO AVOID":
+		border = theme.ColorDanger()
+		background = theme.ColorEditDelBg()
+	}
+	header := lipgloss.NewStyle().Bold(true).Foreground(border).Render(label + "  ·  " + path)
+	rendered := markdown.Render(body, innerWidth)
+	content := header
+	if strings.TrimSpace(rendered) != "" {
+		content += "\n" + rendered
+	}
+	return transcriptPanel(content, width, background, border)
+}
+
+func stripRecapFrontMatter(body string) string {
+	lines := strings.Split(body, "\n")
+	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "---" {
+		return strings.TrimSpace(body)
+	}
+	for i := 1; i < len(lines); i++ {
+		if strings.TrimSpace(lines[i]) == "---" {
+			return strings.TrimSpace(strings.Join(lines[i+1:], "\n"))
+		}
+	}
+	return strings.TrimSpace(body)
+}
+
+func (m Model) readRecapArtifact(relativePath string) (string, error) {
+	root, err := filepath.Abs(m.workdir)
+	if err != nil {
+		return "", fmt.Errorf("resolve workdir: %w", err)
+	}
+	pathCandidates := []string{filepath.FromSlash(relativePath)}
+	if !strings.HasPrefix(filepath.ToSlash(relativePath), "knowledge-base/recaps/") {
+		pathCandidates = append(pathCandidates, filepath.Join("knowledge-base", "recaps", filepath.FromSlash(relativePath)))
+	}
+	for _, candidate := range pathCandidates {
+		path := filepath.Join(root, candidate)
+		relative, err := filepath.Rel(root, path)
+		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
+			return "", fmt.Errorf("artifact path escapes workspace")
+		}
+		body, err := os.ReadFile(path)
+		if err == nil {
+			return string(body), nil
+		}
+		if !os.IsNotExist(err) {
+			return "", err
+		}
+	}
+	return "", os.ErrNotExist
 }
 
 // subagentDrawerCounts returns live / ok / failed / total for drawer chrome.
@@ -714,7 +926,7 @@ func (m Model) subagentDrawerContent(width int) string {
 		if i > 0 {
 			b.WriteString("\n")
 		}
-		b.WriteString(m.subagentDrawerRow(row, i == m.subagentCursor, width))
+		b.WriteString(m.subagentDrawerRow(row, i == m.subagentCursor && !m.recapSelected, width))
 	}
 	return b.String()
 }
@@ -830,6 +1042,97 @@ func (m Model) subagentDiamond(row subagentRow) string {
 	return style.Render(theme.StatusDiamond)
 }
 
+func (m Model) resizeRecapDetail() Model {
+	atBottom := m.recapDetailVp.TotalLineCount() == 0 || m.recapDetailVp.AtBottom()
+	off := m.recapDetailVp.YOffset()
+	w := max(minPaneWidth, m.width)
+	m.recapDetailVp.SetWidth(max(pickerVpMinWidth, w-1))
+	m.recapDetailVp.SetHeight(m.subagentLogVPHeight())
+	m.recapDetailVp.SetContent(m.recapDetailContent(m.recapDetailRecord))
+	if atBottom {
+		m.recapDetailVp.GotoTop()
+	} else {
+		m.recapDetailVp.SetYOffset(off)
+	}
+	return m
+}
+
+func (m Model) recapDetailScreen() string {
+	w := max(1, m.width)
+	h := max(1, m.height)
+	record := m.recapDetailRecord
+	status := firstNonEmptyStr(record.Status, "unknown")
+	title := fmt.Sprintf("RECAP  ·  %s  ·  messages %d-%d", status, record.SourceStartSeq, record.SourceEndSeq)
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(recapStatusColor(status)))
+	closeBtn := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).Render("[x]")
+	headerText := titleStyle.Render(truncateRunes(title, w-lipgloss.Width(closeBtn)-1))
+	gap := max(1, w-lipgloss.Width(headerText)-lipgloss.Width(closeBtn))
+	header := headerText + strings.Repeat(" ", gap) + closeBtn
+	header = lipgloss.NewStyle().Width(w).Background(theme.ColorBg()).Render(header)
+
+	vpH := m.subagentLogVPHeight()
+	body := withScrollbar(m.recapDetailVp.View(), m.recapDetailVp.Width(), vpH,
+		m.recapDetailVp.ScrollPercent(), m.recapDetailVp.TotalLineCount() > vpH)
+	bodyLines := strings.Split(body, "\n")
+	for len(bodyLines) < vpH {
+		bodyLines = append(bodyLines, "")
+	}
+	if len(bodyLines) > vpH {
+		bodyLines = bodyLines[:vpH]
+	}
+	body = strings.Join(bodyLines, "\n")
+	footer := hintStyle.Width(w).Render(truncateRunes(
+		"↑/↓ scroll  ·  ← back  ·  [x] back",
+		w,
+	))
+	out := lipgloss.JoinVertical(lipgloss.Left, header, "", body, m.recapDetailJumpBarView(), footer)
+	return lipgloss.NewStyle().Background(theme.ColorBg()).Width(w).Height(h).Render(out)
+}
+
+func (m Model) recapDetailJumpBarRow() int {
+	return subagentLogHeaderRows + m.recapDetailVp.Height()
+}
+
+func (m Model) recapDetailJumpBarView() string {
+	w := max(1, m.width)
+	row := strings.Repeat(" ", w)
+	if m.recapDetailVp.AtBottom() {
+		return row
+	}
+	return spliceDisplay(row, lipgloss.NewStyle().Faint(true).Render(jumpDownArrow), w/centerDiv)
+}
+
+func (m Model) recapDetailCloseRect() (x0, y, x1 int, ok bool) {
+	if !m.recapDetailMode {
+		return 0, 0, 0, false
+	}
+	for i, line := range strings.Split(m.recapDetailScreen(), "\n") {
+		plain := ansi.Strip(line)
+		if !strings.Contains(plain, "RECAP") || !strings.Contains(plain, "[x]") {
+			continue
+		}
+		start, end, found := displaySpan(plain, "[x]")
+		if found {
+			return max(0, start-1), i, end + 1, true
+		}
+	}
+	return 0, 0, 0, false
+}
+
+func (m Model) recapDetailHit(x, y int, button tea.MouseButton) (Model, tea.Cmd, bool) {
+	if !m.recapDetailMode || (button != tea.MouseLeft && button != tea.MouseRight) {
+		return m, nil, false
+	}
+	if x0, cy, x1, ok := m.recapDetailCloseRect(); ok && y == cy && x >= x0 && x < x1 {
+		return m.closeSubagentLogToDrawer(), nil, true
+	}
+	if button == tea.MouseLeft && y == m.recapDetailJumpBarRow() && !m.recapDetailVp.AtBottom() {
+		m.recapDetailVp.GotoBottom()
+		return m, nil, true
+	}
+	return m, nil, true
+}
+
 // subagentLogScreen paints the child transcript at 100% of the terminal,
 // using the same thinking / tool / work-rail design as the main chat.
 func (m Model) subagentLogScreen() string {
@@ -922,6 +1225,9 @@ func (m Model) subagentLogJumpBarView() string {
 // subagentLogHit handles a mouse press on the full-screen log view.
 // [x] returns to the drawer; clicks on thinking/tool blocks expand or collapse.
 func (m Model) subagentLogHit(x, y int, button tea.MouseButton) (Model, tea.Cmd, bool) {
+	if m.recapDetailMode {
+		return m.recapDetailHit(x, y, button)
+	}
 	if !m.subagentLogMode {
 		return m, nil, false
 	}
@@ -1029,6 +1335,9 @@ func (m Model) renderedSubagentLogItems() []string {
 
 func (m Model) updateSubagentPickerKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 	if m.subagentLogMode {
+		if m.recapDetailMode {
+			return m.updateRecapDetailKey(key)
+		}
 		if key.Mod.Contains(tea.ModCtrl) && key.Code == 'c' {
 			return m.closeDone(), tea.Quit
 		}
@@ -1073,13 +1382,21 @@ func (m Model) updateSubagentPickerKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 		// Esc collapses to the summary strip first; second esc closes.
 		return m.collapseSubagentDrawerToSummary(), nil
 	case tea.KeyDown:
-		if m.subagentCursor < len(m.subagentItems)-1 {
+		if m.recapSelected {
+			if len(m.subagentItems) > 0 {
+				m.recapSelected = false
+				m.subagentCursor = 0
+			}
+		} else if m.subagentCursor < len(m.subagentItems)-1 {
 			m.subagentCursor++
 			m = m.resizeSubagentDrawer()
 		}
 		return m, nil
 	case tea.KeyUp:
-		if m.subagentCursor > 0 {
+		if !m.recapSelected && m.subagentCursor == 0 && len(m.recapItems) > 0 {
+			m.recapSelected = true
+			m = m.resizeSubagentDrawer()
+		} else if !m.recapSelected && m.subagentCursor > 0 {
 			m.subagentCursor--
 			m = m.resizeSubagentDrawer()
 		}
@@ -1088,7 +1405,12 @@ func (m Model) updateSubagentPickerKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 		if !empty {
 			return m.updateKey(key)
 		}
-		if m.subagentCursor < len(m.subagentItems)-1 {
+		if m.recapSelected {
+			if len(m.subagentItems) > 0 {
+				m.recapSelected = false
+				m.subagentCursor = 0
+			}
+		} else if m.subagentCursor < len(m.subagentItems)-1 {
 			m.subagentCursor++
 			m = m.resizeSubagentDrawer()
 		}
@@ -1097,7 +1419,10 @@ func (m Model) updateSubagentPickerKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 		if !empty {
 			return m.updateKey(key)
 		}
-		if m.subagentCursor > 0 {
+		if !m.recapSelected && m.subagentCursor == 0 && len(m.recapItems) > 0 {
+			m.recapSelected = true
+			m = m.resizeSubagentDrawer()
+		} else if !m.recapSelected && m.subagentCursor > 0 {
 			m.subagentCursor--
 			m = m.resizeSubagentDrawer()
 		}
@@ -1113,9 +1438,15 @@ func (m Model) updateSubagentPickerKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 		if !empty {
 			return m.updateKey(key)
 		}
+		if m.recapSelected {
+			return m.openSelectedRecapDetail()
+		}
 		return m.openSelectedSubagentLog()
 	case tea.KeyRight:
 		if empty {
+			if m.recapSelected {
+				return m.openSelectedRecapDetail()
+			}
 			return m.openSelectedSubagentLog()
 		}
 		return m.updateKey(key)
@@ -1131,6 +1462,9 @@ func (m Model) updateSubagentPickerKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m.updateKey(key)
 	case 'd', 'D':
 		if empty {
+			if m.recapSelected {
+				return m, nil
+			}
 			return m.cancelSelectedSubagent()
 		}
 		return m.updateKey(key)
@@ -1146,6 +1480,9 @@ func (m Model) updateSubagentPickerKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 }
 
 func (m Model) updateSubagentLogKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
+	if m.recapDetailMode {
+		return m.updateRecapDetailKey(key)
+	}
 	if key.Mod.Contains(tea.ModCtrl) {
 		switch key.Code {
 		case 'e', 'E':
@@ -1188,12 +1525,35 @@ func (m Model) updateSubagentLogKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m Model) updateRecapDetailKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
+	switch key.Code {
+	case tea.KeyEscape, 'q', 'Q', 'x', 'X', tea.KeyLeft:
+		return m.closeSubagentLogToDrawer(), nil
+	case tea.KeyDown, 'j':
+		m.recapDetailVp.ScrollDown(1)
+	case tea.KeyUp, 'k':
+		m.recapDetailVp.ScrollUp(1)
+	case tea.KeyPgDown:
+		m.recapDetailVp.PageDown()
+	case tea.KeyPgUp:
+		m.recapDetailVp.PageUp()
+	case tea.KeyEnd:
+		m.recapDetailVp.GotoBottom()
+	case 'd', 'D':
+		return m.closeSubagentPicker(), nil
+	}
+	return m, nil
+}
+
 // closeSubagentLogToDrawer returns from a full-screen child log without
 // closing the sub-agent drawer, so another child can be selected immediately.
 func (m Model) closeSubagentLogToDrawer() Model {
+	wasRecap := m.recapDetailMode
 	m = m.setFocus(focusSubagents)
 	m.subagentLogItems = nil
 	m.subagentLogSelected = -1
+	m.recapDetailMode = false
+	m.recapSelected = wasRecap
 	m.subagentDrawerCompact = false
 	m = m.reloadSubagentRows()
 	return m.resizeSubagentDrawer()
@@ -1204,6 +1564,8 @@ func (m Model) openSelectedSubagentLog() (Model, tea.Cmd) {
 		return m, nil
 	}
 	row := m.subagentItems[m.subagentCursor]
+	m.recapSelected = false
+	m.recapDetailMode = false
 	m.subagentSelected = row
 	m.subagentLogItems = m.loadSubagentLogItems(row)
 	m.subagentLogSelected = m.lastSubagentLogMetaIndex()
@@ -1385,6 +1747,18 @@ func (m Model) subagentHeaderScreenY() (int, bool) {
 func (m Model) subagentHeaderAt(y int) bool {
 	top, ok := m.subagentHeaderScreenY()
 	return ok && y == top
+}
+
+func (m Model) recapRowAt(y int) bool {
+	if !m.subagentPickerMode || m.subagentLogMode || len(m.recapItems) == 0 {
+		return false
+	}
+	for i, line := range m.paintedLines() {
+		if i == y && strings.Contains(ansi.Strip(line), "recaps  ·") {
+			return true
+		}
+	}
+	return false
 }
 
 // pointerInSubagentDrawer reports whether screen row y sits on the drawer

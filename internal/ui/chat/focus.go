@@ -83,6 +83,7 @@ func (m Model) setFocus(k focusKind) Model {
 	case focusSubagents:
 		m.subagentPickerMode = true
 		m.subagentLogMode = false
+		m.recapDetailMode = false
 	case focusSubagentLog:
 		m.subagentPickerMode = true
 		m.subagentLogMode = true
@@ -120,6 +121,7 @@ func (m Model) clearFocus(k focusKind) Model {
 	case focusSubagents, focusSubagentLog:
 		m.subagentPickerMode = false
 		m.subagentLogMode = false
+		m.recapDetailMode = false
 		m.subagentDrawerCompact = false
 	case focusSlash:
 		m.slashMode = false

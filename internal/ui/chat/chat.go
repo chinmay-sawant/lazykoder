@@ -168,6 +168,7 @@ type Model struct {
 	settingsPath        string
 	projectSettings     settings.Settings
 	settingsPickDefault bool // model/variant picker is setting the project default
+	settingsPickRecap   bool // model picker is setting the recap model
 
 	width  int
 	height int
@@ -186,6 +187,7 @@ type Model struct {
 	busy                bool
 	err                 string
 	pendingUser         string
+	turnHasNewUser      bool
 	lastTool            int
 
 	model                string // current model; "" = provider default
@@ -291,13 +293,18 @@ type Model struct {
 	// (used after todowrite updates so checklist + agents both stay visible).
 	subagentDrawerCompact bool
 	subagentLogMode       bool
+	recapDetailMode       bool
 	subagentItems         []subagentRow
+	recapItems            []db.RecapRecord
+	recapSelected         bool
 	subagentCursor        int
 	subagentHover         int
 	subagentVp            viewport.Model
 	subagentLogVp         viewport.Model
+	recapDetailVp         viewport.Model
 	subagentBuilt         bool
 	subagentSelected      subagentRow
+	recapDetailRecord     db.RecapRecord
 	// subagentLogItems is the child transcript rendered with main chat styles
 	// (thinking, tools, work rails). Reasoning starts expanded.
 	subagentLogItems    []transcriptItem
@@ -322,11 +329,12 @@ type Model struct {
 	// layout is the last outer-geometry snapshot (View + mouse share it).
 	layout layoutSnap
 
-	turnSeq    int
-	turnCancel context.CancelFunc
-	turnCtx    context.Context
-	eventCh    chan agent.Event
-	errCh      chan error
+	turnSeq              int
+	successfulRecapChats int
+	turnCancel           context.CancelFunc
+	turnCtx              context.Context
+	eventCh              chan agent.Event
+	errCh                chan error
 
 	// subMgr owns in-process sub-agent jobs for this chat model.
 	subMgr *subagent.Manager
@@ -406,6 +414,8 @@ type eventDoneMsg struct {
 }
 
 type pulseMsg struct{}
+
+type recapDoneMsg struct{}
 
 type tipsTickMsg struct{}
 
@@ -589,7 +599,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.seq != m.turnSeq {
 			return m, nil
 		}
+		successfulTurn := m.successfulTurnEligible(msg.err)
 		recapEligible := m.recapEligible(msg.err)
+		if successfulTurn {
+			if recapEligible {
+				m.successfulRecapChats = 0
+			} else {
+				m.successfulRecapChats++
+			}
+		}
 		m = m.finishTurn(msg.err)
 		var recapCmd tea.Cmd
 		if recapEligible {
@@ -614,6 +632,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m = m.refreshSubagentDrawerLive()
 		}
 		return m, pulseTick()
+	case recapDoneMsg:
+		m = m.reloadSubagentRows()
+		if m.subagentPickerMode && !m.subagentLogMode {
+			return m.resizeSubagentDrawer(), nil
+		}
+		return m, nil
 	case tipsTickMsg:
 		m.tipsIndex++
 		return m, tipsTick()
@@ -686,7 +710,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.subagentBuilt {
 			if m.subagentLogMode {
-				m = m.resizeSubagentLogCard()
+				if m.recapDetailMode {
+					m = m.resizeRecapDetail()
+				} else {
+					m = m.resizeSubagentLogCard()
+				}
 			} else if m.subagentPickerMode {
 				m = m.resizeSubagentDrawer()
 			}
@@ -780,6 +808,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.subagentLogMode {
+			if m.recapDetailMode {
+				vp, _ := m.recapDetailVp.Update(msg)
+				m.recapDetailVp = vp
+				return m, nil
+			}
 			vp, _ := m.subagentLogVp.Update(msg)
 			m.subagentLogVp = vp
 			return m, nil
@@ -1022,6 +1055,7 @@ func (m Model) finishTurn(err error) Model {
 	m.busy = false
 	m.compacting = false
 	m.pendingUser = ""
+	m.turnHasNewUser = false
 	m.pending = nil
 	m.pendingAsk = nil
 	m = m.clearFocus(focusConfirm)

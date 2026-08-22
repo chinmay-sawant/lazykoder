@@ -255,11 +255,24 @@ func (m Model) startTurn(start turnStart) (Model, tea.Cmd) {
 	return m, tea.Batch(sendCmd, m.watchEvents(seq), pulseTick())
 }
 
-func (m Model) recapEligible(err error) bool {
-	if err != nil || !m.projectSettings.EffectiveRecap().Enabled || m.pendingUser == "" || m.store == nil || m.client == nil || m.session == nil {
+func (m Model) successfulTurnEligible(err error) bool {
+	if err != nil {
+		return false
+	}
+	if !m.projectSettings.EffectiveRecap().Enabled || !m.turnHasNewUser {
+		return false
+	}
+	if m.store == nil || m.client == nil || m.session == nil {
 		return false
 	}
 	return m.session.Kind != db.SessionKindSubagent && m.session.ParentSessionID == nil
+}
+
+func (m Model) recapEligible(err error) bool {
+	if !m.successfulTurnEligible(err) {
+		return false
+	}
+	return m.successfulRecapChats+1 >= m.projectSettings.EffectiveRecap().AfterChats
 }
 
 // scheduleRecap returns a hidden background command. It deliberately creates
@@ -280,11 +293,11 @@ func (m Model) scheduleRecap() tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), recapTimeout)
 		defer cancel()
 		if !recapEnabledAtPath(settingsPath) {
-			return nil
+			return recapDoneMsg{}
 		}
 		snapshot, err := recap.BuildSnapshot(ctx, store, sessionID, recap.SnapshotOptions{})
 		if err != nil {
-			return nil
+			return recapDoneMsg{}
 		}
 		record, created, err := store.ReserveRecap(ctx, db.RecapRecord{
 			SessionID:          snapshot.SessionID,
@@ -296,24 +309,24 @@ func (m Model) scheduleRecap() tea.Cmd {
 			Model:              model,
 		})
 		if err != nil {
-			return nil
+			return recapDoneMsg{}
 		}
 		if !created {
 			switch record.Status {
 			case db.RecapStatusCompleted, db.RecapStatusCancelled, db.RecapStatusQueued, db.RecapStatusRunning:
-				return nil
+				return recapDoneMsg{}
 			case db.RecapStatusFailed:
 				if err := store.RequeueRecap(ctx, record.ID); err != nil {
-					return nil
+					return recapDoneMsg{}
 				}
 				record.Status = db.RecapStatusQueued
 			default:
-				return nil
+				return recapDoneMsg{}
 			}
 		}
 		if !recapEnabledAtPath(settingsPath) {
 			_ = store.CancelRecap(ctx, record.ID)
-			return nil
+			return recapDoneMsg{}
 		}
 		worker := recap.NewWorker(client, model, info, "")
 		_, _ = recap.Run(ctx, recap.RunInput{
@@ -324,7 +337,7 @@ func (m Model) scheduleRecap() tea.Cmd {
 			Worker:   worker,
 			Enabled:  func() bool { return recapEnabledAtPath(settingsPath) },
 		})
-		return nil
+		return recapDoneMsg{}
 	}
 }
 

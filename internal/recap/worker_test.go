@@ -33,10 +33,11 @@ func TestRelatedAvoidSearchIsScopedAndRegexQuoted(t *testing.T) {
 
 func TestWorkerUsesConfiguredModelEndpointAndNoTools(t *testing.T) {
 	var got struct {
-		Model    string             `json:"model"`
-		Endpoint string             `json:"-"`
-		Tools    []json.RawMessage  `json:"tools"`
-		Messages []opencode.Message `json:"messages"`
+		Model     string             `json:"model"`
+		Endpoint  string             `json:"-"`
+		MaxTokens int                `json:"max_tokens"`
+		Tools     []json.RawMessage  `json:"tools"`
+		Messages  []opencode.Message `json:"messages"`
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got.Endpoint = r.URL.Path
@@ -67,11 +68,38 @@ func TestWorkerUsesConfiguredModelEndpointAndNoTools(t *testing.T) {
 	if got.Model != "deepseek-v4-flash" || got.Endpoint != "/v1/chat/completions" {
 		t.Fatalf("request route = %q model=%q", got.Endpoint, got.Model)
 	}
+	if got.MaxTokens != defaultRecapMaxTokens {
+		t.Fatalf("max_tokens = %d, want %d", got.MaxTokens, defaultRecapMaxTokens)
+	}
 	if got.Tools != nil {
 		t.Fatalf("tools = %v, want omitted", got.Tools)
 	}
 	if len(got.Messages) < 2 || got.Messages[0].Role != "system" {
 		t.Fatalf("messages = %+v, want system prompt and snapshot", got.Messages)
+	}
+	if !strings.Contains(got.Messages[0].Content, "Keep the JSON compact") {
+		t.Fatalf("system prompt does not constrain output size: %q", got.Messages[0].Content)
+	}
+}
+
+func TestWorkerAcceptsLiteralMarkdownNewlines(t *testing.T) {
+	worker := Worker{
+		Client: recapClientFunc(func(context.Context, opencode.ChatRequest) (*opencode.ChatResponse, error) {
+			return &opencode.ChatResponse{
+				Content: `{"recap_markdown":"First line
+Second line","questions":[],"things_to_avoid":[]}`,
+				FinishReason: "stop",
+			}, nil
+		}),
+		Model: "deepseek-v4-flash",
+	}
+
+	envelope, err := worker.Generate(context.Background(), workerTestSnapshot(), "")
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if envelope.RecapMarkdown != "First line\nSecond line" {
+		t.Fatalf("recap markdown = %q", envelope.RecapMarkdown)
 	}
 }
 
@@ -89,6 +117,23 @@ func TestWorkerRejectsProviderToolCalls(t *testing.T) {
 	_, err := worker.Generate(context.Background(), workerTestSnapshot(), "")
 	if err == nil || !strings.Contains(err.Error(), "tool") {
 		t.Fatalf("error = %v, want tool-call rejection", err)
+	}
+}
+
+func TestWorkerReportsNonStopFinishReason(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"partial"},"finish_reason":"length"}]}`)
+	}))
+	t.Cleanup(server.Close)
+	worker := Worker{
+		Client:   opencode.NewClient("test-key", opencode.WithBaseURL(server.URL+"/v1")),
+		Model:    "ox-alpha-free",
+		Endpoint: server.URL + "/v1/chat/completions",
+	}
+	_, err := worker.Generate(context.Background(), workerTestSnapshot(), "")
+	if err == nil || !strings.Contains(err.Error(), `finish reason "length"`) {
+		t.Fatalf("error = %v, want finish reason", err)
 	}
 }
 
@@ -118,4 +163,10 @@ func writeRecapFile(t *testing.T, root, relative, body string) {
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
+}
+
+type recapClientFunc func(context.Context, opencode.ChatRequest) (*opencode.ChatResponse, error)
+
+func (f recapClientFunc) Chat(ctx context.Context, request opencode.ChatRequest) (*opencode.ChatResponse, error) {
+	return f(ctx, request)
 }

@@ -119,10 +119,17 @@ One user turn runs in `internal/agent.Send` with a hard step bound (default
    semaphore; other tools stay sequential.
 7. Tool results go back to the model for the next step; loop until
    `finish_reason` is not `tool-calls`.
-8. After a successful completed main-session turn, the TUI schedules one
-   hidden `internal/recap` worker. It snapshots up to five newest eligible
-   messages, writes recap/question/avoid artifacts, and marks the SQLite
-   record complete only after all required renames succeed.
+8. After the configured number of successful completed main-session turns, the
+   TUI schedules one hidden `internal/recap` worker. It snapshots up to five
+   newest eligible messages, writes recap/question/avoid artifacts, and marks
+   the SQLite record complete only after all required renames succeed.
+   The worker requests compact JSON with a 4,000-token output ceiling and
+   rejects non-stop provider finishes before parsing the envelope. The parser
+   escapes raw control characters inside model string values, then applies the
+   strict field and citation checks.
+   Provider, validation, and artifact failures mark that record failed with a
+   bounded error. `/agents` reloads the record and displays that error while
+   keeping the worker out of the transcript.
 
 Everything the loop needs for a resumed session lives in the store; there is
 no in-memory tool state for the parent transcript.

@@ -209,6 +209,21 @@ cost adds those children as `subs $X`; footer cost uses `+$X`.
   footer jumps back to the latest output.
 - `d` on a live drawer row cancels it; `esc` closes the drawer.
 
+When recaps are enabled, the drawer includes a separate selectable `recaps`
+row with a semantic success rail for completed work and a danger rail for
+failures. It shows the newest record's status and source message range. Press
+`enter` or `right`, or click the row, to open the generated summary, questions,
+and things-to-avoid context. Press `left`, `esc`, or `[x]` to return. `up` and
+`down` move between the recap row and child-agent rows. If the hidden worker
+fails, the drawer shows `failed` and the recorded error. The failure stays in
+SQLite even though no recap files are created, so the next debugging step is
+visible without adding worker output to the chat transcript.
+
+The recap context uses the same Markdown renderer as assistant messages. The
+summary has a green panel, questions use the assistant-blue panel, and
+things-to-avoid uses the danger panel. Code blocks keep the Markdown renderer's
+command formatting inside the summary panel.
+
 Child sessions stay in SQLite (`kind=subagent`) so completed agents still
 appear after the turn ends.
 
@@ -285,6 +300,7 @@ and keyboard hint rows keep the card's opaque neutral-charcoal background.
 | compact at | fire when used tokens exceed this % of the live window (5-99, steps of 5, default 80). Dimmed when auto is off, still editable |
 | recaps enabled | on/off for hidden recap generation and first-request local recall (default off) |
 | recap model | model for hidden recap generation (default `deepseek-v4-flash`) |
+| recap after chats | successful main-chat turns before scheduling (1-20, default 2) |
 | sub-agents | on/off for parent `task` tools |
 | default role | `explore` / `plan` / `general` when `task` omits role |
 | max concurrent | concurrent child agents (1-20, default 4) |
@@ -322,9 +338,10 @@ in `.lazykoder/settings.json`. `/settings` does not edit it.
 
 When recaps are enabled, a completed main-chat turn may create files under
 `knowledge-base/recaps/sessions/`, `questions/`, and `things-to-avoid/`.
-The worker is silent: it does not add a transcript row or open the sub-agent
-drawer. A later parent turn performs one bounded local grep before its first
-provider request and sends matching lines as untrusted historical hints.
+The worker is silent in the transcript and child-agent logs. `/agents` shows
+the newest recap row and opens its context on `enter`, `right`, or a click. A
+later parent turn performs one bounded local grep before its first provider
+request and sends matching lines as untrusted historical hints.
 
 When the step limit is off the agent still has a large safety bound so a
 runaway loop cannot run forever. `/model` and `/variant` still change only

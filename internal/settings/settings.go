@@ -56,6 +56,12 @@ const (
 	MinCompactPercent = 5
 	// MaxCompactPercent is the highest selectable auto-compact threshold.
 	MaxCompactPercent = 99
+	// DefaultRecapAfterChats schedules a recap after two successful chats.
+	DefaultRecapAfterChats = 2
+	// MinRecapAfterChats is the lowest recap scheduling threshold.
+	MinRecapAfterChats = 1
+	// MaxRecapAfterChats caps the recap scheduling threshold.
+	MaxRecapAfterChats = 20
 	// defaultCompactPercent / defaultKeepTokens mirror agent.DefaultCompact*
 	// (agent owns the named runtime constants; settings only persists knobs).
 	defaultCompactPercent = 80
@@ -128,6 +134,8 @@ type Recap struct {
 	Enabled bool `json:"enabled"`
 	// Model is the model id used for recap generation.
 	Model string `json:"model"`
+	// AfterChats is the number of successful parent chats before scheduling.
+	AfterChats int `json:"after_chats"`
 }
 
 // Settings is the on-disk project config under .lazykoder/settings.json.
@@ -171,8 +179,9 @@ func Default() Settings {
 			KeepTokens: defaultKeepTokens,
 		},
 		Recap: Recap{
-			Enabled: false,
-			Model:   DefaultModelID,
+			Enabled:    false,
+			Model:      DefaultModelID,
+			AfterChats: DefaultRecapAfterChats,
 		},
 	}
 }
@@ -273,11 +282,19 @@ func (s Settings) normalized() Settings {
 	s.Model.Variant = strings.TrimSpace(s.Model.Variant)
 	s.Agents = s.Agents.normalized()
 	s.Compaction = s.Compaction.normalized()
-	s.Recap.Model = strings.TrimSpace(s.Recap.Model)
-	if s.Recap.Model == "" {
-		s.Recap.Model = DefaultModelID
-	}
+	s.Recap = s.Recap.normalized()
 	return s
+}
+
+func (r Recap) normalized() Recap {
+	r.Model = strings.TrimSpace(r.Model)
+	if r.Model == "" {
+		r.Model = DefaultModelID
+	}
+	if r.AfterChats < MinRecapAfterChats || r.AfterChats > MaxRecapAfterChats {
+		r.AfterChats = DefaultRecapAfterChats
+	}
+	return r
 }
 
 // NormalizeTheme converts an on-disk theme value to a supported mode.

@@ -79,8 +79,9 @@ human runs them.
   `plans/v0.0.9/`.
 - v0.0.10: optional recap artifacts are implemented. It writes ordered
   recaps, questions, and things to avoid under `knowledge-base/recaps/` after
-  completed main-chat turns. The next parent user turn runs one bounded
-  internal grep lookup before its first ordinary provider request. Automated
+  the configured number of successful main-chat turns. The next parent user
+  turn runs one bounded internal grep lookup before its first ordinary provider
+  request. Automated
   gates are green; live-terminal settings inspection remains open. Ledger:
   `plans/v0.0.10/`.
 

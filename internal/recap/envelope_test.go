@@ -60,6 +60,19 @@ func TestParseEnvelopeRejectsMalformedJSONAndUnknownSources(t *testing.T) {
 	}
 }
 
+func TestParseEnvelopeAcceptsLiteralMarkdownNewlines(t *testing.T) {
+	snapshot := Snapshot{Messages: []SnapshotMessage{{ID: "msg_1"}}}
+	raw := `{"recap_markdown":"First line
+Second line","questions":[],"things_to_avoid":[]}`
+	envelope, err := ParseEnvelope([]byte(raw), snapshot)
+	if err != nil {
+		t.Fatalf("ParseEnvelope: %v", err)
+	}
+	if envelope.RecapMarkdown != "First line\nSecond line" {
+		t.Fatalf("recap markdown = %q", envelope.RecapMarkdown)
+	}
+}
+
 func TestParseEnvelopeRejectsUnsupportedFailureClaimsButAllowsNoFailureSummary(t *testing.T) {
 	snapshot := Snapshot{Messages: []SnapshotMessage{{ID: "msg_1", Text: "The choice was recorded."}}}
 	unsupported := `{"recap_markdown":"The command failed and the failure was fixed.","questions":[],"things_to_avoid":[]}`

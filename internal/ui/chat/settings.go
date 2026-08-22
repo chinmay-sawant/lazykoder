@@ -24,6 +24,7 @@ const (
 	settingsRowExploreModel
 	settingsRowRecapEnabled
 	settingsRowRecapModel
+	settingsRowRecapAfterChats
 	settingsRowLimit
 	settingsRowSteps
 	settingsRowCompactAuto
@@ -105,6 +106,7 @@ func (m Model) closeSettings() Model {
 	m.settingsCursor = 0
 	m.settingsHover = -1
 	m.settingsPickDefault = false
+	m.settingsPickRecap = false
 	m.settingsEdit = false
 	m.settingsEditValue = ""
 	return m
@@ -301,6 +303,7 @@ func (m Model) settingsPaintLines(innerW int) []settingsPaintLine {
 		settingsPaintLine{kind: settingsLineHeader, row: -1, text: "recaps"},
 		m.settingsPaintRow(settingsRowRecapEnabled, "["+boolOn(recap.Enabled)+"]", innerW, false),
 		m.settingsPaintRow(settingsRowRecapModel, "◂ "+recapModelVal+" ▸", innerW, false),
+		m.settingsPaintRow(settingsRowRecapAfterChats, fmt.Sprintf("◂ %d ▸", recap.AfterChats), innerW, false),
 		settingsPaintLine{kind: settingsLineHeader, row: -1, text: "agent loop"},
 		m.settingsPaintRow(settingsRowLimit, "["+limitOn+"]", innerW, false),
 		m.settingsPaintRow(settingsRowSteps, stepsVal, innerW, stepsDim),
@@ -375,6 +378,8 @@ func settingsRowLabel(row int) string {
 		return "recaps enabled"
 	case settingsRowRecapModel:
 		return "recap model"
+	case settingsRowRecapAfterChats:
+		return "recap after chats"
 	case settingsRowLimit:
 		return "step limit"
 	case settingsRowSteps:
@@ -534,7 +539,15 @@ func (m Model) activateSettingsRow() (Model, tea.Cmd) {
 	case settingsRowRecapEnabled:
 		return m.setRecapEnabled(!m.projectSettings.EffectiveRecap().Enabled), nil
 	case settingsRowRecapModel:
-		return m.cycleRecapModel(1), nil
+		m.settingsPickDefault = false
+		m.settingsPickRecap = true
+		m.settingsMode = false
+		return m.openKindPicker(pickerKindModel), nil
+	case settingsRowRecapAfterChats:
+		return m.openSettingInputForm("Recap after chats", "Successful chats before a recap", strconv.Itoa(m.projectSettings.EffectiveRecap().AfterChats), validateRecapAfterChats, func(mod Model, val string) (Model, tea.Cmd) {
+			v, _ := strconv.Atoi(val)
+			return mod.setRecapAfterChats(v), nil
+		})
 	case settingsRowLimit:
 		return m.setLimitEnabled(!m.projectSettings.Slot.LimitEnabled), nil
 	case settingsRowSteps:
@@ -612,6 +625,14 @@ func validatePercentSetting(s string) error {
 	return nil
 }
 
+func validateRecapAfterChats(s string) error {
+	v, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil || v < settings.MinRecapAfterChats || v > settings.MaxRecapAfterChats {
+		return fmt.Errorf("must be between %d and %d", settings.MinRecapAfterChats, settings.MaxRecapAfterChats)
+	}
+	return nil
+}
+
 func (m Model) setAllowlistEnabled(on bool) Model {
 	m.projectSettings.Agents.BashAllowlistEnabled = on
 	return m.persistSettings()
@@ -637,6 +658,8 @@ func (m Model) adjustSettings(delta int) Model {
 		}
 	case settingsRowRecapModel:
 		return m.cycleRecapModel(delta)
+	case settingsRowRecapAfterChats:
+		return m.setRecapAfterChats(m.projectSettings.EffectiveRecap().AfterChats + delta)
 	case settingsRowLimit:
 		if delta > 0 {
 			return m.setLimitEnabled(true)
@@ -958,6 +981,9 @@ func (m Model) setDefaultVariant(v string) Model {
 
 func (m Model) setRecapEnabled(on bool) Model {
 	m.projectSettings.Recap.Enabled = on
+	if !on {
+		m.successfulRecapChats = 0
+	}
 	return m.persistSettings()
 }
 
@@ -967,6 +993,17 @@ func (m Model) setRecapModel(id string) Model {
 		id = settings.DefaultModelID
 	}
 	m.projectSettings.Recap.Model = id
+	return m.persistSettings()
+}
+
+func (m Model) setRecapAfterChats(value int) Model {
+	if value < settings.MinRecapAfterChats {
+		value = settings.MinRecapAfterChats
+	}
+	if value > settings.MaxRecapAfterChats {
+		value = settings.MaxRecapAfterChats
+	}
+	m.projectSettings.Recap.AfterChats = value
 	return m.persistSettings()
 }
 
@@ -1255,7 +1292,23 @@ func (m Model) settingsHit(x, y int, button tea.MouseButton) (Model, tea.Cmd, bo
 		} else if inc {
 			return m.cycleRecapModel(1), nil, true
 		}
+		if button == tea.MouseLeft {
+			next, cmd := m.activateSettingsRow()
+			return next, cmd, true
+		}
 		return m.cycleRecapModel(1), nil, true
+	case settingsRowRecapAfterChats:
+		current := m.projectSettings.EffectiveRecap().AfterChats
+		if dec, inc := hitStepChevrons(line, x); dec {
+			return m.setRecapAfterChats(current - 1), nil, true
+		} else if inc {
+			return m.setRecapAfterChats(current + 1), nil, true
+		}
+		if button == tea.MouseLeft {
+			next, cmd := m.activateSettingsRow()
+			return next, cmd, true
+		}
+		return m.setRecapAfterChats(current + 1), nil, true
 	case settingsRowLimit:
 		return m.setLimitEnabled(!m.projectSettings.Slot.LimitEnabled), nil, true
 	case settingsRowCompactAuto:

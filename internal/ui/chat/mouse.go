@@ -88,6 +88,12 @@ func (m Model) mousePress(msg tea.MouseClickMsg) (Model, tea.Cmd) {
 				m = m.clearPromptSelection()
 				return m.collapseSubagentDrawerToSummary(), nil
 			}
+			if m.recapRowAt(mu.Y) {
+				m = m.clearTextSelection()
+				m = m.clearPromptSelection()
+				m.recapSelected = true
+				return m.openSelectedRecapDetail()
+			}
 			if idx, ok := m.subagentIndexAtScreenY(mu.Y); ok {
 				m = m.clearTextSelection()
 				m = m.clearPromptSelection()
