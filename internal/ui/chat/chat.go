@@ -19,7 +19,9 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/db"
 	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
+	"github.com/chinmay-sawant/lazykoder/internal/recap"
 	"github.com/chinmay-sawant/lazykoder/internal/settings"
+	"github.com/chinmay-sawant/lazykoder/internal/skills"
 	"github.com/chinmay-sawant/lazykoder/internal/subagent"
 	"github.com/chinmay-sawant/lazykoder/internal/tips"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/question"
@@ -81,6 +83,7 @@ const (
 	pickerDrawerChrome = 2
 	pickerKindModel    = "model"
 	pickerKindVariant  = "variant"
+	pickerKindSkills   = "skills"
 	// pulseInterval and pulseSteps throb the in-progress reply rail.
 	pulseInterval = 70 * time.Millisecond
 	pulseSteps    = 16
@@ -131,7 +134,7 @@ func configureThemeStyles() {
 	assistantRoleStyle = lipgloss.NewStyle().Foreground(theme.ColorAssistantBorder()).Bold(true)
 	roleStyle = lipgloss.NewStyle().Foreground(theme.ColorText()).Bold(true)
 	reasoningStyle = lipgloss.NewStyle().Foreground(theme.ColorMute())
-	toolCardStyle = lipgloss.NewStyle().Background(theme.ColorSurface()).Foreground(theme.ColorText())
+	toolCardStyle = lipgloss.NewStyle().Background(theme.ColorBg()).Foreground(theme.ColorText())
 	toolOutputStyle = lipgloss.NewStyle().Background(theme.ColorDialog()).Foreground(theme.ColorMute())
 	editCardStyle = lipgloss.NewStyle().Background(theme.ColorEditPanel()).Foreground(theme.ColorText())
 	selectionStyle = lipgloss.NewStyle().Background(theme.ColorAccent()).Foreground(theme.ColorBg())
@@ -168,6 +171,7 @@ type Model struct {
 	settingsPath        string
 	projectSettings     settings.Settings
 	settingsPickDefault bool // model/variant picker is setting the project default
+	settingsPickRecap   bool // model picker is setting the recap model
 
 	width  int
 	height int
@@ -186,6 +190,7 @@ type Model struct {
 	busy                bool
 	err                 string
 	pendingUser         string
+	turnHasNewUser      bool
 	lastTool            int
 
 	model                string // current model; "" = provider default
@@ -196,6 +201,12 @@ type Model struct {
 	modelsCached         bool // models came from the cache, not a live fetch
 	cachePath            string
 	activity             string
+	recallScanning       bool
+	skillsScanning       bool
+	skillsCatalog        skills.Catalog
+	activeSkills         []skills.Skill
+	pendingSkillRefs     []recap.MemorySkillReference
+	memoryScanJobs       int
 	tokensUsed           int64
 	compacting           bool
 	compactHint          string
@@ -277,6 +288,7 @@ type Model struct {
 	pickerMode       bool
 	pickerKind       string
 	pickerFromPrompt bool
+	pickerSkillItems []skills.Skill
 
 	sessionPickerMode bool
 	sessionItems      []db.Session
@@ -291,17 +303,33 @@ type Model struct {
 	// (used after todowrite updates so checklist + agents both stay visible).
 	subagentDrawerCompact bool
 	subagentLogMode       bool
+	recapDetailMode       bool
 	subagentItems         []subagentRow
+	recapItems            []db.RecapRecord
+	recapSelected         bool
 	subagentCursor        int
 	subagentHover         int
 	subagentVp            viewport.Model
 	subagentLogVp         viewport.Model
+	recapDetailVp         viewport.Model
 	subagentBuilt         bool
 	subagentSelected      subagentRow
+	recapDetailRecord     db.RecapRecord
 	// subagentLogItems is the child transcript rendered with main chat styles
 	// (thinking, tools, work rails). Reasoning starts expanded.
 	subagentLogItems    []transcriptItem
 	subagentLogSelected int
+
+	// memoryHistoryMode reuses the sub-agent drawer shell for current-chat
+	// memory entries without mixing them into child-agent rows.
+	memoryHistoryMode       bool
+	memoryHistoryDetailMode bool
+	memoryHistoryItems      []memoryHistoryItem
+	memoryHistoryAll        []memoryHistoryItem
+	memoryHistoryPage       int
+	memoryHistorySelected   memoryHistoryItem
+	memoryHistoryError      string
+	memoryHistorySelection  textSelection
 
 	slashMode                 bool
 	slashCursor               int
@@ -322,11 +350,12 @@ type Model struct {
 	// layout is the last outer-geometry snapshot (View + mouse share it).
 	layout layoutSnap
 
-	turnSeq    int
-	turnCancel context.CancelFunc
-	turnCtx    context.Context
-	eventCh    chan agent.Event
-	errCh      chan error
+	turnSeq              int
+	successfulRecapChats int
+	turnCancel           context.CancelFunc
+	turnCtx              context.Context
+	eventCh              chan agent.Event
+	errCh                chan error
 
 	// subMgr owns in-process sub-agent jobs for this chat model.
 	subMgr *subagent.Manager
@@ -377,10 +406,12 @@ var slashCommands = []slashCmd{
 	{name: "/model", description: "search and switch the live chat model"},
 	{name: "/variant", description: "switch live reasoning effort (low / medium / high / max)"},
 	{name: "/agents", description: "open the sub-agent drawer and logs", aliases: []string{"subs", "subagents"}},
+	{name: "/history", description: "open memory history for the current chat"},
 	{name: "/spawn", description: "spawn a new sub-agent via interactive form", aliases: []string{"agent"}},
 	{name: "/refresh", description: "reload the model list into models.json"},
 	{name: "/usage", description: "show OpenCode Go plan usage (rolling, weekly, monthly)"},
 	{name: "/status", description: "open the status drawer and toggle details"},
+	{name: "/skills", description: "discover and activate local and global skills", aliases: []string{"skill"}},
 	{name: "/settings", description: "project defaults (model, agents, compaction, safety)", aliases: []string{"slot"}},
 	{name: "/continue", description: "resume after a step-limit stop (or send continue)"},
 	{name: "/compact", description: "summarize older context now (optional notes)"},
@@ -395,6 +426,11 @@ type modelsMsg struct {
 	notice    string
 }
 
+type skillsMsg struct {
+	catalog skills.Catalog
+	err     error
+}
+
 type eventMsg struct {
 	seq int
 	ev  agent.Event
@@ -406,6 +442,12 @@ type eventDoneMsg struct {
 }
 
 type pulseMsg struct{}
+
+type recapDoneMsg struct{}
+
+type memoryDoneMsg struct {
+	err error
+}
 
 type tipsTickMsg struct{}
 
@@ -420,6 +462,13 @@ func New(opts Options) Model {
 	}
 	theme.SetMode(cfg.EffectiveTheme())
 	configureThemeStyles()
+	if opts.Client != nil && opts.Settings != nil {
+		retry := cfg.EffectiveRetry()
+		opts.Client.SetRetryPolicy(opencode.RetryPolicy{
+			MaxRetries: retry.MaxRetries,
+			Delay:      time.Duration(retry.DelaySeconds) * time.Second,
+		})
+	}
 	// Effective* helpers normalize clamps and empty model ids.
 	eff := cfg.EffectiveMaxSteps()
 	m := Model{
@@ -480,6 +529,9 @@ func New(opts Options) Model {
 // Init starts the fetch and watcher commands.
 func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{m.confirmWatch(), m.askWatch(), m.fetchModels, tipsTick()}
+	if m.projectSettings.EffectiveRecap().Enabled && m.store != nil && m.client != nil {
+		cmds = append(cmds, m.recoverRecaps, m.recoverMemoryUpdates)
+	}
 	if m.projectInstructionsNotice != "" {
 		cmds = append(cmds, clearProjectInstructionsNotice())
 	}
@@ -586,15 +638,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.seq != m.turnSeq {
 			return m, nil
 		}
-		m = m.finishTurn(msg.err)
-		// Continue diamond throb while background sub-agents are still live.
-		if m.hasLiveSubagents() {
-			return m, pulseTick()
+		successfulTurn := m.successfulTurnEligible(msg.err)
+		memoryEligible := m.memoryEligible(msg.err)
+		recapEligible := m.recapEligible(msg.err)
+		if successfulTurn {
+			if recapEligible {
+				m.successfulRecapChats = 0
+			} else {
+				m.successfulRecapChats++
+			}
 		}
-		return m, nil
+		m = m.finishTurn(msg.err)
+		memoryCmd := tea.Cmd(nil)
+		if memoryEligible {
+			memoryCmd = m.scheduleMemoryUpdate()
+			if memoryCmd != nil {
+				m.memoryScanJobs++
+				m.pulseOn = true
+			}
+		}
+		var recapCmd tea.Cmd
+		if recapEligible {
+			recapCmd = m.scheduleRecap()
+		}
+		// Continue baton status motion while background sub-agents are live.
+		if m.hasLiveSubagents() || m.hasInFlightTools() || m.memoryScanJobs > 0 {
+			return m, tea.Batch(memoryCmd, recapCmd, pulseTick())
+		}
+		return m, tea.Batch(memoryCmd, recapCmd)
 	case pulseMsg:
 		// Keep throbbing for live sub-agents even after the parent turn ends.
-		if !m.busy && !m.hasLiveSubagents() {
+		if !m.busy && !m.hasInFlightTools() && !m.hasLiveSubagents() && !m.recallScanning && !m.skillsScanning && m.memoryScanJobs == 0 {
 			m.pulseOn = false
 			return m, nil
 		}
@@ -606,6 +680,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m = m.refreshSubagentDrawerLive()
 		}
 		return m, pulseTick()
+	case recapDoneMsg:
+		m = m.reloadSubagentRows()
+		if m.subagentPickerMode && !m.subagentLogMode {
+			return m.resizeSubagentDrawer(), nil
+		}
+		return m, nil
+	case memoryDoneMsg:
+		if m.memoryScanJobs > 0 {
+			m.memoryScanJobs--
+		}
+		if msg.err != nil && !errors.Is(msg.err, recap.ErrInsufficientMessages) {
+			m.err = appendChatError(m.err, "memory update failed: "+msg.err.Error())
+		}
+		return m, nil
 	case tipsTickMsg:
 		m.tipsIndex++
 		return m, tipsTick()
@@ -627,6 +715,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.notice != "" {
 			m.copyNotice = msg.notice
 			return m, clearCopyNotice()
+		}
+		return m, nil
+	case skillsMsg:
+		m.skillsScanning = false
+		m.skillsCatalog = msg.catalog
+		m.pickerSkillItems = append([]skills.Skill{}, msg.catalog.Skills...)
+		if msg.err != nil {
+			m.modelsErr = msg.err.Error()
+		}
+		if m.pickerMode && m.pickerKind == pickerKindSkills {
+			m.applyFilter()
 		}
 		return m, nil
 	case usageMsg:
@@ -678,7 +777,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.subagentBuilt {
 			if m.subagentLogMode {
-				m = m.resizeSubagentLogCard()
+				if m.memoryHistoryDetailMode {
+					m = m.resizeMemoryHistoryDetail()
+				} else if m.recapDetailMode {
+					m = m.resizeRecapDetail()
+				} else {
+					m = m.resizeSubagentLogCard()
+				}
 			} else if m.subagentPickerMode {
 				m = m.resizeSubagentDrawer()
 			}
@@ -714,7 +819,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case tea.KeyPressMsg:
 		if msg.Mod.Contains(tea.ModCtrl) && (msg.Code == 'c' || msg.Code == 'C') {
-			if m.promptEditing() && (m.prompt.Value() != "" || m.promptSelectAll || m.promptSel.hasRange() || m.selection.hasRange()) {
+			if m.memoryHistoryDetailMode {
+				// The memory detail owns Ctrl+C, including its select-all state.
+			} else if m.promptEditing() && (m.prompt.Value() != "" || m.promptSelectAll || m.promptSel.hasRange() || m.selection.hasRange()) {
 				// Fall through to updateKey: copy if text is selected, or clear the input box if not selected.
 			} else if m.quitConfirm {
 				return m.closeDone(), tea.Quit
@@ -772,6 +879,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.subagentLogMode {
+			if m.memoryHistoryDetailMode {
+				vp, _ := m.subagentLogVp.Update(msg)
+				m.subagentLogVp = vp
+				return m, nil
+			}
+			if m.recapDetailMode {
+				vp, _ := m.recapDetailVp.Update(msg)
+				m.recapDetailVp = vp
+				return m, nil
+			}
 			vp, _ := m.subagentLogVp.Update(msg)
 			m.subagentLogVp = vp
 			return m, nil
@@ -827,6 +944,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.promptSel.dragging {
 			return m.updatePromptSelection(msg.Mouse()), nil
 		}
+		if m.memoryHistoryDetailMode && m.memoryHistorySelection.dragging {
+			return m.updateMemoryHistoryDetailSelection(msg.Mouse()), nil
+		}
 		// Keep transcript selection / scrollbar drag working while the drawer
 		// is open; only update drawer hover when the pointer is on it.
 		if m.selection.dragging {
@@ -869,6 +989,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.promptSel.dragging {
 			return m.endPromptSelectionDrag()
 		}
+		if m.memoryHistorySelection.dragging {
+			m.memoryHistorySelection.dragging = false
+			text, ok := m.memoryHistorySelectedText()
+			if !ok {
+				return m, nil
+			}
+			m.copyNotice = "Text copied"
+			return m, tea.Batch(tea.SetClipboard(text), clearCopyNotice())
+		}
 		m.selection.dragging = false
 		m.dragOn = false
 		text, ok := m.selectedText()
@@ -889,6 +1018,35 @@ func (m Model) applyEvent(ev agent.Event) Model {
 	switch ev.Kind {
 	case agent.EventSessionCreated:
 		m = m.adoptSession(ev.SessionID)
+	case agent.EventRecallStarted:
+		m.recallScanning = true
+		m.activity = "scanning memory patterns"
+		m.pulseOn = true
+	case agent.EventRecallFinished:
+		m.recallScanning = false
+		if m.busy {
+			m.activity = "thinking"
+		}
+	case agent.EventSkillsStarted:
+		m.skillsScanning = true
+		m.activity = "scanning skills"
+		m.pulseOn = true
+	case agent.EventSkillsFinished:
+		m.skillsScanning = false
+		m.pendingSkillRefs = m.pendingSkillRefs[:0]
+		for _, skill := range ev.Skills {
+			m.pendingSkillRefs = append(m.pendingSkillRefs, recap.MemorySkillReference{
+				ID:          recap.SkillReferenceID(skill.Name, string(skill.Scope), skill.Path),
+				Name:        skill.Name,
+				Scope:       string(skill.Scope),
+				Path:        skill.Path,
+				ContentHash: skill.ContentHash,
+				UseCount:    1,
+			})
+		}
+		if m.busy {
+			m.activity = "thinking"
+		}
 	case agent.EventMessage:
 		if ev.Role == "user" && m.pendingHistoryIndex >= 0 && m.pendingHistoryIndex < len(m.inputHistory) {
 			m.inputHistory[m.pendingHistoryIndex].messageID = ev.MessageID
@@ -904,7 +1062,7 @@ func (m Model) applyEvent(ev agent.Event) Model {
 		// On task tool events: open drawer only when a new job appears.
 		if ev.Tool.Name == "task" || strings.HasPrefix(ev.Tool.Name, "task_") {
 			m = m.openSubagentDrawerIfNew()
-			m.pulseOn = m.busy || m.hasLiveSubagents()
+			m.pulseOn = m.busy || m.hasInFlightTools() || m.hasLiveSubagents()
 		}
 		if ev.Tool.Name == "todowrite" {
 			m = m.applyTodosFromTool(dbToolFromDelta(ev.Tool))
@@ -1014,18 +1172,22 @@ func (m Model) finishTurn(err error) Model {
 	m.busy = false
 	m.compacting = false
 	m.pendingUser = ""
+	m.turnHasNewUser = false
 	m.pending = nil
 	m.pendingAsk = nil
+	m.activeSkills = nil
 	m = m.clearFocus(focusConfirm)
 	m = m.clearFocus(focusAsk)
 	m.eventCh = nil
 	m.errCh = nil
 	m.activity = ""
+	m.recallScanning = false
+	m.skillsScanning = false
 	m.collapseLiveReasoning()
 	// Refresh sub-agent rows after the turn; drawer stays as the user left it
 	// (only a new spawn re-opens it via openSubagentDrawerIfNew).
 	m = m.syncSubagentDrawer()
-	if m.hasLiveSubagents() {
+	if m.hasLiveSubagents() || m.hasInFlightTools() {
 		m.pulseOn = true
 	} else {
 		m.pulseOn = false

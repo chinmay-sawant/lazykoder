@@ -53,6 +53,10 @@ func (m Model) setFocus(k focusKind) Model {
 		m.formMode = false
 		return m
 	}
+	if k != focusSubagents && k != focusSubagentLog {
+		m.memoryHistoryMode = false
+		m.memoryHistoryDetailMode = false
+	}
 
 	m.slashMode = false
 	m.slashCursor = 0
@@ -83,6 +87,7 @@ func (m Model) setFocus(k focusKind) Model {
 	case focusSubagents:
 		m.subagentPickerMode = true
 		m.subagentLogMode = false
+		m.recapDetailMode = false
 	case focusSubagentLog:
 		m.subagentPickerMode = true
 		m.subagentLogMode = true
@@ -120,7 +125,10 @@ func (m Model) clearFocus(k focusKind) Model {
 	case focusSubagents, focusSubagentLog:
 		m.subagentPickerMode = false
 		m.subagentLogMode = false
+		m.recapDetailMode = false
 		m.subagentDrawerCompact = false
+		m.memoryHistoryMode = false
+		m.memoryHistoryDetailMode = false
 	case focusSlash:
 		m.slashMode = false
 		m.slashCursor = 0

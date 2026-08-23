@@ -267,7 +267,7 @@ func TestChatServerError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewClient("k", WithBaseURL(srv.URL))
+	c := NewClient("k", WithBaseURL(srv.URL), WithRetryPolicy(RetryPolicy{MaxRetries: 0}))
 	_, err := c.Chat(context.Background(), ChatRequest{Messages: []Message{{Role: "user", Content: "x"}}})
 	if err == nil {
 		t.Fatal("Chat() error = nil, want error")

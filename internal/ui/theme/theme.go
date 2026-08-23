@@ -172,10 +172,20 @@ func BgHex() string     { return Current().Bg }
 func AccentHex() string { return Current().Accent }
 func MuteHex() string   { return Current().Mute }
 
-// StatusDiamond is the persistent status mark on every tool run card.
-const StatusDiamond = "◆"
+// StatusBatonFrames are the baton frames used for live status marks.
+const StatusBatonFrames = "|/—\\"
 
-// StatusColor is the diamond color for a tool-run status. Pending and
+// StatusBatonFrame returns one baton frame, clamped to the first
+// frame for negative values.
+func StatusBatonFrame(frame int) string {
+	if frame < 0 {
+		frame = 0
+	}
+	frames := []rune(StatusBatonFrames)
+	return string(frames[frame%len(frames)])
+}
+
+// StatusColor is the status color for a tool-run status. Pending and
 // running stay on the text color; success is green; failures are red.
 func StatusColor(status string) color.Color {
 	switch status {

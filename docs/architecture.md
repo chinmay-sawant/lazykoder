@@ -14,14 +14,15 @@ owns the tool loop: it is not a wrapper around the OpenCode CLI or its global
 | --- | --- |
 | `main.go` | init workspace, load key, start the tea program |
 | `internal/workspace` | create `.lazykoder/`, open + migrate the db, ensure `.gitignore` |
-| `internal/db` | numbered migrations + session/message/part/tool store |
+| `internal/db` | numbered migrations + session/message/part/tool/recap/memory store |
 | `internal/provider/opencode` | HTTP client for the OpenCode Go API |
 | `internal/agent` | turn loop, `buildHistory`, compact policy and summarizer run |
+| `internal/recap` | time-windowed snapshots, hidden no-tools workers, and atomic local artifacts |
 | `internal/prompts` | embedded `compact.md` via `go:embed` (`prompts.Must`) |
 | `internal/subagent` | Manager + Host + AgentRunner for concurrent children |
 | `internal/policy` | bash classifier returning Allow/Ask/Deny |
-| `internal/tools` | bash, read, grep, write, edit, question, webfetch, task schemas |
-| `internal/settings` | project settings: slot, model, `agents` caps, `compaction` |
+| `internal/tools` | bash, read, grep, write, edit, question, webfetch with HTTP and isolated browser reading, task schemas |
+| `internal/settings` | project settings: slot, model, `agents` caps, `compaction`, `recap`, skills, and API retry policy |
 | `internal/ui/chat` | transcript, prompt, status line, model picker |
 | `internal/ui/confirm` | the y/n confirm view (rm and question flows) |
 | `internal/envfile` | stdlib-only `.env` loader |
@@ -118,9 +119,83 @@ One user turn runs in `internal/agent.Send` with a hard step bound (default
    semaphore; other tools stay sequential.
 7. Tool results go back to the model for the next step; loop until
    `finish_reason` is not `tool-calls`.
+8. After the configured number of successful completed main-session turns, the
+   TUI schedules one hidden `internal/recap` worker. It snapshots up to five
+   newest eligible messages, writes recap/question/avoid artifacts, and marks
+   the SQLite record complete only after all required renames succeed.
+   The worker requests compact JSON with a 4,000-token output ceiling and
+   rejects non-stop provider finishes before parsing the envelope. The parser
+   escapes raw control characters inside model string values, then applies the
+   strict field and citation checks.
+   Provider, validation, and artifact failures mark that record failed with a
+   bounded error. `/agents` reloads the record and displays that error while
+   keeping the worker out of the transcript.
+9. Before the first ordinary provider request for a parent turn, the agent
+   runs the bounded recall and skill providers after persisting the user row.
+   Skills come from `<workdir>/skills`, `<workdir>/.agents/skills`, and the
+   configured global roots. Explicit activation precedes local and then global
+   automatic matches. The selected bodies are one untrusted, wire-only system
+   block and are never stored in SQLite, recap artifacts, or the memory file.
+   Skill scans do not run for tool follow-ups, `/continue`, compaction, child
+   sessions, or hidden workers. The TUI reports a separate skill-scan status.
+10. After every successful completed main-session turn, a separate hidden memory
+   worker uses a bounded two-to-five-message snapshot. It reads the
+   current project `knowledge-base/memories.md` and a bounded grep of related
+   local knowledge evidence, then asks the selected recap model for a strict
+   JSON memory envelope. Explicit user signals are restored into their
+   authoritative sections before valid facts are merged into the aggregate and
+   written with an atomic rename. The model sees a redacted aggregate without
+   historical message IDs or the source ledger. The prompt lists the current
+   snapshot IDs as the only valid citation choices. A correction is stored as
+   a supersession, which keeps the old fact marked `superseded` instead of
+   deleting it. If only short-lived `recent_context` citations are missing,
+   the worker makes one repair call and drops that context if it remains
+   untraceable. Durable sections remain strict. A SQLite `memory_updates` row
+   records the source anchor, model, attempts, digest, and any failure so
+   restarts can retry safely.
+11. `/history` reuses the sub-agent drawer shell to show only memory entries
+    sourced from the active chat. Entries are ordered by `last_seen_utc`, show
+    twenty per page, and open in the same scrollable detail card. A real
+    memory-worker error stays in the history view with its original cause.
+    Memory-document parser errors also appear in that view and clear after a
+    successful reload. The detail card supports app-level mouse drag
+    selection and `ctrl+a` / `ctrl+c` copy without arming quit confirmation.
+    Insufficient source context does not interrupt chat, but its failed ledger
+    row can still appear in history. Each row
+    also reads its matching `memory_updates` record and starts with a colored
+    dot and status label: green for completed, red for failed, and accent for
+    queued or running. Failed attempts without a memory entry still appear so
+    the history can show what failed. The detail card uses the edit, assistant,
+    and error panel backgrounds already used by transcript and recap views.
 
 Everything the loop needs for a resumed session lives in the store; there is
 no in-memory tool state for the parent transcript.
+
+### First-request recall
+
+When `recap.enabled` or `skills.enabled` is true, `internal/ui/chat` runs one bounded, quoted
+grep after persisting a new parent user message and before its first ordinary
+provider request when the prompt contains recall language. It searches
+`knowledge-base/memories.md` first, then `knowledge-base/recaps/`, and finally
+the broader Markdown knowledge base only when earlier sources have no match.
+Matches become one wire-only system block after `AGENTS.md` instructions. The
+block is marked untrusted and is not persisted. Tool follow-ups, `/continue`,
+compaction, and child sessions do not repeat the lookup. Missing or malformed
+memory files are treated as empty recall sources. The chat status line uses a
+separate animated marker while this lookup or the hidden memory update runs.
+
+### Skill catalog and settings
+
+`internal/skills` resolves only approved project and configured global roots.
+It accepts `SKILL.md` and legacy `SKILLS.md`, parses bounded metadata, rejects
+symlinked roots and files, and returns deterministic diagnostics instead of
+failing the chat turn. `/skills` and `/skill` use the model-drawer interaction
+family to list and activate a descriptor for the next parent request. The
+persisted `skills` settings group controls discovery, automatic matching,
+source scopes, reference remembering, and byte limits. Skill references are
+merged into the version 2 `Skills` section of `knowledge-base/memories.md`
+using code-owned paths and hashes. Skill bodies are never accepted from the
+model memory envelope.
 
 ## Compaction
 
@@ -153,6 +228,12 @@ shrink-on-next-send, and the overflow retry still run.
 `/settings` exposes **auto-compact** and **compact at** (5% steps).
 `keep_tokens` is JSON-only (default 15,000). `0` or omitted is treated
 as 15,000. There is no `buffer` key; an old `buffer` field is ignored.
+
+Transient chat failures use the project retry policy. The default is five
+retries after the initial request, with a ten-second delay between attempts.
+Only HTTP 500 and 503 responses qualify. Authentication failures do not retry.
+The policy is stored as `retry.max_retries` and `retry.delay_seconds` and can
+be changed in `/settings`.
 
 **History.** The latest `compaction` part wins. `buildHistory` injects
 one synthetic user message (`This session continues from a compacted

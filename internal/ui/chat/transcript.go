@@ -70,6 +70,8 @@ const (
 	workRail      = "│"
 	workRailCols  = 2
 	streamCursor  = "▌"
+	// memoryScanFrames follows the Braille loader from temp/4_load_animations.go.
+	memoryScanFrames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 )
 
 func (m *Model) replay(sessionID string) {
@@ -481,7 +483,10 @@ func (m Model) itemInLiveTurn(idx int) bool {
 }
 
 func (m Model) workRailMark() string {
-	return m.workRailLive(m.busy && m.pulseOn)
+	if m.busy && m.pulseOn {
+		return m.plasmaBlob()
+	}
+	return m.workRailLive(false)
 }
 
 func (m Model) workRailLive(throb bool) string {
@@ -562,6 +567,30 @@ func (m Model) roleLine(label string, when int64) string {
 		style = assistantRoleStyle
 	}
 	return m.alignMeta(style.Render(label), formatClock(when))
+}
+
+// metaBand renders the role/timestamp line for assistant turns as a
+// full-pane-wide strip painted with the assistant panel color, so the blue
+// surface runs edge to edge instead of stopping at the text column.
+func (m Model) metaBand(label string, when int64) string {
+	style := roleStyle
+	switch label {
+	case roleYou:
+		style = userRoleStyle
+	case roleAssistant:
+		style = assistantRoleStyle
+	}
+	left := style.Background(theme.ColorAssistantPanel()).Render(label)
+	stamp := hintStyle.Background(theme.ColorAssistantPanel()).Render(formatClock(when))
+	width := m.metaWidth()
+	rw := lipgloss.Width(stamp)
+	lw := lipgloss.Width(left)
+	gap := width - lw - rw
+	gapStyle := lipgloss.NewStyle().Background(theme.ColorAssistantPanel())
+	if gap < 1 {
+		return left + gapStyle.Render(" ") + stamp
+	}
+	return left + gapStyle.Render(strings.Repeat(" ", gap)) + stamp
 }
 
 // transcriptPanel gives each conversational turn a quiet surface and rounded
@@ -833,11 +862,14 @@ func (m Model) renderItemWithToolMode(it transcriptItem, selected bool, streamin
 			userStyle.Render(frameUserPrompt(it.text, m.contentWidth(it.when))))
 		return m.roleLine(roleYou, it.when) + "\n" + body
 	case itemAssistant:
-		panelWidth := max(1, m.contentWidth(it.when))
+		// The panel and its role band span the full pane width. The clock
+		// lives on the band above the panel, so message text never shares a
+		// row with it and nothing needs to be reserved for the stamp.
+		panelWidth := max(1, m.metaWidth())
 		innerWidth := max(1, panelWidth-cardHorzPad)
 		rendered := markdown.Render(it.text, innerWidth)
 		rendered = transcriptPanel(rendered, panelWidth, theme.ColorAssistantPanel(), theme.ColorAssistantBorder())
-		return m.roleLine(roleAssistant, it.when) + "\n" + rendered
+		return m.metaBand(roleAssistant, it.when) + "\n" + rendered
 	case itemReasoning:
 		marker := "▸"
 		if !it.collapsed {
@@ -906,8 +938,8 @@ func (m Model) renderToolMode(tool db.ToolCall, part db.Part, collapsed bool, wh
 			label += "  " + formatDiffStat(add, del)
 		}
 	}
-	diamond := m.toolDiamond(status)
-	left := diamond + "  " + lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).Render(chevron+"  "+label)
+	statusMark := m.toolStatusMark(status)
+	left := statusMark + "  " + lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).Render(chevron+"  "+label)
 	header := m.alignMeta(left, formatClock(when))
 	bodyWidth := max(minPaneWidth, m.toolCardWidth())
 
@@ -916,9 +948,9 @@ func (m Model) renderToolMode(tool db.ToolCall, part db.Part, collapsed bool, wh
 		return m.renderEditTool(header, tool, collapsed, bodyWidth)
 	}
 
-	card := toolCardStyle.Width(bodyWidth).Background(theme.ColorSurface())
+	card := toolCardStyle.Width(bodyWidth).Background(theme.ColorBg())
 	if collapsed {
-		return card.Render(header)
+		return card.Render(keepBackground(header, theme.ColorBg()))
 	}
 	body := []string{header}
 	switch tool.Tool {
@@ -944,11 +976,11 @@ func (m Model) renderToolMode(tool db.ToolCall, part db.Part, collapsed bool, wh
 			body = append(body, "", outputLabel, outputBox)
 		}
 	}
-	return card.Render(strings.Join(body, "\n"))
+	return card.Render(keepBackground(strings.Join(body, "\n"), theme.ColorBg()))
 }
 
 // toolInFlight reports whether a tool-run status means the call has not
-// finished yet, so its diamond should throb instead of sitting on a fixed
+// finished yet, so its baton mark should animate instead of sitting on a fixed
 // status color.
 func toolInFlight(status string) bool {
 	switch strings.ToLower(strings.TrimSpace(status)) {
@@ -957,6 +989,15 @@ func toolInFlight(status string) bool {
 	default:
 		return false
 	}
+}
+
+func (m Model) hasInFlightTools() bool {
+	for _, it := range m.items {
+		if it.kind == itemTool && toolInFlight(toolItemStatus(it)) {
+			return true
+		}
+	}
+	return false
 }
 
 // toolItemStatus resolves the effective status of a transcript tool item,
@@ -971,22 +1012,16 @@ func toolItemStatus(it transcriptItem) string {
 	return ""
 }
 
-// toolDiamond is the status mark on a tool card: it throbs with the shared
-// pulse while the call is in flight and locks to the status color (green ok,
-// red failed, text otherwise) once the call is done.
-func (m Model) toolDiamond(status string) string {
-	style := lipgloss.NewStyle()
-	switch {
-	case toolInFlight(status):
-		if m.pulseOn {
-			style = style.Foreground(theme.PulseAccent(m.pulseT()))
-		} else {
-			style = style.Foreground(theme.StatusColor(status))
-		}
-	default:
-		style = style.Foreground(theme.StatusColor(status))
+// toolStatusMark uses a green baton spinner while a call is in flight and
+// its first frame as the fixed status mark after the call finishes.
+func (m Model) toolStatusMark(status string) string {
+	style := lipgloss.NewStyle().Foreground(theme.StatusColor(status))
+	frame := 0
+	if toolInFlight(status) {
+		frame = m.pulse
+		style = style.Foreground(theme.ColorGood())
 	}
-	return style.Render(theme.StatusDiamond)
+	return style.Render(theme.StatusBatonFrame(frame))
 }
 
 // renderEditTool draws the edit tool as a full-width card with soft green/red

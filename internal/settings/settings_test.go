@@ -53,6 +53,18 @@ func TestDefault(t *testing.T) {
 	if !s.Compaction.Auto || s.Compaction.Percent != 80 || s.Compaction.KeepTokens != 15_000 {
 		t.Fatalf("compaction defaults %+v", s.Compaction)
 	}
+	if s.Recap.Enabled || s.Recap.Model != DefaultModelID || s.Recap.AfterChats != DefaultRecapAfterChats {
+		t.Fatalf("recap defaults %+v", s.Recap)
+	}
+	if s.Retry.MaxRetries != DefaultRetryMaxRetries || s.Retry.DelaySeconds != DefaultRetryDelaySeconds {
+		t.Fatalf("retry defaults %+v", s.Retry)
+	}
+	if !s.Skills.Enabled || !s.Skills.AutoDetect || !s.Skills.IncludeLocal || !s.Skills.IncludeGlobal || !s.Skills.Remember {
+		t.Fatalf("skills defaults %+v", s.Skills)
+	}
+	if s.Skills.MaxAutoMatches != DefaultSkillMaxAutoMatches {
+		t.Fatalf("skill match default = %d", s.Skills.MaxAutoMatches)
+	}
 }
 
 func TestLoadMissingReturnsDefault(t *testing.T) {
@@ -72,6 +84,144 @@ func TestLoadMissingReturnsDefault(t *testing.T) {
 	}
 	if !s.Compaction.Auto || s.Compaction.Percent != 80 {
 		t.Fatalf("compaction %+v", s.Compaction)
+	}
+	if s.Recap.Enabled || s.Recap.Model != DefaultModelID || s.Recap.AfterChats != DefaultRecapAfterChats {
+		t.Fatalf("recap %+v", s.Recap)
+	}
+	if got := s.EffectiveRetry(); got.MaxRetries != DefaultRetryMaxRetries || got.DelaySeconds != DefaultRetryDelaySeconds {
+		t.Fatalf("retry %+v", got)
+	}
+}
+
+func TestLegacySettingsNormalizeRecapDisabled(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte(`{"model":{"default":"claude-4"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Recap.Enabled || s.Recap.Model != DefaultModelID || s.Recap.AfterChats != DefaultRecapAfterChats {
+		t.Fatalf("legacy recap = %+v", s.Recap)
+	}
+}
+
+func TestRecapModelNormalizesWhitespaceAndEmpty(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte(`{"recap":{"enabled":true,"model":"  "}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.Recap.Enabled || s.EffectiveRecap().Model != DefaultModelID || s.EffectiveRecap().AfterChats != DefaultRecapAfterChats {
+		t.Fatalf("recap = %+v", s.Recap)
+	}
+}
+
+func TestRecapAfterChatsNormalizes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte(`{"recap":{"enabled":true,"after_chats":0}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.EffectiveRecap().AfterChats != DefaultRecapAfterChats {
+		t.Fatalf("after chats = %d, want %d", s.EffectiveRecap().AfterChats, DefaultRecapAfterChats)
+	}
+}
+
+func TestRetrySettingsNormalizeBounds(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte(`{"retry":{"max_retries":-1,"delay_seconds":9999}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := s.EffectiveRetry()
+	if got.MaxRetries != DefaultRetryMaxRetries || got.DelaySeconds != DefaultRetryDelaySeconds {
+		t.Fatalf("retry bounds = %+v, want defaults", got)
+	}
+}
+
+func TestRetrySettingsPartialFileKeepsExplicitZero(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte(`{"retry":{"max_retries":0}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := s.EffectiveRetry()
+	if got.MaxRetries != 0 || got.DelaySeconds != DefaultRetryDelaySeconds {
+		t.Fatalf("retry = %+v, want explicit zero and default delay", got)
+	}
+}
+
+func TestRetrySettingsSaveLoadRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	want := Settings{Retry: Retry{MaxRetries: 3, DelaySeconds: 7}}
+	if err := Save(path, want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.Retry, want.Retry) {
+		t.Fatalf("retry got %+v want %+v", got.Retry, want.Retry)
+	}
+}
+
+func TestLegacySettingsNormalizeSkills(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte(`{"model":{"default":"claude-4"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.EffectiveSkills().Enabled || s.EffectiveSkills().MaxAutoMatches != DefaultSkillMaxAutoMatches {
+		t.Fatalf("skills = %+v", s.EffectiveSkills())
+	}
+}
+
+func TestSkillsBoundsNormalize(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	data := `{"skills":{"enabled":true,"max_auto_matches":99,"max_body_bytes":-1,"max_context_bytes":999999}}`
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := s.EffectiveSkills()
+	if got.MaxAutoMatches != DefaultSkillMaxAutoMatches || got.MaxBodyBytes != DefaultSkillMaxBodyBytes || got.MaxContextBytes != DefaultSkillMaxContextBytes {
+		t.Fatalf("skills bounds = %+v", got)
+	}
+}
+
+func TestRecapSaveLoadRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	want := Settings{Recap: Recap{Enabled: true, Model: "claude-4", AfterChats: 3}}
+	if err := Save(path, want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.Recap, want.Recap) {
+		t.Fatalf("recap got %+v want %+v", got.Recap, want.Recap)
 	}
 }
 

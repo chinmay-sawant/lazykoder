@@ -341,6 +341,8 @@ func (m Model) loadSession(sess *db.Session) Model {
 	m.selectedItem = -1
 	m.lastTool = -1
 	m.pendingUser = ""
+	m.turnHasNewUser = false
+	m.successfulRecapChats = 0
 	m.inputHistory = nil
 	m.historyCursor = -1
 	m.historyDraft = ""

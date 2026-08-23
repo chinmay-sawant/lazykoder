@@ -75,6 +75,12 @@ func (m Model) frame() string {
 	case m.sessionPickerMode:
 		return m.sessionPickerScreen()
 	case m.subagentLogMode:
+		if m.memoryHistoryDetailMode {
+			return m.memoryHistoryDetailScreen()
+		}
+		if m.recapDetailMode {
+			return m.recapDetailScreen()
+		}
 		return m.subagentLogScreen()
 	case m.settingsMode:
 		if m.layout.settingsPaint != "" {
@@ -267,18 +273,30 @@ func spliceDisplay(dst, src string, left int) string {
 // a dark background with bright text so the input stays clearly readable.
 // A bottom margin lifts it one row above the bottom edge.
 func (m Model) showLiveStatus() bool {
-	return m.busy || strings.TrimSpace(m.activity) != ""
+	return m.busy || m.recallScanning || m.skillsScanning || m.memoryScanJobs > 0 || strings.TrimSpace(m.activity) != ""
 }
 
 func (m Model) liveStatusView() string {
 	w := max(minPaneWidth, m.width)
 	label := strings.TrimSpace(m.activity)
+	mark := m.workRailMark()
+	if m.recallScanning {
+		label = "scanning memory patterns"
+		mark = m.memoryScanMark()
+	} else if m.skillsScanning {
+		label = "scanning approved skills"
+		mark = m.memoryScanMark()
+	} else if !m.busy && m.memoryScanJobs > 0 {
+		label = "updating memories.md"
+		mark = m.memoryScanMark()
+	}
 	if label == "" {
 		label = thinkingLabel
 	}
+	label = truncateRunes(label, max(1, w/layoutHalf))
 	// Primary line: work rail + live activity so the user can see progress.
-	status := m.workRailMark() + " " + busyStyle.Render("working") + "  " + hintStyle.Render(label)
-	status = lipgloss.NewStyle().Width(w).MaxWidth(w).Render(truncateRunes(status, w))
+	status := mark + " " + busyStyle.Render("working") + "  " + hintStyle.Render(label)
+	status = lipgloss.NewStyle().Width(w).MaxWidth(w).Render(ansi.Truncate(status, w, "…"))
 	if !m.busy {
 		return "\n" + status
 	}
@@ -290,6 +308,16 @@ func (m Model) liveStatusView() string {
 	}
 	actionLine := hintStyle.Width(w).Render(truncateRunes(actions, w))
 	return "\n" + status + "\n" + actionLine
+}
+
+func (m Model) memoryScanMark() string {
+	frames := []rune(memoryScanFrames)
+	if len(frames) == 0 {
+		return "⌕"
+	}
+	frame := frames[m.pulse%len(frames)]
+	style := lipgloss.NewStyle().Foreground(theme.PulseAccent(m.pulseT()))
+	return style.Render(string(frame))
 }
 
 // jumpBarVisible reports whether the transcript is scrolled up so the

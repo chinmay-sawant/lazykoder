@@ -9,6 +9,7 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/agent"
 	"github.com/chinmay-sawant/lazykoder/internal/db"
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
+	"github.com/chinmay-sawant/lazykoder/internal/skills"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/question"
 )
 
@@ -111,6 +112,7 @@ func (r AgentRunner) Run(ctx context.Context, job Job) (Result, error) {
 		Host:             childSubagentHost(job),
 		ToolNames:        job.Tools,
 		AgentName:        job.Name,
+		SkillContext:     append([]skills.Context{}, job.Skills...),
 		DisableStreaming: true,
 		CompactAuto:      job.ContextWindow > 0,
 	})

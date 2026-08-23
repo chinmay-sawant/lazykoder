@@ -14,6 +14,7 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/db"
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 	"github.com/chinmay-sawant/lazykoder/internal/roles"
+	"github.com/chinmay-sawant/lazykoder/internal/skills"
 )
 
 // Poll tuning for recovering a job that is open in the store but not yet in
@@ -373,6 +374,7 @@ func (m *Manager) buildJob(id, parentSessionID, parentPartID, name, role string,
 		Depth:           1, // Manager only builds direct children of the chat parent
 		MaxDepth:        cfg.MaxDepth,
 		Tools:           roles.Tools(role),
+		Skills:          append([]skills.Context{}, rt.Skills...),
 		Confirm:         confirm,
 		Ask:             nil, // children never get the question tool
 	}

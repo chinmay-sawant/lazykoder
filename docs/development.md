@@ -39,7 +39,7 @@ internal/
   agent/                      turn loop, history, compact, tool dispatch
   prompts/                    embedded compact.md summarizer prompt
   subagent/                   Manager, Host, AgentRunner (concurrency)
-  settings/                   project settings: slot, model, agents, compaction
+  settings/                   project settings: slot, model, agents, compaction, retries
   policy/                     bash classifier
   tools/{bash,read,grep,write,
          edit,question,

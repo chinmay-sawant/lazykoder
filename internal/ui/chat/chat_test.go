@@ -1660,11 +1660,13 @@ func TestLiveActivitySitsAbovePrompt(t *testing.T) {
 	}
 	m.pulseOn = true
 	m.pulse = 0
-	dim := stripANSI(m.liveStatusView())
+	dimPlasma := m.plasmaBlob()
+	dim := m.liveStatusView()
 	m.pulse = pulseSteps / 2
-	lit := stripANSI(m.liveStatusView())
-	if !strings.Contains(dim, workRail) || !strings.Contains(lit, workRail) {
-		t.Fatalf("throbbing reply rail missing: dim=%q lit=%q", dim, lit)
+	litPlasma := m.plasmaBlob()
+	lit := m.liveStatusView()
+	if !strings.Contains(dim, dimPlasma) || !strings.Contains(lit, litPlasma) || dimPlasma == litPlasma {
+		t.Fatalf("plasma blob should animate the working status: dim=%q lit=%q", dim, lit)
 	}
 	if thinkAt < 0 || promptAt < 0 || thinkAt >= promptAt {
 		t.Fatalf("thinking should sit above the input box: think=%d prompt=%d\n%s", thinkAt, promptAt, v)
@@ -2243,8 +2245,8 @@ func TestThinkingFrameUsesBrackets(t *testing.T) {
 	m.syncTranscript()
 	raw := viewText(m)
 	v := stripANSI(raw)
-	if !strings.Contains(v, theme.StatusDiamond) {
-		t.Fatalf("in-flight tool card missing status diamond: %q", v)
+	if !strings.Contains(v, theme.StatusBatonFrame(m.pulse)) {
+		t.Fatalf("in-flight tool card missing baton spinner: %q", v)
 	}
 	if !strings.Contains(v, "bash") {
 		t.Fatalf("in-flight tool card missing bash: %q", v)
@@ -2815,8 +2817,8 @@ func TestAtPickerListsSubagentsWithStatus(t *testing.T) {
 	if !strings.Contains(v, "agent") {
 		t.Fatalf("picker missing agent label: %q", v)
 	}
-	if !strings.Contains(v, "completed") && !strings.Contains(v, theme.StatusDiamond) {
-		t.Fatalf("picker missing status: %q", v)
+	if !strings.Contains(v, "completed") && !strings.Contains(v, theme.StatusBatonFrame(0)) {
+		t.Fatalf("picker missing baton status mark: %q", v)
 	}
 	m = upd(m, enter())
 	if m.filePickerMode {

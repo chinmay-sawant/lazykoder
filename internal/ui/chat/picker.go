@@ -11,6 +11,7 @@ import (
 
 	"github.com/chinmay-sawant/lazykoder/internal/agent"
 	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
+	"github.com/chinmay-sawant/lazykoder/internal/skills"
 )
 
 // pickerRowMinLeftW is the minimum width left for the model label when a
@@ -38,12 +39,14 @@ func (m Model) pickerView() string {
 	kind := "models"
 	if m.pickerKind == pickerKindVariant {
 		kind = "reasoning"
+	} else if m.pickerKind == pickerKindSkills {
+		kind = "skills"
 	}
 	meta := m.pickerSelectedLabel()
 
 	vpH := m.pickerVPHeight()
 	body := ""
-	if m.modelsErr != "" && m.pickerKind != pickerKindVariant {
+	if m.modelsErr != "" && m.pickerKind != pickerKindVariant && m.pickerKind != pickerKindSkills {
 		body = errStyle.Render("models unavailable: " + m.modelsErr)
 	} else if len(m.pickerItems) == 0 {
 		if m.pickerKind == pickerKindVariant {
@@ -52,6 +55,8 @@ func (m Model) pickerView() string {
 			} else {
 				body = hintStyle.Render("no variants match \"" + m.pickerFilter + "\"")
 			}
+		} else if m.pickerKind == pickerKindSkills && len(m.pickerSkillItems) == 0 {
+			body = hintStyle.Render("no skills discovered")
 		} else if len(m.models) == 0 {
 			body = hintStyle.Render("no models loaded")
 		} else {
@@ -64,8 +69,11 @@ func (m Model) pickerView() string {
 	}
 
 	filter := "filter /  •  r refresh  •  enter select  •  esc cancel"
-	if m.pickerKind == pickerKindVariant {
+	switch m.pickerKind {
+	case pickerKindVariant:
 		filter = "enter select  •  esc cancel  •  sent as reasoning_effort"
+	case pickerKindSkills:
+		filter = "filter /  •  enter activate  •  esc cancel"
 	}
 	if m.pickerFromPrompt {
 		filter = "type to search  •  enter select  •  esc cancel"
@@ -101,6 +109,15 @@ func (m Model) pickerRow(id string, selected bool, width int) string {
 	}
 	left := prefix + m.pickerItemLabel(id)
 	if m.pickerKind == pickerKindVariant {
+		return left
+	}
+	if m.pickerKind == pickerKindSkills {
+		for _, skill := range m.pickerSkillItems {
+			if skill.DescriptorPath != id {
+				continue
+			}
+			return left + "  " + string(skill.Scope) + "  " + skill.DisplayPath
+		}
 		return left
 	}
 	right := modelscache.ProviderOf(m.modelInfos, id)
@@ -249,6 +266,23 @@ func (m Model) selectPickerItem(idx int) (Model, tea.Cmd) {
 		m.settingsPickDefault = false
 		return m.openSettings(), nil
 	}
+	if m.settingsPickRecap {
+		m = m.setRecapModel(m.pickerItems[idx])
+		m = m.finishPickerSelection()
+		m.settingsPickRecap = false
+		return m.openSettings(), nil
+	}
+	if m.pickerKind == pickerKindSkills {
+		for _, skill := range m.pickerSkillItems {
+			if skill.DescriptorPath != m.pickerItems[idx] {
+				continue
+			}
+			m.activeSkills = []skills.Skill{skill}
+			m.copyNotice = "skill activated: " + skill.Name
+			return m.finishPickerSelection(), clearCopyNotice()
+		}
+		return m.finishPickerSelection(), nil
+	}
 	if m.pickerKind == pickerKindVariant {
 		m.variant = m.pickerItems[idx]
 		m.syncSessionVariant()
@@ -278,11 +312,13 @@ func (m Model) finishPickerSelection() Model {
 }
 
 func (m Model) closePicker() Model {
-	reopenSettings := m.settingsPickDefault
+	reopenSettings := m.settingsPickDefault || m.settingsPickRecap
 	m = m.clearFocus(focusPicker)
 	m.pickerKind = pickerKindModel
+	m.pickerSkillItems = nil
 	m.dragOn = false
 	m.settingsPickDefault = false
+	m.settingsPickRecap = false
 	if reopenSettings {
 		return m.openSettings()
 	}
@@ -302,6 +338,20 @@ func (m Model) refreshPickerCursor() Model {
 func (m *Model) applyFilter() {
 	m.pickerItems = nil
 	needle := strings.ToLower(m.pickerFilter)
+	if m.pickerKind == pickerKindSkills {
+		for _, skill := range m.pickerSkillItems {
+			haystack := strings.ToLower(skill.Name + " " + skill.Description + " " + strings.Join(skill.Triggers, " ") + " " + skill.DisplayPath)
+			if modelMatchesFilter(haystack, "", needle) {
+				m.pickerItems = append(m.pickerItems, skill.DescriptorPath)
+			}
+		}
+		if m.pickerCursor >= len(m.pickerItems) {
+			m.pickerCursor = max(0, len(m.pickerItems)-1)
+		}
+		m.pickerVp.SetHeight(m.pickerVPHeight())
+		m.pickerVp.SetContent(m.pickerContent(m.pickerVp.Width()))
+		return
+	}
 	for _, id := range m.pickerSource() {
 		if modelMatchesFilter(id, modelscache.ProviderOf(m.modelInfos, id), needle) {
 			m.pickerItems = append(m.pickerItems, id)
@@ -346,6 +396,28 @@ func (m Model) openVariantPicker() Model {
 	return m.openKindPicker(pickerKindVariant)
 }
 
+func (m Model) openSkillsPicker(query string) (Model, tea.Cmd) {
+	m = m.openKindPicker(pickerKindSkills)
+	m.pickerFilter = strings.TrimSpace(query)
+	if m.pickerFilter != "" {
+		m.applyFilter()
+	}
+	m.skillsScanning = true
+	m.activity = "scanning approved skills"
+	return m, m.scanSkills
+}
+
+func (m Model) scanSkills() tea.Msg {
+	cfg := m.projectSettings.EffectiveSkills()
+	opts := skills.DefaultOptions(m.workdir)
+	opts.IncludeLocal = cfg.IncludeLocal
+	opts.IncludeGlobal = cfg.IncludeGlobal
+	opts.MaxAutoMatches = cfg.MaxAutoMatches
+	opts.MaxBody = cfg.MaxBodyBytes
+	catalog, err := skills.Discover(context.Background(), opts)
+	return skillsMsg{catalog: catalog, err: err}
+}
+
 func (m Model) openKindPicker(kind string) Model {
 	if !m.pickerBuilt {
 		m.pickerVp = viewport.New(viewport.WithWidth(pickerVpDefaultW), viewport.WithHeight(pickerVpDefaultH))
@@ -375,6 +447,13 @@ func (m Model) openKindPicker(kind string) Model {
 }
 
 func (m Model) pickerSource() []string {
+	if m.pickerKind == pickerKindSkills {
+		out := make([]string, 0, len(m.pickerSkillItems))
+		for _, skill := range m.pickerSkillItems {
+			out = append(out, skill.DescriptorPath)
+		}
+		return out
+	}
 	if m.pickerKind == pickerKindVariant {
 		info, ok := modelscache.InfoOf(m.modelInfos, m.modelLabel())
 		if !ok {
@@ -386,8 +465,17 @@ func (m Model) pickerSource() []string {
 }
 
 func (m Model) pickerSelectedValue() string {
+	if m.pickerKind == pickerKindSkills {
+		if len(m.activeSkills) > 0 {
+			return m.activeSkills[0].DescriptorPath
+		}
+		return ""
+	}
 	if m.pickerKind == pickerKindVariant {
 		return m.variant
+	}
+	if m.settingsPickRecap {
+		return m.projectSettings.EffectiveRecap().Model
 	}
 	current := m.model
 	if current == "" && m.client != nil {
@@ -397,6 +485,12 @@ func (m Model) pickerSelectedValue() string {
 }
 
 func (m Model) pickerSelectedLabel() string {
+	if m.pickerKind == pickerKindSkills {
+		if len(m.activeSkills) > 0 {
+			return m.activeSkills[0].Name
+		}
+		return "none"
+	}
 	if m.pickerKind == pickerKindVariant {
 		if m.variant != "" {
 			return m.variant
@@ -414,6 +508,14 @@ func (m Model) pickerSelectedLabel() string {
 }
 
 func (m Model) pickerItemLabel(id string) string {
+	if m.pickerKind == pickerKindSkills {
+		for _, skill := range m.pickerSkillItems {
+			if skill.DescriptorPath == id {
+				return skill.Name
+			}
+		}
+		return id
+	}
 	if m.pickerKind == pickerKindVariant {
 		if id == "" {
 			return "default"

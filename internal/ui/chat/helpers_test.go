@@ -152,7 +152,7 @@ func (f *fakeProvider) requestModel(idx int) string {
 }
 
 func newClient(srv *httptest.Server) *opencode.Client {
-	return opencode.NewClient("test-key", opencode.WithBaseURL(srv.URL))
+	return opencode.NewClient("test-key", opencode.WithBaseURL(srv.URL), opencode.WithRetryPolicy(opencode.RetryPolicy{MaxRetries: 0}))
 }
 
 type pump struct {

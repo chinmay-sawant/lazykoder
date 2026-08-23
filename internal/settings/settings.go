@@ -56,6 +56,39 @@ const (
 	MinCompactPercent = 5
 	// MaxCompactPercent is the highest selectable auto-compact threshold.
 	MaxCompactPercent = 99
+	// DefaultRecapAfterChats schedules a recap after two successful chats.
+	DefaultRecapAfterChats = 2
+	// MinRecapAfterChats is the lowest recap scheduling threshold.
+	MinRecapAfterChats = 1
+	// MaxRecapAfterChats caps the recap scheduling threshold.
+	MaxRecapAfterChats = 20
+	// DefaultRetryMaxRetries is the number of transient API retries after the
+	// initial request.
+	DefaultRetryMaxRetries = 5
+	// MinRetryMaxRetries allows retries to be disabled explicitly.
+	MinRetryMaxRetries = 0
+	// MaxRetryMaxRetries caps the configured retry count.
+	MaxRetryMaxRetries = 20
+	// DefaultRetryDelaySeconds is the delay between transient API attempts.
+	DefaultRetryDelaySeconds = 10
+	// MinRetryDelaySeconds allows immediate retries when explicitly selected.
+	MinRetryDelaySeconds = 0
+	// MaxRetryDelaySeconds caps the configured retry delay.
+	MaxRetryDelaySeconds = 300
+	// DefaultSkillMaxAutoMatches limits automatic skill context injection.
+	DefaultSkillMaxAutoMatches = 2
+	// MinSkillMaxAutoMatches is the smallest automatic skill match count.
+	MinSkillMaxAutoMatches = 1
+	// MaxSkillMaxAutoMatches caps automatic skill context injection.
+	MaxSkillMaxAutoMatches = 12
+	// DefaultSkillMaxBodyBytes bounds one descriptor in a model request.
+	DefaultSkillMaxBodyBytes = 48 * 1024
+	// MaxSkillMaxBodyBytes caps one descriptor body read.
+	MaxSkillMaxBodyBytes = 256 * 1024
+	// DefaultSkillMaxContextBytes bounds the combined skill context block.
+	DefaultSkillMaxContextBytes = 96 * 1024
+	// MaxSkillMaxContextBytes caps the combined skill context block.
+	MaxSkillMaxContextBytes = 256 * 1024
 	// defaultCompactPercent / defaultKeepTokens mirror agent.DefaultCompact*
 	// (agent owns the named runtime constants; settings only persists knobs).
 	defaultCompactPercent = 80
@@ -122,6 +155,36 @@ type Compaction struct {
 	KeepTokens int64 `json:"keep_tokens"`
 }
 
+// Recap holds the hidden local-memory recap worker preferences.
+type Recap struct {
+	// Enabled controls whether completed parent turns may create recaps.
+	Enabled bool `json:"enabled"`
+	// Model is the model id used for recap generation.
+	Model string `json:"model"`
+	// AfterChats is the number of successful parent chats before scheduling.
+	AfterChats int `json:"after_chats"`
+}
+
+// Retry holds transient chat API retry preferences.
+type Retry struct {
+	// MaxRetries is in addition to the initial request.
+	MaxRetries int `json:"max_retries"`
+	// DelaySeconds is the wait between retry attempts.
+	DelaySeconds int `json:"delay_seconds"`
+}
+
+// Skills controls bounded discovery and request-time skill context.
+type Skills struct {
+	Enabled         bool `json:"enabled"`
+	AutoDetect      bool `json:"auto_detect"`
+	IncludeLocal    bool `json:"include_local"`
+	IncludeGlobal   bool `json:"include_global"`
+	Remember        bool `json:"remember"`
+	MaxAutoMatches  int  `json:"max_auto_matches"`
+	MaxBodyBytes    int  `json:"max_body_bytes"`
+	MaxContextBytes int  `json:"max_context_bytes"`
+}
+
 // Settings is the on-disk project config under .lazykoder/settings.json.
 type Settings struct {
 	Appearance Appearance `json:"appearance"`
@@ -129,6 +192,9 @@ type Settings struct {
 	Model      Model      `json:"model"`
 	Agents     Agents     `json:"agents"`
 	Compaction Compaction `json:"compaction"`
+	Recap      Recap      `json:"recap"`
+	Retry      Retry      `json:"retry"`
+	Skills     Skills     `json:"skills"`
 }
 
 // Default returns the built-in defaults.
@@ -160,6 +226,25 @@ func Default() Settings {
 			Auto:       true,
 			Percent:    defaultCompactPercent,
 			KeepTokens: defaultKeepTokens,
+		},
+		Recap: Recap{
+			Enabled:    false,
+			Model:      DefaultModelID,
+			AfterChats: DefaultRecapAfterChats,
+		},
+		Retry: Retry{
+			MaxRetries:   DefaultRetryMaxRetries,
+			DelaySeconds: DefaultRetryDelaySeconds,
+		},
+		Skills: Skills{
+			Enabled:         true,
+			AutoDetect:      true,
+			IncludeLocal:    true,
+			IncludeGlobal:   true,
+			Remember:        true,
+			MaxAutoMatches:  DefaultSkillMaxAutoMatches,
+			MaxBodyBytes:    DefaultSkillMaxBodyBytes,
+			MaxContextBytes: DefaultSkillMaxContextBytes,
 		},
 	}
 }
@@ -226,6 +311,21 @@ func (s Settings) EffectiveCompaction() Compaction {
 	return s.normalized().Compaction
 }
 
+// EffectiveRecap returns normalized hidden recap preferences.
+func (s Settings) EffectiveRecap() Recap {
+	return s.normalized().Recap
+}
+
+// EffectiveRetry returns normalized transient chat retry preferences.
+func (s Settings) EffectiveRetry() Retry {
+	return s.normalized().Retry
+}
+
+// EffectiveSkills returns normalized skill discovery preferences.
+func (s Settings) EffectiveSkills() Skills {
+	return s.normalized().Skills
+}
+
 // EffectiveTimeout is the sub-agent timeout duration.
 // Zero DefaultTimeoutSec means no timeout from settings.
 func (a Agents) EffectiveTimeout() time.Duration {
@@ -255,6 +355,43 @@ func (s Settings) normalized() Settings {
 	s.Model.Variant = strings.TrimSpace(s.Model.Variant)
 	s.Agents = s.Agents.normalized()
 	s.Compaction = s.Compaction.normalized()
+	s.Recap = s.Recap.normalized()
+	s.Retry = s.Retry.normalized()
+	s.Skills = s.Skills.normalized()
+	return s
+}
+
+func (r Retry) normalized() Retry {
+	if r.MaxRetries < MinRetryMaxRetries || r.MaxRetries > MaxRetryMaxRetries {
+		r.MaxRetries = DefaultRetryMaxRetries
+	}
+	if r.DelaySeconds < MinRetryDelaySeconds || r.DelaySeconds > MaxRetryDelaySeconds {
+		r.DelaySeconds = DefaultRetryDelaySeconds
+	}
+	return r
+}
+
+func (r Recap) normalized() Recap {
+	r.Model = strings.TrimSpace(r.Model)
+	if r.Model == "" {
+		r.Model = DefaultModelID
+	}
+	if r.AfterChats < MinRecapAfterChats || r.AfterChats > MaxRecapAfterChats {
+		r.AfterChats = DefaultRecapAfterChats
+	}
+	return r
+}
+
+func (s Skills) normalized() Skills {
+	if s.MaxAutoMatches < MinSkillMaxAutoMatches || s.MaxAutoMatches > MaxSkillMaxAutoMatches {
+		s.MaxAutoMatches = DefaultSkillMaxAutoMatches
+	}
+	if s.MaxBodyBytes <= 0 || s.MaxBodyBytes > MaxSkillMaxBodyBytes {
+		s.MaxBodyBytes = DefaultSkillMaxBodyBytes
+	}
+	if s.MaxContextBytes <= 0 || s.MaxContextBytes > MaxSkillMaxContextBytes {
+		s.MaxContextBytes = DefaultSkillMaxContextBytes
+	}
 	return s
 }
 
@@ -381,6 +518,22 @@ func NormalizeAfterLoad(s Settings, raw []byte) Settings {
 		if !jsonHasKey(raw, "compaction", "keep_tokens") {
 			s.Compaction.KeepTokens = defaultKeepTokens
 		}
+	}
+	if !jsonHasKey(raw, "recap") {
+		s.Recap = Default().Recap
+	}
+	if !jsonHasKey(raw, "retry") {
+		s.Retry = Default().Retry
+	} else {
+		if !jsonHasKey(raw, "retry", "max_retries") {
+			s.Retry.MaxRetries = DefaultRetryMaxRetries
+		}
+		if !jsonHasKey(raw, "retry", "delay_seconds") {
+			s.Retry.DelaySeconds = DefaultRetryDelaySeconds
+		}
+	}
+	if !jsonHasKey(raw, "skills") {
+		s.Skills = Default().Skills
 	}
 	return s.normalized()
 }

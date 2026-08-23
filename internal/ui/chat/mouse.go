@@ -74,6 +74,30 @@ func (m Model) mousePress(msg tea.MouseClickMsg) (Model, tea.Cmd) {
 	// Sub-agent drawer sits above the composer: handle it before prompt hits
 	// so the compact strip is not stolen by the input box geometry.
 	if mu.Button == tea.MouseLeft && m.subagentPickerMode && !m.subagentLogMode {
+		if m.memoryHistoryMode {
+			if m.subagentDrawerCompact {
+				if m.pointerInSubagentDrawer(mu.Y) || m.subagentHeaderAt(mu.Y) {
+					m = m.clearTextSelection()
+					m = m.clearPromptSelection()
+					return m.expandMemoryHistoryDrawer(), nil
+				}
+			} else {
+				if m.subagentHeaderAt(mu.Y) {
+					m = m.clearTextSelection()
+					m = m.clearPromptSelection()
+					return m.collapseMemoryHistoryDrawer(), nil
+				}
+				if idx, ok := m.subagentIndexAtScreenY(mu.Y); ok {
+					m = m.clearTextSelection()
+					m = m.clearPromptSelection()
+					m.subagentCursor = idx
+					return m.openSelectedMemoryHistoryDetail()
+				}
+				if m.pointerInSubagentDrawer(mu.Y) {
+					return m, nil
+				}
+			}
+		}
 		if m.subagentDrawerCompact {
 			// Compact strip: any click expands (same as enter).
 			if m.pointerInSubagentDrawer(mu.Y) || m.subagentHeaderAt(mu.Y) {
@@ -87,6 +111,12 @@ func (m Model) mousePress(msg tea.MouseClickMsg) (Model, tea.Cmd) {
 				m = m.clearTextSelection()
 				m = m.clearPromptSelection()
 				return m.collapseSubagentDrawerToSummary(), nil
+			}
+			if m.recapRowAt(mu.Y) {
+				m = m.clearTextSelection()
+				m = m.clearPromptSelection()
+				m.recapSelected = true
+				return m.openSelectedRecapDetail()
 			}
 			if idx, ok := m.subagentIndexAtScreenY(mu.Y); ok {
 				m = m.clearTextSelection()
@@ -208,6 +238,11 @@ func (m Model) mousePress(msg tea.MouseClickMsg) (Model, tea.Cmd) {
 			if kind == itemReasoning {
 				m = m.clearTextSelection()
 				m.selectedItem = idx
+				// Clicking a thinking block toggles it, same as enter.
+				// Skip while streaming: the live block stays open.
+				if !m.busy {
+					m.items[idx].collapsed = !m.items[idx].collapsed
+				}
 				m.syncTranscript()
 				return m, nil
 			}
@@ -286,7 +321,7 @@ func (m Model) transcriptTop() int {
 	// headerView has no trailing newline; the \n after it in chatScreen
 	// only ends that row, it does not insert a blank line. Same for the
 	// todo strip. Adding 1 here pushed every click target one row below
-	// the painted ▸ / ◆ headers (web terminals made that obvious).
+	// the painted ▸ / baton headers (web terminals made that obvious).
 	top := lipgloss.Height(m.headerView())
 	if panel := m.todoPanelView(); panel != "" {
 		top += lipgloss.Height(panel)

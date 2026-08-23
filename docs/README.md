@@ -26,7 +26,7 @@ internal/db                     migrations + session/message/part/tool store
 internal/provider/opencode      HTTP client for OpenCode Go
 internal/agent                  turn loop, history, compact checkpoint
 internal/prompts                go:embed compact.md summarizer prompt
-internal/settings               project defaults: slot, model, agents, compaction
+internal/settings               project defaults: slot, model, agents, compaction, retries
 internal/policy                 bash classifier + Decision (allow/deny/ask)
 internal/tools                  bash, read, grep, write, edit, question, webfetch, task
 internal/ui/chat                transcript, prompt, status, model picker

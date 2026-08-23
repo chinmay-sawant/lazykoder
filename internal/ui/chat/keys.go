@@ -326,6 +326,7 @@ func (m Model) updateConfirmKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 func (m Model) submit(text string) (Model, tea.Cmd) {
 	m.prompt.SetValue("")
 	m.pendingUser = text
+	m.turnHasNewUser = true
 	m.historyCursor = -1
 	m.historyDraft = ""
 	m.pendingHistoryIndex = len(m.inputHistory)
@@ -354,6 +355,7 @@ func (m Model) runCompact(extra string) (Model, tea.Cmd) {
 	}
 	m.prompt.SetValue("")
 	m.pendingUser = ""
+	m.turnHasNewUser = false
 	m.turnItemFrom = len(m.items)
 	m.compactHint = ""
 	return m.startTurn(turnStart{
@@ -381,6 +383,7 @@ func (m Model) runContinue() (Model, tea.Cmd) {
 func (m Model) resumeAfterLimit() (Model, tea.Cmd) {
 	m.prompt.SetValue("")
 	m.pendingUser = ""
+	m.turnHasNewUser = false
 	m.historyCursor = -1
 	m.historyDraft = ""
 	m.pendingHistoryIndex = -1
@@ -427,6 +430,7 @@ func (m Model) cancelTurn() Model {
 	m.turnSeq++
 	m.busy = false
 	m.pendingUser = ""
+	m.turnHasNewUser = false
 	m.activity = ""
 	m.pulseOn = false
 	m.err = "cancelled"
@@ -457,6 +461,7 @@ func (m Model) forceSend(text string) (Model, tea.Cmd) {
 		m.turnSeq++
 		m.busy = false
 		m.pendingUser = ""
+		m.turnHasNewUser = false
 		m.activity = ""
 		m.pulseOn = false
 		m.turnCancel = nil
@@ -587,5 +592,3 @@ func (m Model) deleteSelectedHistory() (Model, tea.Cmd) {
 		return nil
 	}
 }
-
-

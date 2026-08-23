@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -36,7 +37,7 @@ func TestSettingsSlashOpensCard(t *testing.T) {
 	if !strings.Contains(v, "SETTINGS") || !strings.Contains(v, "[x]") {
 		t.Fatalf("settings card missing header/x: %q", v)
 	}
-	for _, want := range []string{"theme", "new-session model", "child timeout", "default role", "child bash confirms", "parent bash allowlist", "auto-compact", "compact at"} {
+	for _, want := range []string{"theme", "new-session model", "recaps enabled", "recap model", "recap after chats", "api retries", "retry delay", "skills enabled", "skills auto-detect", "skills local source", "skills global source", "remember skill references", "skill auto matches", "child timeout", "default role", "child bash confirms", "parent bash allowlist", "auto-compact", "compact at"} {
 		if !strings.Contains(v, want) {
 			t.Fatalf("settings card missing %q: %q", want, v)
 		}
@@ -210,6 +211,156 @@ func TestSettingsDefaultModelCyclePersists(t *testing.T) {
 	}
 }
 
+func TestSettingsRecapToggleAndModelPersist(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	m := New(Options{
+		Store:        newTestStore(t),
+		Client:       deadClient(),
+		Workdir:      dir,
+		SettingsPath: path,
+	})
+	m.models = []string{"deepseek-v4-flash", "claude-4"}
+	m = m.openSettings()
+	if m.projectSettings.EffectiveRecap().Enabled {
+		t.Fatal("recaps enabled by default")
+	}
+	if got := m.projectSettings.EffectiveRecap().Model; got != settings.DefaultModelID {
+		t.Fatalf("recap model = %q, want %q", got, settings.DefaultModelID)
+	}
+	if got := m.projectSettings.EffectiveRecap().AfterChats; got != settings.DefaultRecapAfterChats {
+		t.Fatalf("recap after chats = %d, want %d", got, settings.DefaultRecapAfterChats)
+	}
+	m.settingsCursor = settingsRowRecapEnabled
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyRight})
+	if !m.projectSettings.Recap.Enabled {
+		t.Fatal("right arrow did not enable recaps")
+	}
+	m.settingsCursor = settingsRowRecapModel
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyRight})
+	if got := m.projectSettings.Recap.Model; got != "claude-4" {
+		t.Fatalf("recap model = %q, want claude-4", got)
+	}
+	loaded, err := settings.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !loaded.Recap.Enabled || loaded.Recap.Model != "claude-4" || loaded.Recap.AfterChats != settings.DefaultRecapAfterChats {
+		t.Fatalf("persisted recap settings = %+v", loaded.Recap)
+	}
+}
+
+func TestSettingsRecapAfterChatsAdjustsAndPersists(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	m := New(Options{
+		Store:        newTestStore(t),
+		Client:       deadClient(),
+		Workdir:      dir,
+		SettingsPath: path,
+	}).openSettings()
+	m.settingsCursor = settingsRowRecapAfterChats
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyRight})
+	if got := m.projectSettings.EffectiveRecap().AfterChats; got != settings.DefaultRecapAfterChats+1 {
+		t.Fatalf("after chats = %d, want %d", got, settings.DefaultRecapAfterChats+1)
+	}
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyLeft})
+	if got := m.projectSettings.EffectiveRecap().AfterChats; got != settings.DefaultRecapAfterChats {
+		t.Fatalf("after chats after decrement = %d, want %d", got, settings.DefaultRecapAfterChats)
+	}
+	loaded, err := settings.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.EffectiveRecap().AfterChats != settings.DefaultRecapAfterChats {
+		t.Fatalf("persisted after chats = %d, want %d", loaded.EffectiveRecap().AfterChats, settings.DefaultRecapAfterChats)
+	}
+}
+
+func TestSettingsRetryAdjustsAndPersists(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	m := New(Options{
+		Store:        newTestStore(t),
+		Client:       deadClient(),
+		Workdir:      dir,
+		SettingsPath: path,
+	}).openSettings()
+
+	m.settingsCursor = settingsRowRetryMaxRetries
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyLeft})
+	if got := m.projectSettings.EffectiveRetry().MaxRetries; got != settings.DefaultRetryMaxRetries-1 {
+		t.Fatalf("max retries after left = %d, want %d", got, settings.DefaultRetryMaxRetries-1)
+	}
+	m.settingsCursor = settingsRowRetryDelay
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyRight})
+	if got := m.projectSettings.EffectiveRetry().DelaySeconds; got != settings.DefaultRetryDelaySeconds+1 {
+		t.Fatalf("retry delay after right = %d, want %d", got, settings.DefaultRetryDelaySeconds+1)
+	}
+	policy := m.client.RetryPolicy()
+	if policy.MaxRetries != settings.DefaultRetryMaxRetries-1 || policy.Delay != 11*time.Second {
+		t.Fatalf("live client retry policy = %+v", policy)
+	}
+	loaded, err := settings.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := loaded.EffectiveRetry(); got.MaxRetries != settings.DefaultRetryMaxRetries-1 || got.DelaySeconds != settings.DefaultRetryDelaySeconds+1 {
+		t.Fatalf("persisted retry = %+v", got)
+	}
+}
+
+func TestSettingsRecapModelOpensSharedModelDrawer(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	m := New(Options{
+		Store:        newTestStore(t),
+		Client:       deadClient(),
+		Workdir:      dir,
+		SettingsPath: path,
+	}).openSettings()
+	m.models = []string{"deepseek-v4-flash", "claude-4"}
+	m.settingsCursor = settingsRowRecapModel
+
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !m.pickerMode || m.pickerKind != pickerKindModel || !m.settingsPickRecap {
+		t.Fatalf("picker state = mode=%v kind=%q recap=%v, want shared model drawer", m.pickerMode, m.pickerKind, m.settingsPickRecap)
+	}
+	if m.pickerCursor != 0 {
+		t.Fatalf("picker cursor = %d, want current recap model at index 0", m.pickerCursor)
+	}
+	m.pickerCursor = 1
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.pickerMode || !m.settingsMode {
+		t.Fatalf("after selection picker=%v settings=%v, want settings reopened", m.pickerMode, m.settingsMode)
+	}
+	if got := m.projectSettings.EffectiveRecap().Model; got != "claude-4" {
+		t.Fatalf("recap model = %q, want claude-4", got)
+	}
+	loaded, err := settings.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.EffectiveRecap().Model != "claude-4" {
+		t.Fatalf("persisted recap model = %q, want claude-4", loaded.EffectiveRecap().Model)
+	}
+}
+
+func TestSettingsRecapModelMouseOpensSharedModelDrawer(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()}).openSettings()
+	m.models = []string{"deepseek-v4-flash", "claude-4"}
+	m.settingsCursor = settingsRowRecapModel
+	line := settingsPaintedRow(m, "recap model")
+	x0, x1, ok := displaySpan(line, "recap model")
+	if !ok {
+		t.Fatalf("recap model label missing from painted row: %q", line)
+	}
+	next, _, hit := m.settingsHit((x0+x1)/2, settingsPaintedRowY(m, "recap model"), tea.MouseLeft)
+	if !hit || !next.pickerMode || next.pickerKind != pickerKindModel || !next.settingsPickRecap {
+		t.Fatalf("mouse result = hit=%v picker=%v kind=%q recap=%v, want shared model drawer", hit, next.pickerMode, next.pickerKind, next.settingsPickRecap)
+	}
+}
+
 func TestSettingsCloseClick(t *testing.T) {
 	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
 	mm, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
@@ -311,6 +462,23 @@ func TestNewSeedsModelFromSettings(t *testing.T) {
 	}
 	if m.variant != "high" {
 		t.Fatalf("variant = %q, want high", m.variant)
+	}
+}
+
+func TestNewAppliesRetrySettingsToClient(t *testing.T) {
+	cfg := settings.Default()
+	cfg.Retry.MaxRetries = 2
+	cfg.Retry.DelaySeconds = 4
+	client := deadClient()
+	_ = New(Options{
+		Store:    newTestStore(t),
+		Client:   client,
+		Workdir:  t.TempDir(),
+		Settings: &cfg,
+	})
+	policy := client.RetryPolicy()
+	if policy.MaxRetries != 2 || policy.Delay != 4*time.Second {
+		t.Fatalf("retry policy = %+v, want 2 retries and 4s", policy)
 	}
 }
 
@@ -456,6 +624,39 @@ func TestSettingsCardFitsCompactTerminal(t *testing.T) {
 		if !strings.Contains(view, want) {
 			t.Fatalf("scrolled settings missing %q:\n%s", want, view)
 		}
+	}
+}
+
+func TestSettingsRecapRowsFitRequestedTerminals(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		width  int
+		height int
+	}{
+		{name: "wide", width: 120, height: 36},
+		{name: "compact", width: 80, height: 24},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+			mm, _ := m.Update(tea.WindowSizeMsg{Width: tc.width, Height: tc.height})
+			m = mm.(Model).openSettings()
+			if got := len(strings.Split(m.settingsScreen(), "\n")); got != tc.height {
+				t.Fatalf("settings height = %d, want %d", got, tc.height)
+			}
+			for _, row := range []struct {
+				id    int
+				label string
+			}{
+				{id: settingsRowRecapEnabled, label: "recaps enabled"},
+				{id: settingsRowRecapModel, label: "recap model"},
+				{id: settingsRowRecapAfterChats, label: "recap after chats"},
+			} {
+				m.settingsCursor = row.id
+				if y := settingsPaintedRowY(m, row.label); y < 0 {
+					t.Fatalf("row %q is not visible at %dx%d:\n%s", row.label, tc.width, tc.height, stripANSI(viewText(m)))
+				}
+			}
+		})
 	}
 }
 
@@ -607,7 +808,7 @@ func settingsPaintedRow(m Model, label string) string {
 
 func settingsHitX(line string, row int) int {
 	switch row {
-	case settingsRowLimit, settingsRowCompactAuto, settingsRowAgentsEnabled, settingsRowAgentsWriters, settingsRowAllowlistEnabled:
+	case settingsRowLimit, settingsRowCompactAuto, settingsRowAgentsEnabled, settingsRowAgentsWriters, settingsRowAllowlistEnabled, settingsRowRecapEnabled, settingsRowSkillsEnabled, settingsRowSkillsAutoDetect, settingsRowSkillsLocal, settingsRowSkillsGlobal, settingsRowSkillsRemember:
 		if x0, x1, ok := displaySpan(line, "[on]"); ok {
 			return (x0 + x1) / 2
 		}
@@ -658,6 +859,28 @@ func settingsHitChanged(before, after Model, row int) bool {
 		return aa.ModelOverride != ba.ModelOverride
 	case settingsRowExploreModel:
 		return aa.ExploreModel != ba.ExploreModel
+	case settingsRowRecapEnabled:
+		return after.projectSettings.Recap.Enabled != before.projectSettings.Recap.Enabled
+	case settingsRowRecapModel:
+		return after.projectSettings.Recap.Model != before.projectSettings.Recap.Model
+	case settingsRowRecapAfterChats:
+		return after.projectSettings.EffectiveRecap().AfterChats != before.projectSettings.EffectiveRecap().AfterChats
+	case settingsRowRetryMaxRetries:
+		return after.projectSettings.EffectiveRetry().MaxRetries != before.projectSettings.EffectiveRetry().MaxRetries
+	case settingsRowRetryDelay:
+		return after.projectSettings.EffectiveRetry().DelaySeconds != before.projectSettings.EffectiveRetry().DelaySeconds
+	case settingsRowSkillsEnabled:
+		return after.projectSettings.EffectiveSkills().Enabled != before.projectSettings.EffectiveSkills().Enabled
+	case settingsRowSkillsAutoDetect:
+		return after.projectSettings.EffectiveSkills().AutoDetect != before.projectSettings.EffectiveSkills().AutoDetect
+	case settingsRowSkillsLocal:
+		return after.projectSettings.EffectiveSkills().IncludeLocal != before.projectSettings.EffectiveSkills().IncludeLocal
+	case settingsRowSkillsGlobal:
+		return after.projectSettings.EffectiveSkills().IncludeGlobal != before.projectSettings.EffectiveSkills().IncludeGlobal
+	case settingsRowSkillsRemember:
+		return after.projectSettings.EffectiveSkills().Remember != before.projectSettings.EffectiveSkills().Remember
+	case settingsRowSkillsMaxMatches:
+		return after.projectSettings.EffectiveSkills().MaxAutoMatches != before.projectSettings.EffectiveSkills().MaxAutoMatches
 	case settingsRowLimit:
 		return after.projectSettings.Slot.LimitEnabled != before.projectSettings.Slot.LimitEnabled
 	case settingsRowSteps:

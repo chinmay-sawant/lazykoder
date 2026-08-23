@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -22,6 +23,17 @@ const (
 	settingsRowVariant
 	settingsRowChildModel
 	settingsRowExploreModel
+	settingsRowRecapEnabled
+	settingsRowRecapModel
+	settingsRowRecapAfterChats
+	settingsRowRetryMaxRetries
+	settingsRowRetryDelay
+	settingsRowSkillsEnabled
+	settingsRowSkillsAutoDetect
+	settingsRowSkillsLocal
+	settingsRowSkillsGlobal
+	settingsRowSkillsRemember
+	settingsRowSkillsMaxMatches
 	settingsRowLimit
 	settingsRowSteps
 	settingsRowCompactAuto
@@ -103,6 +115,7 @@ func (m Model) closeSettings() Model {
 	m.settingsCursor = 0
 	m.settingsHover = -1
 	m.settingsPickDefault = false
+	m.settingsPickRecap = false
 	m.settingsEdit = false
 	m.settingsEditValue = ""
 	return m
@@ -252,6 +265,12 @@ func (m Model) settingsPaintLines(innerW int) []settingsPaintLine {
 	if exploreVal == "" {
 		exploreVal = "inherit"
 	}
+	recap := m.projectSettings.EffectiveRecap()
+	skillCfg := m.projectSettings.EffectiveSkills()
+	recapModelVal := recap.Model
+	if recapModelVal == "" {
+		recapModelVal = settings.DefaultModelID
+	}
 	limitOn := "off"
 	if m.projectSettings.Slot.LimitEnabled {
 		limitOn = "on"
@@ -291,6 +310,10 @@ func (m Model) settingsPaintLines(innerW int) []settingsPaintLine {
 		m.settingsPaintRow(settingsRowChildModel, "◂ "+childVal+" ▸", innerW, false),
 		m.settingsPaintRow(settingsRowExploreModel, "◂ "+exploreVal+" ▸", innerW, false),
 		settingsPaintLine{kind: settingsLineHint, row: -1, text: "live /model and /variant do not change these defaults"},
+		settingsPaintLine{kind: settingsLineHeader, row: -1, text: "recaps"},
+		m.settingsPaintRow(settingsRowRecapEnabled, "["+boolOn(recap.Enabled)+"]", innerW, false),
+		m.settingsPaintRow(settingsRowRecapModel, "◂ "+recapModelVal+" ▸", innerW, false),
+		m.settingsPaintRow(settingsRowRecapAfterChats, fmt.Sprintf("◂ %d ▸", recap.AfterChats), innerW, false),
 		settingsPaintLine{kind: settingsLineHeader, row: -1, text: "agent loop"},
 		m.settingsPaintRow(settingsRowLimit, "["+limitOn+"]", innerW, false),
 		m.settingsPaintRow(settingsRowSteps, stepsVal, innerW, stepsDim),
@@ -310,8 +333,45 @@ func (m Model) settingsPaintLines(innerW int) []settingsPaintLine {
 		m.settingsPaintRow(settingsRowBashConfirm, "◂ "+confirmVal+" ▸", innerW, false),
 		m.settingsPaintRow(settingsRowAllowlistEnabled, "["+boolOn(m.projectSettings.Agents.BashAllowlistEnabled)+"]", innerW, false),
 		m.settingsPaintRow(settingsRowAllowlist, allowlistVal, innerW, false),
-		settingsPaintLine{kind: settingsLineHint, row: -1, text: "children are not filtered by this list"},
+		settingsPaintLine{kind: settingsLineHeader, row: -1, text: "request retries"},
+		m.settingsPaintRow(settingsRowRetryMaxRetries, fmt.Sprintf("◂ %d ▸", m.projectSettings.EffectiveRetry().MaxRetries), innerW, false),
+		m.settingsPaintRow(settingsRowRetryDelay, fmt.Sprintf("◂ %ds ▸", m.projectSettings.EffectiveRetry().DelaySeconds), innerW, false),
 	)
+	if m.height < settingsUsageMinHeight || m.usageLoaded {
+		// Keep compact and usage cards stable. The master switch remains
+		// visible; the detailed skill controls appear when the full card has
+		// room for them.
+		insertAt := 0
+		for index, line := range out {
+			if line.kind == settingsLineHeader && line.text == "agent loop" {
+				insertAt = index
+				break
+			}
+		}
+		out = append(out, settingsPaintLine{})
+		copy(out[insertAt+1:], out[insertAt:])
+		out[insertAt] = m.settingsPaintRow(settingsRowSkillsEnabled, "["+boolOn(skillCfg.Enabled)+"]", innerW, false)
+	} else {
+		insertAt := 0
+		for index, line := range out {
+			if line.kind == settingsLineHeader && line.text == "agent loop" {
+				insertAt = index
+				break
+			}
+		}
+		skillLines := []settingsPaintLine{
+			{kind: settingsLineHeader, row: -1, text: "skills"},
+			m.settingsPaintRow(settingsRowSkillsEnabled, "["+boolOn(skillCfg.Enabled)+"]", innerW, false),
+			m.settingsPaintRow(settingsRowSkillsAutoDetect, "["+boolOn(skillCfg.AutoDetect)+"]", innerW, false),
+			m.settingsPaintRow(settingsRowSkillsLocal, "["+boolOn(skillCfg.IncludeLocal)+"]", innerW, false),
+			m.settingsPaintRow(settingsRowSkillsGlobal, "["+boolOn(skillCfg.IncludeGlobal)+"]", innerW, false),
+			m.settingsPaintRow(settingsRowSkillsRemember, "["+boolOn(skillCfg.Remember)+"]", innerW, false),
+			m.settingsPaintRow(settingsRowSkillsMaxMatches, fmt.Sprintf("◂ %d ▸", skillCfg.MaxAutoMatches), innerW, false),
+		}
+		out = append(out, make([]settingsPaintLine, len(skillLines))...)
+		copy(out[insertAt+len(skillLines):], out[insertAt:])
+		copy(out[insertAt:], skillLines)
+	}
 	if m.height >= settingsUsageMinHeight && m.usageLoaded {
 		out = append(out, settingsPaintLine{kind: settingsLineHeader, row: -1, text: "opencode usage"})
 		out = append(out,
@@ -361,6 +421,28 @@ func settingsRowLabel(row int) string {
 		return "child model override"
 	case settingsRowExploreModel:
 		return "explore model"
+	case settingsRowRecapEnabled:
+		return "recaps enabled"
+	case settingsRowRecapModel:
+		return "recap model"
+	case settingsRowRecapAfterChats:
+		return "recap after chats"
+	case settingsRowRetryMaxRetries:
+		return "api retries"
+	case settingsRowRetryDelay:
+		return "retry delay"
+	case settingsRowSkillsEnabled:
+		return "skills enabled"
+	case settingsRowSkillsAutoDetect:
+		return "skills auto-detect"
+	case settingsRowSkillsLocal:
+		return "skills local source"
+	case settingsRowSkillsGlobal:
+		return "skills global source"
+	case settingsRowSkillsRemember:
+		return "remember skill references"
+	case settingsRowSkillsMaxMatches:
+		return "skill auto matches"
 	case settingsRowLimit:
 		return "step limit"
 	case settingsRowSteps:
@@ -517,6 +599,43 @@ func (m Model) activateSettingsRow() (Model, tea.Cmd) {
 		return m.cycleChildModel(1), nil
 	case settingsRowExploreModel:
 		return m.cycleExploreModel(1), nil
+	case settingsRowRecapEnabled:
+		return m.setRecapEnabled(!m.projectSettings.EffectiveRecap().Enabled), nil
+	case settingsRowRecapModel:
+		m.settingsPickDefault = false
+		m.settingsPickRecap = true
+		m.settingsMode = false
+		return m.openKindPicker(pickerKindModel), nil
+	case settingsRowRecapAfterChats:
+		return m.openSettingInputForm("Recap after chats", "Successful chats before a recap", strconv.Itoa(m.projectSettings.EffectiveRecap().AfterChats), validateRecapAfterChats, func(mod Model, val string) (Model, tea.Cmd) {
+			v, _ := strconv.Atoi(val)
+			return mod.setRecapAfterChats(v), nil
+		})
+	case settingsRowRetryMaxRetries:
+		return m.openSettingInputForm("API retries", "Retries after a transient 500 or 503", strconv.Itoa(m.projectSettings.EffectiveRetry().MaxRetries), validateRetryMaxRetries, func(mod Model, val string) (Model, tea.Cmd) {
+			v, _ := strconv.Atoi(val)
+			return mod.setRetryMaxRetries(v), nil
+		})
+	case settingsRowRetryDelay:
+		return m.openSettingInputForm("Retry delay (sec)", "Wait between transient API attempts", strconv.Itoa(m.projectSettings.EffectiveRetry().DelaySeconds), validateRetryDelaySeconds, func(mod Model, val string) (Model, tea.Cmd) {
+			v, _ := strconv.Atoi(val)
+			return mod.setRetryDelaySeconds(v), nil
+		})
+	case settingsRowSkillsEnabled:
+		return m.setSkillsEnabled(!m.projectSettings.EffectiveSkills().Enabled), nil
+	case settingsRowSkillsAutoDetect:
+		return m.setSkillsAutoDetect(!m.projectSettings.EffectiveSkills().AutoDetect), nil
+	case settingsRowSkillsLocal:
+		return m.setSkillsIncludeLocal(!m.projectSettings.EffectiveSkills().IncludeLocal), nil
+	case settingsRowSkillsGlobal:
+		return m.setSkillsIncludeGlobal(!m.projectSettings.EffectiveSkills().IncludeGlobal), nil
+	case settingsRowSkillsRemember:
+		return m.setSkillsRemember(!m.projectSettings.EffectiveSkills().Remember), nil
+	case settingsRowSkillsMaxMatches:
+		return m.openSettingInputForm("Skill auto matches", "Automatic skills per request", strconv.Itoa(m.projectSettings.EffectiveSkills().MaxAutoMatches), validateSkillMaxMatches, func(mod Model, val string) (Model, tea.Cmd) {
+			v, _ := strconv.Atoi(val)
+			return mod.setSkillsMaxMatches(v), nil
+		})
 	case settingsRowLimit:
 		return m.setLimitEnabled(!m.projectSettings.Slot.LimitEnabled), nil
 	case settingsRowSteps:
@@ -594,6 +713,38 @@ func validatePercentSetting(s string) error {
 	return nil
 }
 
+func validateRecapAfterChats(s string) error {
+	v, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil || v < settings.MinRecapAfterChats || v > settings.MaxRecapAfterChats {
+		return fmt.Errorf("must be between %d and %d", settings.MinRecapAfterChats, settings.MaxRecapAfterChats)
+	}
+	return nil
+}
+
+func validateSkillMaxMatches(s string) error {
+	v, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil || v < settings.MinSkillMaxAutoMatches || v > settings.MaxSkillMaxAutoMatches {
+		return fmt.Errorf("must be between %d and %d", settings.MinSkillMaxAutoMatches, settings.MaxSkillMaxAutoMatches)
+	}
+	return nil
+}
+
+func validateRetryMaxRetries(s string) error {
+	v, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil || v < settings.MinRetryMaxRetries || v > settings.MaxRetryMaxRetries {
+		return fmt.Errorf("must be between %d and %d", settings.MinRetryMaxRetries, settings.MaxRetryMaxRetries)
+	}
+	return nil
+}
+
+func validateRetryDelaySeconds(s string) error {
+	v, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil || v < settings.MinRetryDelaySeconds || v > settings.MaxRetryDelaySeconds {
+		return fmt.Errorf("must be between %d and %d", settings.MinRetryDelaySeconds, settings.MaxRetryDelaySeconds)
+	}
+	return nil
+}
+
 func (m Model) setAllowlistEnabled(on bool) Model {
 	m.projectSettings.Agents.BashAllowlistEnabled = on
 	return m.persistSettings()
@@ -611,6 +762,45 @@ func (m Model) adjustSettings(delta int) Model {
 		return m.cycleChildModel(delta)
 	case settingsRowExploreModel:
 		return m.cycleExploreModel(delta)
+	case settingsRowRecapEnabled:
+		if delta > 0 {
+			return m.setRecapEnabled(true)
+		} else if delta < 0 {
+			return m.setRecapEnabled(false)
+		}
+	case settingsRowRecapModel:
+		return m.cycleRecapModel(delta)
+	case settingsRowRecapAfterChats:
+		return m.setRecapAfterChats(m.projectSettings.EffectiveRecap().AfterChats + delta)
+	case settingsRowRetryMaxRetries:
+		return m.setRetryMaxRetries(m.projectSettings.EffectiveRetry().MaxRetries + delta)
+	case settingsRowRetryDelay:
+		return m.setRetryDelaySeconds(m.projectSettings.EffectiveRetry().DelaySeconds + delta)
+	case settingsRowSkillsEnabled:
+		if delta > 0 {
+			return m.setSkillsEnabled(true)
+		}
+		if delta < 0 {
+			return m.setSkillsEnabled(false)
+		}
+	case settingsRowSkillsAutoDetect:
+		if delta != 0 {
+			return m.setSkillsAutoDetect(delta > 0)
+		}
+	case settingsRowSkillsLocal:
+		if delta != 0 {
+			return m.setSkillsIncludeLocal(delta > 0)
+		}
+	case settingsRowSkillsGlobal:
+		if delta != 0 {
+			return m.setSkillsIncludeGlobal(delta > 0)
+		}
+	case settingsRowSkillsRemember:
+		if delta != 0 {
+			return m.setSkillsRemember(delta > 0)
+		}
+	case settingsRowSkillsMaxMatches:
+		return m.setSkillsMaxMatches(m.projectSettings.EffectiveSkills().MaxAutoMatches + delta)
 	case settingsRowLimit:
 		if delta > 0 {
 			return m.setLimitEnabled(true)
@@ -711,6 +901,26 @@ func (m Model) toggleSettingsRow() Model {
 		return m.cycleChildModel(1)
 	case settingsRowExploreModel:
 		return m.cycleExploreModel(1)
+	case settingsRowRecapEnabled:
+		return m.setRecapEnabled(!m.projectSettings.EffectiveRecap().Enabled)
+	case settingsRowRecapModel:
+		return m.cycleRecapModel(1)
+	case settingsRowRetryMaxRetries:
+		return m.setRetryMaxRetries(m.projectSettings.EffectiveRetry().MaxRetries + 1)
+	case settingsRowRetryDelay:
+		return m.setRetryDelaySeconds(m.projectSettings.EffectiveRetry().DelaySeconds + 1)
+	case settingsRowSkillsEnabled:
+		return m.setSkillsEnabled(!m.projectSettings.EffectiveSkills().Enabled)
+	case settingsRowSkillsAutoDetect:
+		return m.setSkillsAutoDetect(!m.projectSettings.EffectiveSkills().AutoDetect)
+	case settingsRowSkillsLocal:
+		return m.setSkillsIncludeLocal(!m.projectSettings.EffectiveSkills().IncludeLocal)
+	case settingsRowSkillsGlobal:
+		return m.setSkillsIncludeGlobal(!m.projectSettings.EffectiveSkills().IncludeGlobal)
+	case settingsRowSkillsRemember:
+		return m.setSkillsRemember(!m.projectSettings.EffectiveSkills().Remember)
+	case settingsRowSkillsMaxMatches:
+		return m.setSkillsMaxMatches(m.projectSettings.EffectiveSkills().MaxAutoMatches + 1)
 	}
 	return m
 }
@@ -747,6 +957,26 @@ func (m Model) cycleDefaultVariant(delta int) Model {
 		idx += len(list)
 	}
 	return m.setDefaultVariant(list[idx])
+}
+
+func (m Model) cycleRecapModel(delta int) Model {
+	list := m.models
+	if len(list) == 0 {
+		list = []string{settings.DefaultModelID}
+	}
+	cur := m.projectSettings.EffectiveRecap().Model
+	if cur == "" {
+		cur = settings.DefaultModelID
+	}
+	idx := indexOfString(list, cur)
+	if idx < 0 {
+		idx = 0
+	}
+	idx = (idx + delta) % len(list)
+	if idx < 0 {
+		idx += len(list)
+	}
+	return m.setRecapModel(list[idx])
 }
 
 func (m Model) inheritModelChoices() []string {
@@ -906,6 +1136,95 @@ func (m Model) setDefaultVariant(v string) Model {
 	return m
 }
 
+func (m Model) setRecapEnabled(on bool) Model {
+	m.projectSettings.Recap.Enabled = on
+	if !on {
+		m.successfulRecapChats = 0
+	}
+	return m.persistSettings()
+}
+
+func (m Model) setRecapModel(id string) Model {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		id = settings.DefaultModelID
+	}
+	m.projectSettings.Recap.Model = id
+	return m.persistSettings()
+}
+
+func (m Model) setRecapAfterChats(value int) Model {
+	if value < settings.MinRecapAfterChats {
+		value = settings.MinRecapAfterChats
+	}
+	if value > settings.MaxRecapAfterChats {
+		value = settings.MaxRecapAfterChats
+	}
+	m.projectSettings.Recap.AfterChats = value
+	return m.persistSettings()
+}
+
+func (m Model) setRetryMaxRetries(value int) Model {
+	if value < settings.MinRetryMaxRetries {
+		value = settings.MinRetryMaxRetries
+	}
+	if value > settings.MaxRetryMaxRetries {
+		value = settings.MaxRetryMaxRetries
+	}
+	m.projectSettings.Retry.MaxRetries = value
+	return m.persistSettings()
+}
+
+func (m Model) setRetryDelaySeconds(value int) Model {
+	if value < settings.MinRetryDelaySeconds {
+		value = settings.MinRetryDelaySeconds
+	}
+	if value > settings.MaxRetryDelaySeconds {
+		value = settings.MaxRetryDelaySeconds
+	}
+	m.projectSettings.Retry.DelaySeconds = value
+	return m.persistSettings()
+}
+
+func (m Model) setSkillsEnabled(on bool) Model {
+	m.projectSettings.Skills.Enabled = on
+	if !on {
+		m.activeSkills = nil
+	}
+	return m.persistSettings()
+}
+
+func (m Model) setSkillsAutoDetect(on bool) Model {
+	m.projectSettings.Skills.AutoDetect = on
+	return m.persistSettings()
+}
+
+func (m Model) setSkillsIncludeLocal(on bool) Model {
+	m.projectSettings.Skills.IncludeLocal = on
+	return m.persistSettings()
+}
+
+func (m Model) setSkillsIncludeGlobal(on bool) Model {
+	m.projectSettings.Skills.IncludeGlobal = on
+	return m.persistSettings()
+}
+
+func (m Model) setSkillsRemember(on bool) Model {
+	m.projectSettings.Skills.Remember = on
+	return m.persistSettings()
+}
+
+func (m Model) setSkillsMaxMatches(value int) Model {
+	if value < settings.MinSkillMaxAutoMatches {
+		value = settings.MinSkillMaxAutoMatches
+	}
+	if value > settings.MaxSkillMaxAutoMatches {
+		value = settings.MaxSkillMaxAutoMatches
+	}
+	m.projectSettings.Skills.MaxAutoMatches = value
+	return m.persistSettings()
+}
+
 func (m Model) setLimitEnabled(on bool) Model {
 	m.projectSettings.Slot.LimitEnabled = on
 	m.maxSteps = m.projectSettings.EffectiveMaxSteps()
@@ -1017,6 +1336,13 @@ func (m Model) setAgentsWriters(on bool) Model {
 }
 
 func (m Model) persistSettings() Model {
+	retry := m.projectSettings.EffectiveRetry()
+	if m.client != nil {
+		m.client.SetRetryPolicy(opencode.RetryPolicy{
+			MaxRetries: retry.MaxRetries,
+			Delay:      time.Duration(retry.DelaySeconds) * time.Second,
+		})
+	}
 	if m.settingsPath == "" {
 		return m
 	}
@@ -1183,6 +1509,73 @@ func (m Model) settingsHit(x, y int, button tea.MouseButton) (Model, tea.Cmd, bo
 			return m.cycleExploreModel(1), nil, true
 		}
 		return m.cycleExploreModel(1), nil, true
+	case settingsRowRecapEnabled:
+		return m.setRecapEnabled(!m.projectSettings.EffectiveRecap().Enabled), nil, true
+	case settingsRowRecapModel:
+		if dec, inc := hitStepChevrons(line, x); dec {
+			return m.cycleRecapModel(-1), nil, true
+		} else if inc {
+			return m.cycleRecapModel(1), nil, true
+		}
+		if button == tea.MouseLeft {
+			next, cmd := m.activateSettingsRow()
+			return next, cmd, true
+		}
+		return m.cycleRecapModel(1), nil, true
+	case settingsRowRecapAfterChats:
+		current := m.projectSettings.EffectiveRecap().AfterChats
+		if dec, inc := hitStepChevrons(line, x); dec {
+			return m.setRecapAfterChats(current - 1), nil, true
+		} else if inc {
+			return m.setRecapAfterChats(current + 1), nil, true
+		}
+		if button == tea.MouseLeft {
+			next, cmd := m.activateSettingsRow()
+			return next, cmd, true
+		}
+		return m.setRecapAfterChats(current + 1), nil, true
+	case settingsRowRetryMaxRetries:
+		current := m.projectSettings.EffectiveRetry().MaxRetries
+		if dec, inc := hitStepChevrons(line, x); dec {
+			return m.setRetryMaxRetries(current - 1), nil, true
+		} else if inc {
+			return m.setRetryMaxRetries(current + 1), nil, true
+		}
+		if button == tea.MouseLeft {
+			next, cmd := m.activateSettingsRow()
+			return next, cmd, true
+		}
+		return m.setRetryMaxRetries(current + 1), nil, true
+	case settingsRowRetryDelay:
+		current := m.projectSettings.EffectiveRetry().DelaySeconds
+		if dec, inc := hitStepChevrons(line, x); dec {
+			return m.setRetryDelaySeconds(current - 1), nil, true
+		} else if inc {
+			return m.setRetryDelaySeconds(current + 1), nil, true
+		}
+		if button == tea.MouseLeft {
+			next, cmd := m.activateSettingsRow()
+			return next, cmd, true
+		}
+		return m.setRetryDelaySeconds(current + 1), nil, true
+	case settingsRowSkillsEnabled:
+		return m.setSkillsEnabled(!m.projectSettings.EffectiveSkills().Enabled), nil, true
+	case settingsRowSkillsAutoDetect:
+		return m.setSkillsAutoDetect(!m.projectSettings.EffectiveSkills().AutoDetect), nil, true
+	case settingsRowSkillsLocal:
+		return m.setSkillsIncludeLocal(!m.projectSettings.EffectiveSkills().IncludeLocal), nil, true
+	case settingsRowSkillsGlobal:
+		return m.setSkillsIncludeGlobal(!m.projectSettings.EffectiveSkills().IncludeGlobal), nil, true
+	case settingsRowSkillsRemember:
+		return m.setSkillsRemember(!m.projectSettings.EffectiveSkills().Remember), nil, true
+	case settingsRowSkillsMaxMatches:
+		current := m.projectSettings.EffectiveSkills().MaxAutoMatches
+		if dec, inc := hitStepChevrons(line, x); dec {
+			return m.setSkillsMaxMatches(current - 1), nil, true
+		} else if inc {
+			return m.setSkillsMaxMatches(current + 1), nil, true
+		}
+		return m.setSkillsMaxMatches(current + 1), nil, true
 	case settingsRowLimit:
 		return m.setLimitEnabled(!m.projectSettings.Slot.LimitEnabled), nil, true
 	case settingsRowCompactAuto:

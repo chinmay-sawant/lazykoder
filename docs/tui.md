@@ -14,9 +14,12 @@ pickers are centered cards.
   the header. It collapses to `▸ thinking` as soon as the assistant
   reply, a tool card, or the end of the turn arrives. The same clock
   sits on the far right. Tool runs are
-  full-width cards that start collapsed (`◆  ▸  bash  title` on the left,
-  `15:32:05` on the far right). The diamond is the only status mark: white
-  while pending or running, green on success, red on error or deny. `ctrl+e`
+  full-width cards that start collapsed (`|  ▸  bash  title` on the left,
+  `15:32:05` on the far right). Their command rows use the same solid black
+  canvas as the rest of the transcript, including behind the status mark and
+  clock. The baton mark spins in green while the
+  command is pending or running, stays static and green on success, and stays
+  static and red on error or deny. `ctrl+e`
   expands all tools when they are all closed, or collapses all tools otherwise.
   `ctrl+p` applies the same rule to all thinking blocks. Plain `t` and `e`
   always type into the composer. Tool-card header clicks toggle their body;
@@ -34,7 +37,8 @@ pickers are centered cards.
   from thinking through the assistant reply. It throbs while that
   turn is running and stays as a static line after the turn ends and
   when the session is reopened. Assistant replies fill a muted sky-blue panel
-  across every rendered row, including Markdown code. Typed text stays on the
+  across every rendered row, including the full role-and-timestamp band and
+  its gap. Markdown code uses the same panel. Typed text stays on the
   composer surface without a cursor-line highlight. The footer left side stays
   idle (`enter send`).
   The right side
@@ -170,11 +174,11 @@ draft in the input box (**edit**). Actions:
 After the parent spawns sub-agents (`task` tools), a **drawer above the
 prompt** opens (same layout family as `/model`): one row per sub-agent.
 
-| Diamond | Meaning |
+| Baton mark | Meaning |
 | --- | --- |
-| Throbbing `◆` | running / queued (pulses with the work rail) |
-| Green `◆` | completed |
-| Red `◆` | failed, cancelled, or timed out |
+| Spinning baton | running / queued (continues until the call reaches a terminal status) |
+| Green baton | completed |
+| Red baton | failed, cancelled, or timed out |
 
 The right side of each row includes the resolved model and, when it fits, a
 one-liner for the latest tool activity (for example `bash  go test ./...` or
@@ -198,7 +202,7 @@ cost adds those children as `subs $X`; footer cost uses `+$X`.
   (100% terminal) log
   for that child, using the same design as the main chat: `you` / `assistant`
   roles, collapsible **thinking** (expanded by default), tool cards with
-  status diamonds, and the vertical work rail (`│`).
+  baton status marks, and the vertical work rail (`│`).
 - In the log view: `↑`/`↓` scrolls, `→` opens the next agent's log, and `←`
   returns to the drawer. `ctrl+p` expands or collapses all thinking, `ctrl+e`
   expands or collapses all tools, and `enter` toggles the selected block;
@@ -208,6 +212,21 @@ cost adds those children as `subs $X`; footer cost uses `+$X`.
   events arrive. After scrolling up, the transparent `▼` row above the
   footer jumps back to the latest output.
 - `d` on a live drawer row cancels it; `esc` closes the drawer.
+
+When recaps are enabled, the drawer includes a separate selectable `recaps`
+row with a semantic success rail for completed work and a danger rail for
+failures. It shows the newest record's status and source message range. Press
+`enter` or `right`, or click the row, to open the generated summary, questions,
+and things-to-avoid context. Press `left`, `esc`, or `[x]` to return. `up` and
+`down` move between the recap row and child-agent rows. If the hidden worker
+fails, the drawer shows `failed` and the recorded error. The failure stays in
+SQLite even though no recap files are created, so the next debugging step is
+visible without adding worker output to the chat transcript.
+
+The recap context uses the same Markdown renderer as assistant messages. The
+summary has a green panel, questions use the assistant-blue panel, and
+things-to-avoid uses the danger panel. Code blocks keep the Markdown renderer's
+command formatting inside the summary panel.
 
 Child sessions stay in SQLite (`kind=subagent`) so completed agents still
 appear after the turn ends.
@@ -283,6 +302,13 @@ and keyboard hint rows keep the card's opaque neutral-charcoal background.
 | parent max steps | tool-calling rounds per user turn when the limit is on (1-1000, default 16) |
 | auto-compact | on/off for same-model percent preflight (default on) |
 | compact at | fire when used tokens exceed this % of the live window (5-99, steps of 5, default 80). Dimmed when auto is off, still editable |
+| recaps enabled | on/off for hidden recap generation and first-request local recall (default off) |
+| recap model | model for hidden recap generation (default `deepseek-v4-flash`) |
+| recap after chats | successful main-chat turns before scheduling (1-20, default 2) |
+| api retries | retries after the initial 500 or 503 response (0-20, default 5) |
+| retry delay | seconds between retry attempts (0-300, default 10) |
+| skills enabled | on/off for discovery, activation, and request-time injection (default on) |
+| skill settings | discovery toggles and automatic-match limit; body/context caps remain JSON controls |
 | sub-agents | on/off for parent `task` tools |
 | default role | `explore` / `plan` / `general` when `task` omits role |
 | max concurrent | concurrent child agents (1-20, default 4) |
@@ -317,6 +343,40 @@ concurrent). Cancelling the parent turn also cancels child jobs.
 
 `keep_tokens` (recent tail beside the summary, default 15,000) is only
 in `.lazykoder/settings.json`. `/settings` does not edit it.
+
+When recaps are enabled, a completed main-chat turn may create files under
+`knowledge-base/recaps/sessions/`, `questions/`, and `things-to-avoid/`.
+The worker is silent in the transcript and child-agent logs. `/agents` shows
+the newest recap row and opens its context on `enter`, `right`, or a click. A
+later parent turn performs one bounded local grep before its first provider
+request and sends matching lines as untrusted historical hints.
+
+The same `recap.enabled` and `recap.model` settings also control the hidden
+memory worker. It runs after each successful parent turn, stays out of the
+transcript and drawer, and updates the project-scoped
+`knowledge-base/memories.md` aggregate. The worker receives only the bounded
+recent snapshot, the previous memory document, and related local knowledge
+evidence. Explicit user instructions are decoded into their durable section.
+While local memory patterns are being searched or the hidden update is
+running, the status line shows a separate animated memory marker.
+
+The retry settings apply to every chat completion sent through the shared
+OpenCode client, including streamed parent turns, recaps, memory updates, and
+child agents. A retry waits for the configured delay before sending the same
+request again. A setting of zero disables retries. The client does not retry
+401 or 403 responses, or 500 and 503 bodies that identify an authentication
+failure.
+
+`/skills` and `/skill` open the same drawer family as `/model`. The drawer
+rescans approved project and configured global roots, labels each descriptor
+as local or global, and lets Enter activate one bounded skill for the next
+ordinary parent request. `/skills <query>` filters the catalog without a
+provider call. The prompt status shows `scanning approved skills` during the
+request-time lookup. Skill bodies are untrusted, wire-only context and do not
+appear in the visible transcript, SQLite history, recap artifacts, or memory.
+The persisted `skills` settings group contains `enabled`, `auto_detect`,
+`include_local`, `include_global`, `remember`, `max_auto_matches`,
+`max_body_bytes`, and `max_context_bytes`.
 
 When the step limit is off the agent still has a large safety bound so a
 runaway loop cannot run forever. `/model` and `/variant` still change only

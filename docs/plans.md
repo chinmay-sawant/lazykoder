@@ -40,6 +40,18 @@ snapshots:
 | `v0.0.9/phase-3-docs-kb-gates.md` | docs, knowledge-base, tips/help, full gates |
 | `v0.0.9/phase-4-agents-md-context.md` | inject workdir AGENTS.md as system primer |
 | `v0.0.9/phase-4-agents-md-context.md` | inject workdir AGENTS.md as system primer |
+| `v0.0.10/README.md` | local recap, questions, avoid rules, first-request recall, and durable memory |
+| `v0.0.10/phase-1-settings-and-recap-records.md` | recap settings and idempotent artifact records |
+| `v0.0.10/phase-2-hidden-recap-worker.md` | time-windowed snapshot, questions, avoid rules, and atomic artifacts |
+| `v0.0.10/phase-3-first-request-recall.md` | bounded internal grep before the first normal user request |
+| `v0.0.10/phase-4-settings-ui-and-turn-scheduling.md` | settings rows, worker wiring, and post-turn scheduling |
+| `v0.0.10/phase-5-docs-and-gates.md` | docs, local knowledge base, and release checks |
+| `v0.0.10/phase-6-memory-contract.md` | durable `memories.md` schema, source identity, and limits |
+| `v0.0.10/phase-7-memory-update-worker.md` | per-request hidden memory update and idempotent writes |
+| `v0.0.10/phase-8-memory-recall-and-lifecycle.md` | memory-first recall and request lifecycle boundaries |
+| `v0.0.10/phase-9-memory-docs-and-gates.md` | memory documentation, tests, and closure gates |
+| `v0.0.10/phase-10-skills-discovery.md` | global and local skill discovery, `/skills`, auto-detection, and memory references |
+| `v0.0.10/phase-11-browser-support.md` | safe browser-backed URL understanding, rendered content, links, and email-link extraction |
 
 Each checklist row is marked `[x]` only when the gate actually passed, with
 the command and exit code recorded beside the row. Rows are never checked
@@ -71,6 +83,24 @@ human runs them.
   alt screen exits; workdir `AGENTS.md` is prepended as a system message on
   chat model calls. Automated gates green; manual TUI rows open. Ledger:
   `plans/v0.0.9/`.
+- v0.0.10: optional recap artifacts are implemented. It writes ordered
+  recaps, questions, and things to avoid under `knowledge-base/recaps/` after
+  the configured number of successful main-chat turns. The next parent user
+  turn runs one bounded internal grep lookup before its first ordinary provider
+  request. Automated
+  gates are green; live-terminal settings inspection remains open. Ledger:
+  `plans/v0.0.10/`.
+- v0.0.10 memory extension: durable `knowledge-base/memories.md` is
+  implemented. A hidden worker refreshes the bounded aggregate after each
+  successful parent request, retains source-backed preferences, decisions,
+  avoid rules, questions, and recent context, and is searched before the
+  existing recap artifacts. Phases 6-8 are complete. Phase 9 automated gates
+  are complete; live terminal inspection remains open.
+- v0.0.10 skills extension: Phase 10 implementation is landed with bounded
+  project-local and configured global descriptor discovery, `/skills` and
+  `/skill`, first-request untrusted context injection, child propagation of
+  explicit contexts, and reusable code-owned skill references in memory.
+  Automated gates are being closed; live terminal evidence remains open.
 
 ## What 0.0.1 deliberately does not do
 
