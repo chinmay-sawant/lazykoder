@@ -95,17 +95,18 @@ endpoint or API format, and that metadata owns the route without a model-ID
 table. When a refresh returns only the generic chat route, an already cached
 specialized route is retained until the provider supplies a replacement.
 
-`GET /models` is fetched at startup (non-blocking, 10s timeout) to show the
-model count and to feed the interactive picker (`/model` or the footer
-model chip).
+Provider catalogs are fetched at startup with a non-blocking 10s timeout to
+show the model count and feed the interactive picker (`/model` or the footer
+model chip). OpenCode uses its HTTP models endpoint. Codex uses
+`codex app-server` and `model/list`. Grok uses `grok models`.
 
 OpenAI uses `https://api.openai.com/v1/chat/completions` with
 `OPENAI_API_KEY`, and xAI uses `https://api.x.ai/v1/chat/completions` with
 `XAI_API_KEY`. Codex uses the persistent session created by `codex login` and
 reads its current account-scoped model catalog through `codex app-server`
 `model/list`. It does not carry a hard-coded Codex model name. Grok uses the
-persistent device-authentication session created by
-`grok login --device-auth`. The subscription adapters request strict JSON from
+persistent session created by `grok login --device-auth` and reads its actual
+available models through `grok models`. The subscription adapters request strict JSON from
 the official CLI, encode tool arguments as JSON strings for the strict schema
 contract, validate every requested lazykoder tool, and leave tool execution to
 the existing policy layer. The hidden orchestrator plan call uses
@@ -187,6 +188,11 @@ One user turn runs in `internal/agent.Send` with a hard step bound (default
     large memory documents to entries sourced by the current window. It skips
     a no-op update when the stored aggregate already covers the new user-only
     context. Aggregate reading and related-evidence search run concurrently.
+    When the active provider owns a live default model, the worker resolves the
+    configured memory model or current session model before reserving the
+    update. If no concrete model is available yet, it skips the update instead
+    of writing an invalid empty model. An empty variant resolves to the first
+    supported variant for the selected model when the catalog provides one.
 11. `/history` reuses the sub-agent drawer shell to show only memory entries
     sourced from the active chat. Entries are ordered by `last_seen_utc`, show
     twenty per page, and open in the same scrollable detail card. A real

@@ -159,8 +159,13 @@ func (m *Manager) Spawn(ctx context.Context, parentSessionID, parentPartID strin
 		name = id
 	}
 
-	// Derive from parent ctx when present so turn cancel cascades; still apply wall timeout.
+	// Foreground jobs follow the parent turn. Background jobs are explicitly
+	// detached so a completed parent turn does not cancel work the user asked
+	// to continue, while Manager.Cancel and Shutdown still stop them.
 	base := ctx
+	if spec.Background {
+		base = context.WithoutCancel(ctx)
+	}
 	if base == nil {
 		base = context.Background()
 	}
@@ -439,6 +444,11 @@ func (profile ModelProfile) variant(candidates ...string) string {
 			if candidate == supported {
 				return candidate
 			}
+		}
+	}
+	for _, supported := range profile.Variants {
+		if variant := strings.TrimSpace(supported); variant != "" {
+			return variant
 		}
 	}
 	return ""

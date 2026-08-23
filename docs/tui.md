@@ -6,7 +6,7 @@ pickers are centered cards.
 
 The active provider comes from `provider.active` in
 `.lazykoder/settings.json`. OpenCode is the default. `/model` shows available
-OpenCode and Codex models in one drawer. `/memory` shows the exact bounded context
+OpenCode, Grok, and Codex models in one drawer. `/memory` shows the exact bounded context
 for the next parent turn and toggles injection for the current session.
 `/history` shows current-chat memory entries with their update status.
 `/provider` shows the persisted selected or not-selected state and the
@@ -21,7 +21,8 @@ For Codex, `/model` reads the current signed-in account catalog from the
 installed Codex app server when lazykoder starts, when the provider is selected,
 or when `/refresh` runs. `gpt-5.6-luna` with `low` reasoning is the default
 when that account catalog supports it. Otherwise lazykoder uses the account
-default.
+default. For Grok, the same refresh points run `grok models`, which reads the
+CLI-owned signed-in catalog and adds its current model rows under `Grok`.
 
 ## Chat view
 
@@ -82,7 +83,9 @@ default.
   come from GET /models plus the live models.dev OpenCode catalog, then
   are stored in `.lazykoder/models.json`. That file is the source of
   truth for the picker. `/variant` shows whatever variants are stored
-  for the current model, including `max` when the catalog lists it.
+  for the current model, including `max` when the catalog lists it. Grok rows
+  expose `low`, `medium`, `high`, and `xhigh`, then send the selected effort to
+  the authenticated Grok CLI.
   Every model row keeps `cache_write_per_million` (0 when the provider
   has no write price) and an `endpoint` (the chat-completions URL to
   call). Free OpenCode models come from the Zen models list on
@@ -301,7 +304,8 @@ model box.
 
 `/variant` opens the same card for the current model's reasoning variants
 from `models.json`. The choice is stored in `sessions.variant` and sent
-as `reasoning_effort` on later turns.
+as `reasoning_effort` on later turns, including Grok's `--reasoning-effort`
+CLI option.
 
 ## Project settings
 
@@ -316,8 +320,6 @@ and keyboard hint rows keep the card's opaque neutral-charcoal background.
 | theme | `dark` or `light` application palette. Switching it redraws the current chat and keeps the card open. Dark is the default. |
 | new-session model | model for new sessions (default `deepseek-v4-flash`) |
 | new-session variant | default reasoning effort (`default` / low / medium / high / max) |
-| child model override | model every child inherits; overrides planner model classes (empty = inherit parent) |
-| explore model | model for explore-role children; overrides the common child model (empty = inherit) |
 | step limit | on/off for the per-turn tool-step budget |
 | parent max steps | tool-calling rounds per user turn when the limit is on (1-1000, default 16) |
 | auto-compact | on/off for same-model percent preflight (default on) |
@@ -330,6 +332,9 @@ and keyboard hint rows keep the card's opaque neutral-charcoal background.
 | skills enabled | on/off for discovery, activation, and request-time injection (default on) |
 | skill settings | discovery toggles and automatic-match limit; body/context caps remain JSON controls |
 | sub-agents | on/off for parent `task` tools |
+| child model override | model every child inherits; overrides planner model classes (empty = inherit parent) |
+| child model variant | reasoning variant for the configured child model (default = provider default) |
+| explore model | model for explore-role children; overrides the common child model (empty = inherit) |
 | default role | `explore` / `plan` / `general` when `task` omits role |
 | max concurrent | concurrent child agents (1-20, default 4) |
 | max queued | spawn queue size (default 40, cap 100) |
@@ -339,6 +344,12 @@ and keyboard hint rows keep the card's opaque neutral-charcoal background.
 | child bash confirms | `ask parent` or `deny` |
 | parent bash allowlist | on/off; parent-only, children are not filtered |
 | allowed executables | chip/count editor for the parent allowlist |
+
+Click the value area of a model row to open the shared model drawer. This
+includes the new-session, child override, explore, and recap model rows. The
+chevrons still cycle a row in place. Child and explore rows include `inherit`
+as an option. Click the child model variant row to open the variant drawer for
+the selected child model.
 
 On terminals at least 42 rows high, the settings card also displays the
 latest OpenCode Go rolling, weekly, and monthly usage percentages. On a

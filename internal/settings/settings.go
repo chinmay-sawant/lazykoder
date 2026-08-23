@@ -150,6 +150,7 @@ type Agents struct {
 	DefaultTimeoutSec    int    `json:"default_timeout_sec"`
 	ChildMaxSteps        int    `json:"child_max_steps"`
 	ModelOverride        string `json:"model_override"`
+	ModelVariant         string `json:"model_variant"`
 	ExploreModel         string `json:"explore_model"`
 	BashConfirm          string `json:"bash_confirm"` // "parent" or "deny"
 	BashAllowlistEnabled bool   `json:"bash_allowlist_enabled"`
@@ -502,6 +503,9 @@ func (a Agents) normalized() Agents {
 		a.ChildMaxSteps = MaxMaxSteps
 	}
 	a.BashConfirm = strings.TrimSpace(a.BashConfirm)
+	a.ModelOverride = strings.TrimSpace(a.ModelOverride)
+	a.ModelVariant = strings.TrimSpace(a.ModelVariant)
+	a.ExploreModel = strings.TrimSpace(a.ExploreModel)
 	var cleanAllowlist []string
 	if a.BashAllowlist != nil {
 		cleanAllowlist = make([]string, 0, len(a.BashAllowlist))

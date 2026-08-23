@@ -111,6 +111,10 @@ func ProviderFromEndpoint(endpoint, id string) string {
 		return ProviderOpenCodeGo
 	case strings.Contains(endpoint, "/zen/"):
 		return ProviderOpenCodeZen
+	case strings.HasPrefix(endpoint, "cli://codex"):
+		return "codex"
+	case strings.HasPrefix(endpoint, "cli://grok"):
+		return "grok"
 	case id != "":
 		return opencode.RouteForModel(opencode.DefaultBaseURL, id).Provider
 	default:

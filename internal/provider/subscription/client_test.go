@@ -3,6 +3,8 @@ package subscription
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -44,6 +46,76 @@ func TestCodexClientReturnsLazyKoderToolCalls(t *testing.T) {
 	if len(deltas) != 1 || deltas[0].Content != "I will inspect it." {
 		t.Fatalf("deltas = %+v", deltas)
 	}
+}
+
+func TestGrokClientLoadsModelsFromCLI(t *testing.T) {
+	binDir := t.TempDir()
+	path := filepath.Join(binDir, "grok")
+	script := `#!/bin/sh
+printf '%s\n' \
+  'You are logged in with grok.com.' \
+  '' \
+  'Default model: grok-4.5' \
+  '' \
+  'Available models:' \
+  '  - grok-4.6' \
+  '  * grok-4.5 (default)'
+`
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
+
+	client := NewGrok("grok-4.6")
+	infos, err := client.ModelInfos(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(infos) != 2 {
+		t.Fatalf("Grok catalog rows = %d, want 2: %+v", len(infos), infos)
+	}
+	if infos[0].ID != "grok-4.6" || infos[1].ID != "grok-4.5" {
+		t.Fatalf("Grok catalog rows = %+v", infos)
+	}
+	for _, info := range infos {
+		if info.Provider != providerGrok || info.Endpoint != "cli://grok/chat/completions" {
+			t.Fatalf("Grok catalog row = %+v", info)
+		}
+		if strings.Join(info.Variants, ",") != "low,medium,high,xhigh" {
+			t.Fatalf("Grok variants = %v, want low,medium,high,xhigh", info.Variants)
+		}
+	}
+}
+
+func TestGrokClientForwardsSelectedReasoningEffort(t *testing.T) {
+	binDir := t.TempDir()
+	argsPath := filepath.Join(t.TempDir(), "grok-args")
+	path := filepath.Join(binDir, "grok")
+	script := `#!/bin/sh
+printf '%s\n' "$@" > "$GROK_ARGS_FILE"
+printf '%s\n' '{"content":"done","tool_calls":[]}'
+`
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
+	t.Setenv("GROK_ARGS_FILE", argsPath)
+
+	client := NewGrok("grok-4.6")
+	if _, err := client.Chat(context.Background(), opencode.ChatRequest{ReasoningEffort: "high"}); err != nil {
+		t.Fatal(err)
+	}
+	args, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(args)), "\n")
+	for index := 0; index+1 < len(lines); index++ {
+		if lines[index] == "--reasoning-effort" && lines[index+1] == "high" {
+			return
+		}
+	}
+	t.Fatalf("Grok args = %q, want --reasoning-effort high", string(args))
 }
 
 func TestGrokClientRejectsUndeclaredTool(t *testing.T) {

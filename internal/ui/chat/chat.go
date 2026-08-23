@@ -170,21 +170,24 @@ type Options struct {
 
 // Model is the chat screen: title, transcript, prompt, status and confirm flow.
 type Model struct {
-	store               *db.Store
-	client              provider.Client
-	childClient         provider.Client
-	newProviderClient   provider.ClientFactory
-	providerAuth        provider.AuthChecker
-	providerLogin       provider.LoginCommandFactory
-	providerAuthStatus  map[string]provider.AuthStatus
-	providerLoginTarget string
-	workdir             string
-	session             *db.Session
-	maxSteps            int
-	settingsPath        string
-	projectSettings     settings.Settings
-	settingsPickDefault bool // model/variant picker is setting the project default
-	settingsPickRecap   bool // model picker is setting the recap model
+	store                    *db.Store
+	client                   provider.Client
+	childClient              provider.Client
+	newProviderClient        provider.ClientFactory
+	providerAuth             provider.AuthChecker
+	providerLogin            provider.LoginCommandFactory
+	providerAuthStatus       map[string]provider.AuthStatus
+	providerLoginTarget      string
+	workdir                  string
+	session                  *db.Session
+	maxSteps                 int
+	settingsPath             string
+	projectSettings          settings.Settings
+	settingsPickDefault      bool // model/variant picker is setting the project default
+	settingsPickRecap        bool // model picker is setting the recap model
+	settingsPickChild        bool // model picker is setting the child model override
+	settingsPickExplore      bool // model picker is setting the explore model
+	settingsPickChildVariant bool // variant picker is setting the child model variant
 
 	width  int
 	height int
@@ -432,7 +435,7 @@ var slashCommands = []slashCmd{
 	{name: "/resume", description: "open past sessions (ctrl+s, also /session)", aliases: []string{"sessions", "session"}},
 	{name: "/provider", description: "select the active chat provider"},
 	{name: "/model", description: "search and switch the live chat model"},
-	{name: "/variant", description: "switch live reasoning effort (low / medium / high / max)"},
+	{name: "/variant", description: "switch live reasoning effort"},
 	{name: "/agents", description: "open the sub-agent drawer and logs", aliases: []string{"subs", "subagents"}},
 	{name: "/history", description: "open memory history for the current chat"},
 	{name: "/memory", description: "show next-turn memory context and toggle injection"},
@@ -610,12 +613,34 @@ func (m Model) Init() tea.Cmd {
 }
 
 func (m Model) fetchModels() tea.Msg {
-	if m.cachePath != "" && m.projectSettings.EffectiveProvider() != provider.IDCodex {
-		if infos, fresh, err := modelscache.Load(m.cachePath, time.Now(), modelscache.DefaultTTL); err == nil && fresh && len(infos) > 0 && modelscache.HasContext(infos) {
+	activeProvider := m.projectSettings.EffectiveProvider()
+	if m.cachePath != "" && activeProvider != provider.IDCodex && activeProvider != provider.IDGrok {
+		if infos, fresh, err := modelscache.Load(m.cachePath, time.Now(), modelscache.DefaultTTL); err == nil && fresh && len(infos) > 0 && modelscache.HasContext(infos) && cachedModelCatalogsAreCurrent(infos) {
 			return modelsMsg{list: modelscache.IDs(infos), infos: infos, fromCache: true}
 		}
 	}
 	return m.refreshModels()
+}
+
+func cachedModelCatalogsAreCurrent(infos []modelscache.Info) bool {
+	for _, providerID := range modelCatalogProviderIDs {
+		if providerID != provider.IDCodex && providerID != provider.IDGrok {
+			continue
+		}
+		found := false
+		for _, info := range infos {
+			if providerIDForModelInfo(info) == providerID {
+				if providerID == provider.IDGrok && len(info.Variants) == 0 {
+					return false
+				}
+				found = true
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
 }
 
 // refreshModels fetches the model list from the API, rewrites the cache, and
@@ -693,9 +718,9 @@ func (m Model) refreshModels() tea.Msg {
 // Fetch Codex first so a signed-in subscription row owns a model ID also
 // advertised by the public OpenCode catalog. The drawer has its own display
 // order below, which keeps OpenCode first for browsing.
-var modelCatalogProviderIDs = []string{provider.IDCodex, provider.IDOpenCode}
+var modelCatalogProviderIDs = []string{provider.IDCodex, provider.IDGrok, provider.IDOpenCode}
 
-var modelPickerProviderIDs = []string{provider.IDOpenCode, provider.IDCodex}
+var modelPickerProviderIDs = []string{provider.IDOpenCode, provider.IDGrok, provider.IDCodex}
 
 func (m Model) modelCatalogClient(id string) (provider.Client, error) {
 	if id == m.projectSettings.EffectiveProvider() && m.client != nil {

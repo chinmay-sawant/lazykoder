@@ -9,6 +9,10 @@ Codex and Grok use their official installed CLIs for subscription sign-in and
 inference. Their CLIs retain the persistent session in their own user-level
 storage. lazykoder only checks whether that session is usable.
 
+Grok stores its OAuth or device-login session in the CLI-owned
+`~/.grok/auth.json`. lazykoder never reads or writes that file, and never
+copies its credentials into project settings, `.lazykoder/`, logs, or SQLite.
+
 ## Authentication and routing
 
 | Provider | Authentication | Inference route | Default model |
@@ -64,27 +68,33 @@ was signed out elsewhere.
 
 At startup, provider selection, and `/refresh`, lazykoder opens the installed
 `codex app-server`, completes its initialization handshake, and reads
-`model/list` from the signed-in ChatGPT account. If the catalog offers
-`gpt-5.6-luna` with `low` reasoning, that is the Codex default. Otherwise
-lazykoder uses the account default. The returned catalog drives `/model` and
-`/variant`. This reads metadata only and does not start a model turn. Codex
-skips the normal 15-minute model-cache fast path so a new launch checks the
-current account catalog. A stale cache is used only if that read fails.
+`model/list` from the signed-in ChatGPT account. It also runs `grok models` to
+read the signed-in Grok catalog. Both commands read metadata only and do not
+start a model turn. If the Codex catalog offers `gpt-5.6-luna` with `low`
+reasoning, that is the Codex default. Otherwise lazykoder uses the account
+default. A stale cache is used only if a catalog read fails. An older cache
+without complete Grok rows or variants is refreshed once before the app uses it.
 
-`/model` combines available OpenCode and Codex rows in one drawer. The rows
-sit under `OpenCode` and `Codex` headings while their detailed provider labels
-stay on the right. Selecting a row from the other heading changes the parent
-provider and client before the next turn. The selected provider, model, and
-reasoning variant are written to the current session. Codex receives the
-selected variant as `model_reasoning_effort` for its CLI turn.
+The Grok CLI reports its visible model IDs but does not include each model's
+effort menu in `grok models`. For Grok rows, lazykoder therefore displays the
+documented TUI effort levels `low`, `medium`, `high`, and `xhigh` in
+`/variant`, then passes the selected level to the CLI as its reasoning effort.
 
-If both catalogs advertise the same model ID, both rows remain visible. The
-provider and model ID together identify a catalog row, so choosing the
-OpenCode row uses the OpenCode route and choosing the Codex row uses the
-authenticated Codex route. Normal and keypad arrow events move through the
-grouped rows without treating the key as prompt text. Resuming a session also
-restores the provider recorded with that session before restoring its model,
-so a Codex Luna session cannot resume through the OpenCode client.
+`/model` combines available OpenCode, Grok, and Codex rows in one drawer. The
+rows sit under provider headings while their detailed provider labels stay on
+the right. Selecting a row from another heading changes the parent provider
+and client before the next turn. The selected provider, model, and reasoning
+variant are written to the current session. Codex receives the selected
+variant as `model_reasoning_effort` for its CLI turn. Grok receives the
+selected model and reasoning effort through its authenticated CLI.
+
+If providers advertise the same model ID, each row remains visible. The
+provider and model ID together identify a catalog row, so choosing a row uses
+the matching OpenCode route or authenticated CLI. Normal and keypad arrow
+events move through the grouped rows without treating the key as prompt text.
+Resuming a session also restores the provider recorded with that session before
+restoring its model, so a subscription session cannot resume through the
+OpenCode client.
 
 ## Select the parent provider
 
@@ -131,6 +141,7 @@ The parent and sub-agent paths are independent:
 
 - `model.default` is the parent model.
 - `agents.model_override` is the common child model override.
+- `agents.model_variant` is the common child reasoning variant.
 - `agents.explore_model` overrides the explore role.
 - `orchestrator.provider` selects the child provider and defaults to
   `opencode`.
@@ -140,9 +151,11 @@ model. The hidden orchestrator plan call stays on the parent client. Child
 task calls use the child client and child model settings. The common child
 model override wins over a planner-provided `model_class`; the explore model
 also wins for explore-role tasks. A planner class is used only when the
-settings leave the relevant model unset. When providers expose the same model
-ID, child model profiles are filtered by the configured child provider before a
-job starts.
+settings leave the relevant model unset. `agents.model_variant` is resolved
+against the selected child model and falls back to the provider's first
+supported variant when it is empty or unsupported. When providers expose the
+same model ID, child model profiles are filtered by the configured child
+provider before a job starts.
 
 `/provider` changes the parent provider. The child provider can be set in
 `.lazykoder/settings.json`:

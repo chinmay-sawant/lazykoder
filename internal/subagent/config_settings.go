@@ -16,6 +16,7 @@ func ConfigFromSettings(s settings.Settings) Config {
 		MaxDepth:             a.MaxDepth,
 		ChildMaxSteps:        a.ChildMaxSteps,
 		Model:                a.ModelOverride,
+		Variant:              a.ModelVariant,
 		ExploreModel:         a.ExploreModel,
 		ExploreClass:         s.EffectiveOrchestrator().ExploreClass,
 		PlanClass:            s.EffectiveOrchestrator().PlanClass,

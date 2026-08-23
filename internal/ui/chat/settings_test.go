@@ -13,6 +13,7 @@ import (
 
 	"github.com/chinmay-sawant/lazykoder/internal/agent"
 	"github.com/chinmay-sawant/lazykoder/internal/db"
+	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
 	"github.com/chinmay-sawant/lazykoder/internal/settings"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
@@ -38,7 +39,7 @@ func TestSettingsSlashOpensCard(t *testing.T) {
 	if !strings.Contains(v, "SETTINGS") || !strings.Contains(v, "[x]") {
 		t.Fatalf("settings card missing header/x: %q", v)
 	}
-	for _, want := range []string{"theme", "new-session model", "recaps enabled", "recap model", "recap after chats", "api retries", "retry delay", "skills enabled", "skills auto-detect", "skills local source", "skills global source", "remember skill references", "skill auto matches", "child timeout", "default role", "child bash confirms", "parent bash allowlist", "auto-compact", "compact at"} {
+	for _, want := range []string{"theme", "new-session model", "recaps enabled", "recap model", "recap after chats", "api retries", "retry delay", "skills enabled", "skills auto-detect", "skills local source", "skills global source", "remember skill references", "skill auto matches", "child model variant", "child timeout", "default role", "child bash confirms", "parent bash allowlist", "auto-compact", "compact at"} {
 		if !strings.Contains(v, want) {
 			t.Fatalf("settings card missing %q: %q", want, v)
 		}
@@ -397,6 +398,135 @@ func TestSettingsRecapModelMouseOpensSharedModelDrawer(t *testing.T) {
 	}
 }
 
+func TestSettingsChildVariantUsesSharedVariantDrawer(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	m := New(Options{
+		Store:        newTestStore(t),
+		Client:       deadClient(),
+		Workdir:      dir,
+		SettingsPath: path,
+	}).openSettings()
+	m.models = []string{"child-model"}
+	m.modelInfos = []modelscache.Info{{
+		ID:       "child-model",
+		Provider: modelscache.ProviderOpenCodeGo,
+		Variants: []string{"low", "high"},
+	}}
+	m.projectSettings.Agents.ModelOverride = "child-model"
+	m.settingsCursor = settingsRowChildVariant
+
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !m.pickerMode || m.pickerKind != pickerKindVariant || !m.settingsPickChildVariant {
+		t.Fatalf("picker state = mode=%v kind=%q child-variant=%v, want shared variant drawer", m.pickerMode, m.pickerKind, m.settingsPickChildVariant)
+	}
+	if len(m.pickerItems) != 2 || m.pickerItems[0] != "low" || m.pickerItems[1] != "high" {
+		t.Fatalf("child variant choices = %v, want [low high]", m.pickerItems)
+	}
+
+	m.pickerCursor = 1
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.pickerMode || !m.settingsMode {
+		t.Fatalf("after selection picker=%v settings=%v, want settings reopened", m.pickerMode, m.settingsMode)
+	}
+	if got := m.projectSettings.Agents.ModelVariant; got != "high" {
+		t.Fatalf("child model variant = %q, want high", got)
+	}
+	loaded, err := settings.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Agents.ModelVariant != "high" {
+		t.Fatalf("persisted child model variant = %q, want high", loaded.Agents.ModelVariant)
+	}
+}
+
+func TestSettingsChildVariantMouseOpensSharedVariantDrawer(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()}).openSettings()
+	m.models = []string{"child-model"}
+	m.modelInfos = []modelscache.Info{{
+		ID:       "child-model",
+		Provider: modelscache.ProviderOpenCodeGo,
+		Variants: []string{"low", "high"},
+	}}
+	m.projectSettings.Agents.ModelOverride = "child-model"
+	m.settingsCursor = settingsRowChildVariant
+	line := settingsPaintedRow(m, "child model variant")
+	x0, x1, ok := displaySpan(line, "child model variant")
+	if !ok {
+		t.Fatalf("child variant label missing from painted row: %q", line)
+	}
+
+	next, _, hit := m.settingsHit((x0+x1)/2, settingsPaintedRowY(m, "child model variant"), tea.MouseLeft)
+	if !hit || !next.pickerMode || next.pickerKind != pickerKindVariant || !next.settingsPickChildVariant {
+		t.Fatalf("mouse result = hit=%v picker=%v kind=%q child-variant=%v, want shared variant drawer", hit, next.pickerMode, next.pickerKind, next.settingsPickChildVariant)
+	}
+}
+
+func TestSettingsChildAndExploreModelMouseOpenSharedModelDrawer(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		row      int
+		label    string
+		child    bool
+		explore  bool
+		getValue func(settings.Settings) string
+	}{
+		{
+			name:  "child model override",
+			row:   settingsRowChildModel,
+			label: "child model override",
+			child: true,
+			getValue: func(s settings.Settings) string {
+				return s.Agents.ModelOverride
+			},
+		},
+		{
+			name:    "explore model",
+			row:     settingsRowExploreModel,
+			label:   "explore model",
+			explore: true,
+			getValue: func(s settings.Settings) string {
+				return s.Agents.ExploreModel
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+			mm, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 48})
+			m = mm.(Model).openSettings()
+			m.models = []string{"deepseek-v4-flash", "claude-4"}
+			m.settingsCursor = tc.row
+			line := settingsPaintedRow(m, tc.label)
+			x0, x1, ok := displaySpan(line, tc.label)
+			if !ok {
+				t.Fatalf("model label missing from painted row: %q", line)
+			}
+
+			mm, _ = m.Update(tea.MouseClickMsg(tea.Mouse{X: (x0 + x1) / 2, Y: settingsPaintedRowY(m, tc.label), Button: tea.MouseLeft}))
+			next := mm.(Model)
+			if !next.pickerMode || next.pickerKind != pickerKindModel {
+				t.Fatalf("mouse result = picker=%v kind=%q, want shared model drawer", next.pickerMode, next.pickerKind)
+			}
+			if next.settingsPickChild != tc.child || next.settingsPickExplore != tc.explore {
+				t.Fatalf("picker target = child=%v explore=%v, want child=%v explore=%v", next.settingsPickChild, next.settingsPickExplore, tc.child, tc.explore)
+			}
+			if next.pickerSelectedValue() != "" || next.pickerCursor != 0 {
+				t.Fatalf("inherit selection = value %q cursor %d, want empty value at index 0", next.pickerSelectedValue(), next.pickerCursor)
+			}
+
+			next.pickerCursor = 1
+			next, _ = next.updatePickerKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+			if !next.settingsMode || next.pickerMode {
+				t.Fatalf("after selection settings=%v picker=%v, want settings reopened", next.settingsMode, next.pickerMode)
+			}
+			if got := tc.getValue(next.projectSettings); got != "deepseek-v4-flash" {
+				t.Fatalf("selected model = %q, want deepseek-v4-flash", got)
+			}
+		})
+	}
+}
+
 func TestSettingsCloseClick(t *testing.T) {
 	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
 	mm, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
@@ -652,8 +782,6 @@ func TestSettingsKeyboardNavigationFollowsPaintedOrder(t *testing.T) {
 				settingsRowTheme,
 				settingsRowModel,
 				settingsRowVariant,
-				settingsRowChildModel,
-				settingsRowExploreModel,
 				settingsRowRecapEnabled,
 				settingsRowRecapModel,
 				settingsRowRecapAfterChats,
@@ -668,6 +796,9 @@ func TestSettingsKeyboardNavigationFollowsPaintedOrder(t *testing.T) {
 				settingsRowCompactAuto,
 				settingsRowCompactPercent,
 				settingsRowAgentsEnabled,
+				settingsRowChildModel,
+				settingsRowChildVariant,
+				settingsRowExploreModel,
 				settingsRowAgentsRole,
 				settingsRowAgentsConcurrent,
 				settingsRowAgentsQueued,
@@ -688,8 +819,6 @@ func TestSettingsKeyboardNavigationFollowsPaintedOrder(t *testing.T) {
 				settingsRowTheme,
 				settingsRowModel,
 				settingsRowVariant,
-				settingsRowChildModel,
-				settingsRowExploreModel,
 				settingsRowRecapEnabled,
 				settingsRowRecapModel,
 				settingsRowRecapAfterChats,
@@ -699,6 +828,9 @@ func TestSettingsKeyboardNavigationFollowsPaintedOrder(t *testing.T) {
 				settingsRowCompactAuto,
 				settingsRowCompactPercent,
 				settingsRowAgentsEnabled,
+				settingsRowChildModel,
+				settingsRowChildVariant,
+				settingsRowExploreModel,
 				settingsRowAgentsRole,
 				settingsRowAgentsConcurrent,
 				settingsRowAgentsQueued,
@@ -1016,6 +1148,8 @@ func settingsHitChanged(before, after Model, row int) bool {
 		return after.projectSettings.Model.Variant != before.projectSettings.Model.Variant
 	case settingsRowChildModel:
 		return aa.ModelOverride != ba.ModelOverride
+	case settingsRowChildVariant:
+		return aa.ModelVariant != ba.ModelVariant
 	case settingsRowExploreModel:
 		return aa.ExploreModel != ba.ExploreModel
 	case settingsRowRecapEnabled:

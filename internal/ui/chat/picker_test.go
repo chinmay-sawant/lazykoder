@@ -74,6 +74,21 @@ func TestCodexCatalogDefaultsToLunaLow(t *testing.T) {
 	}
 }
 
+func TestDefaultVariantUsesFirstSupportedVariant(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	m.modelInfos = []modelscache.Info{{
+		ID:       "model-with-variants",
+		Provider: provider.IDOpenCode,
+		Variants: []string{"medium", "high"},
+	}}
+	if got := m.effectiveVariantFor("model-with-variants", provider.IDOpenCode, ""); got != "medium" {
+		t.Fatalf("default variant = %q, want first supported variant medium", got)
+	}
+	if got := m.effectiveVariantFor("model-with-variants", provider.IDOpenCode, "high"); got != "high" {
+		t.Fatalf("selected variant = %q, want high", got)
+	}
+}
+
 func TestModelPickerGroupsAndRoutesCrossProviderSelection(t *testing.T) {
 	openCodeClient := deadClient()
 	codexClient := subscription.NewCodex("gpt-5.6-luna")
@@ -241,6 +256,46 @@ func TestMergeKeepsSharedModelIDsAcrossProviders(t *testing.T) {
 	}
 	if got := providerIDForModelInfo(infos[1]); got != provider.IDOpenCode {
 		t.Fatalf("shared model provider = %q, want opencode", got)
+	}
+}
+
+func TestModelPickerGroupsGrokCatalogRows(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	m.models = []string{"grok-4.6", "grok-4.5"}
+	m.modelInfos = []modelscache.Info{
+		{ID: "grok-4.6", Provider: provider.IDGrok, Endpoint: "cli://grok/chat/completions"},
+		{ID: "grok-4.5", Provider: provider.IDGrok, Endpoint: "cli://grok/chat/completions"},
+	}
+	m = m.openKindPicker(pickerKindModel)
+	content := stripANSI(m.pickerContent(m.pickerVp.Width()))
+	if !strings.Contains(content, "Grok") {
+		t.Fatalf("Grok heading missing: %q", content)
+	}
+	if !strings.Contains(content, "grok-4.6") || !strings.Contains(content, "grok-4.5") {
+		t.Fatalf("Grok rows missing: %q", content)
+	}
+	if got := providerIDForModelInfo(m.modelInfos[0]); got != provider.IDGrok {
+		t.Fatalf("Grok provider = %q, want %q", got, provider.IDGrok)
+	}
+}
+
+func TestGrokVariantPickerDisplaysReasoningEfforts(t *testing.T) {
+	cfg := settings.Default()
+	cfg.Provider.Active = provider.IDGrok
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Settings: &cfg, Workdir: t.TempDir()})
+	m.model = "grok-4.6"
+	m.modelInfos = []modelscache.Info{{
+		ID:       "grok-4.6",
+		Provider: provider.IDGrok,
+		Endpoint: "cli://grok/chat/completions",
+		Variants: []string{"low", "medium", "high", "xhigh"},
+	}}
+	m = m.openKindPicker(pickerKindVariant)
+	content := stripANSI(m.pickerContent(m.pickerVp.Width()))
+	for _, effort := range []string{"low", "medium", "high", "xhigh"} {
+		if !strings.Contains(content, effort) {
+			t.Fatalf("Grok variant picker missing %q: %q", effort, content)
+		}
 	}
 }
 
@@ -560,7 +615,11 @@ func TestPickerCardFitsAndScrollbarDrags(t *testing.T) {
 func TestModelsLoadedFromCacheSkipsAPI(t *testing.T) {
 	dir := t.TempDir()
 	cachePath := filepath.Join(dir, "models.json")
-	if err := modelscache.Save(cachePath, []modelscache.Info{{ID: "deepseek-v4-flash", Context: 128000}, {ID: "claude-4", Context: 200000}}, time.Now()); err != nil {
+	if err := modelscache.Save(cachePath, []modelscache.Info{
+		{ID: "deepseek-v4-flash", Provider: modelscache.ProviderOpenCodeGo, Context: 128000},
+		{ID: "gpt-cache", Provider: provider.IDCodex, Endpoint: "cli://codex/chat/completions"},
+		{ID: "grok-cache", Provider: provider.IDGrok, Endpoint: "cli://grok/chat/completions", Variants: []string{"low", "medium", "high", "xhigh"}},
+	}, time.Now()); err != nil {
 		t.Fatalf("seed cache: %v", err)
 	}
 	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: dir, CachePath: cachePath})
@@ -574,6 +633,91 @@ func TestModelsLoadedFromCacheSkipsAPI(t *testing.T) {
 	}
 	if !m.modelsCached {
 		t.Error("modelsCached = false, want true for fresh cache")
+	}
+}
+
+func TestModelsCacheWithGrokWithoutVariantsRefreshesCatalog(t *testing.T) {
+	dir := t.TempDir()
+	cachePath := filepath.Join(dir, "models.json")
+	if err := modelscache.Save(cachePath, []modelscache.Info{
+		{ID: "deepseek-v4-flash", Provider: modelscache.ProviderOpenCodeGo, Context: 128000},
+		{ID: "gpt-cache", Provider: provider.IDCodex, Endpoint: "cli://codex/chat/completions"},
+		{ID: "grok-cache", Provider: provider.IDGrok, Endpoint: "cli://grok/chat/completions"},
+	}, time.Now()); err != nil {
+		t.Fatalf("seed cache: %v", err)
+	}
+	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
+	grok := subscription.NewGrok("grok-4.6", subscription.WithCatalogLoader(func(context.Context) (subscription.ModelCatalog, error) {
+		return subscription.ModelCatalog{Models: []opencode.ModelInfo{{
+			ID:       "grok-4.6",
+			Provider: provider.IDGrok,
+			Endpoint: "cli://grok/chat/completions",
+			Variants: []string{"low", "medium", "high", "xhigh"},
+		}}}, nil
+	}))
+	m := New(Options{
+		Store:     newTestStore(t),
+		Client:    newClient(fake.srv),
+		Workdir:   dir,
+		CachePath: cachePath,
+		NewProviderClient: func(id string) (provider.Client, error) {
+			if id == provider.IDGrok {
+				return grok, nil
+			}
+			return nil, nil
+		},
+	})
+	msg, ok := m.fetchModels().(modelsMsg)
+	if !ok {
+		t.Fatalf("fetchModels returned %T", msg)
+	}
+	if msg.fromCache {
+		t.Fatal("fetchModels used a Grok cache row without variants")
+	}
+	info, found := modelscache.InfoOf(msg.infos, "grok-4.6")
+	if !found || strings.Join(info.Variants, ",") != "low,medium,high,xhigh" {
+		t.Fatalf("refreshed Grok row = %+v, found=%t", info, found)
+	}
+}
+
+func TestModelsCacheWithoutGrokRefreshesCatalog(t *testing.T) {
+	dir := t.TempDir()
+	cachePath := filepath.Join(dir, "models.json")
+	if err := modelscache.Save(cachePath, []modelscache.Info{
+		{ID: "deepseek-v4-flash", Provider: modelscache.ProviderOpenCodeGo, Context: 128000},
+		{ID: "gpt-cache", Provider: provider.IDCodex, Endpoint: "cli://codex/chat/completions"},
+	}, time.Now()); err != nil {
+		t.Fatalf("seed cache: %v", err)
+	}
+	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
+	grok := subscription.NewGrok("grok-4.6", subscription.WithCatalogLoader(func(context.Context) (subscription.ModelCatalog, error) {
+		return subscription.ModelCatalog{Models: []opencode.ModelInfo{{
+			ID:       "grok-4.6",
+			Provider: provider.IDGrok,
+			Endpoint: "cli://grok/chat/completions",
+		}}}, nil
+	}))
+	m := New(Options{
+		Store:     newTestStore(t),
+		Client:    newClient(fake.srv),
+		Workdir:   dir,
+		CachePath: cachePath,
+		NewProviderClient: func(id string) (provider.Client, error) {
+			if id == provider.IDGrok {
+				return grok, nil
+			}
+			return nil, nil
+		},
+	})
+	msg, ok := m.fetchModels().(modelsMsg)
+	if !ok {
+		t.Fatalf("fetchModels returned %T", msg)
+	}
+	if msg.fromCache {
+		t.Fatal("fetchModels used a cache that had no Grok rows")
+	}
+	if !containsModel(msg.list, "grok-4.6") {
+		t.Fatalf("refreshed models missing Grok: %v", msg.list)
 	}
 }
 
@@ -611,7 +755,11 @@ func TestModelsCacheRefreshedWhenStale(t *testing.T) {
 func TestModelsRefreshKeyReloadsFromAPI(t *testing.T) {
 	dir := t.TempDir()
 	cachePath := filepath.Join(dir, "models.json")
-	if err := modelscache.Save(cachePath, []modelscache.Info{{ID: "deepseek-v4-flash", Context: 128000}}, time.Now()); err != nil {
+	if err := modelscache.Save(cachePath, []modelscache.Info{
+		{ID: "deepseek-v4-flash", Provider: modelscache.ProviderOpenCodeGo, Context: 128000},
+		{ID: "gpt-cache", Provider: provider.IDCodex, Endpoint: "cli://codex/chat/completions"},
+		{ID: "grok-cache", Provider: provider.IDGrok, Endpoint: "cli://grok/chat/completions", Variants: []string{"low", "medium", "high", "xhigh"}},
+	}, time.Now()); err != nil {
 		t.Fatalf("seed cache: %v", err)
 	}
 	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))

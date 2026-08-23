@@ -176,6 +176,51 @@ func TestCancelBeforeFinish(t *testing.T) {
 	}
 }
 
+func TestBackgroundSpawnSurvivesParentCancellation(t *testing.T) {
+	r := newBlockingRunner("background-finished")
+	m := NewManager(NewConfig(), r)
+	parentCtx, cancelParent := context.WithCancel(context.Background())
+	snap, err := m.Spawn(parentCtx, "ses_parent", "prt_parent", Spec{
+		Prompt:     "continue in the background",
+		Background: true,
+	})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	select {
+	case <-r.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("background runner did not start")
+	}
+	cancelParent()
+	time.Sleep(25 * time.Millisecond)
+	status, ok := m.Status(snap.ID)
+	if !ok {
+		t.Fatal("background job disappeared after parent cancellation")
+	}
+	if status.Status == string(StatusCancelled) {
+		t.Fatalf("background job was cancelled with parent: %+v", status)
+	}
+	close(r.release)
+	result, err := m.Wait(context.Background(), snap.ID)
+	if err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if result.Status != string(StatusCompleted) || result.Summary != "background-finished" {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestModelProfileUsesFirstVariantWhenDefaultIsSelected(t *testing.T) {
+	profile := ModelProfile{ID: "child-model", Variants: []string{"low", "medium"}}
+	if got := profile.variant("", ""); got != "low" {
+		t.Fatalf("default child variant = %q, want low", got)
+	}
+	if got := profile.variant("medium", ""); got != "medium" {
+		t.Fatalf("selected child variant = %q, want medium", got)
+	}
+}
+
 func TestListFiltersByParent(t *testing.T) {
 	r := newBlockingRunner("sum")
 	close(r.release)

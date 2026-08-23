@@ -33,6 +33,16 @@ func TestTaskSpecOmitsTimeoutFields(t *testing.T) {
 	t.Fatal("task tool not found in Host.Specs")
 }
 
+func TestConfigFromSettingsUsesChildModelVariant(t *testing.T) {
+	cfg := settings.Default()
+	cfg.Agents.ModelVariant = "high"
+
+	got := ConfigFromSettings(cfg)
+	if got.Variant != "high" {
+		t.Fatalf("child config variant = %q, want high", got.Variant)
+	}
+}
+
 // captureRunner records Job fields the manager applied.
 type captureRunner struct {
 	mu       sync.Mutex

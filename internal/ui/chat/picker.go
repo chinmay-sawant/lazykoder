@@ -219,6 +219,23 @@ func (m Model) modelHasVariant(id, variant string) bool {
 	return false
 }
 
+func (m Model) effectiveVariantFor(model, providerID, selected string) string {
+	if variant := strings.TrimSpace(selected); variant != "" {
+		return variant
+	}
+	if info, ok := m.modelInfoForProvider(model, providerID); ok {
+		for _, candidate := range info.Variants {
+			if variant := strings.TrimSpace(candidate); variant != "" {
+				return variant
+			}
+		}
+	}
+	if m.client != nil && model == m.client.Model() {
+		return clientDefaultVariant(m.client)
+	}
+	return ""
+}
+
 func (m Model) modelChoices() []modelChoice {
 	choices := make([]modelChoice, 0, len(m.modelInfos))
 	knownIDs := make(map[string]struct{}, len(m.models))
@@ -275,11 +292,16 @@ func providerIDForModelInfo(info modelscache.Info) string {
 	switch info.Provider {
 	case provider.IDCodex:
 		return provider.IDCodex
+	case provider.IDGrok:
+		return provider.IDGrok
 	case provider.IDOpenCode, modelscache.ProviderOpenCodeGo, modelscache.ProviderOpenCodeZen:
 		return provider.IDOpenCode
 	}
 	if strings.HasPrefix(info.Endpoint, "cli://"+provider.IDCodex) {
 		return provider.IDCodex
+	}
+	if strings.HasPrefix(info.Endpoint, "cli://"+provider.IDGrok) {
+		return provider.IDGrok
 	}
 	if strings.Contains(info.Endpoint, "opencode.ai") {
 		return provider.IDOpenCode
@@ -501,6 +523,12 @@ func (m Model) selectPickerItem(idx int) (Model, tea.Cmd) {
 	if !m.pickerBuilt || idx < 0 || idx >= len(m.pickerItems) {
 		return m, nil
 	}
+	if m.settingsPickChildVariant {
+		m = m.setChildVariant(m.pickerItems[idx])
+		m = m.finishPickerSelection()
+		m.settingsPickChildVariant = false
+		return m.openSettings(), nil
+	}
 	if m.settingsPickDefault {
 		if m.pickerKind == pickerKindVariant {
 			m = m.setDefaultVariant(m.pickerItems[idx])
@@ -515,6 +543,18 @@ func (m Model) selectPickerItem(idx int) (Model, tea.Cmd) {
 		m = m.setRecapModel(m.pickerItems[idx])
 		m = m.finishPickerSelection()
 		m.settingsPickRecap = false
+		return m.openSettings(), nil
+	}
+	if m.settingsPickChild || m.settingsPickExplore {
+		selected := strings.TrimSpace(m.pickerItems[idx])
+		if m.settingsPickChild {
+			m = m.setChildModel(selected)
+		} else {
+			m = m.setExploreModel(selected)
+		}
+		m = m.finishPickerSelection()
+		m.settingsPickChild = false
+		m.settingsPickExplore = false
 		return m.openSettings(), nil
 	}
 	if m.pickerKind == pickerKindSkills {
@@ -591,13 +631,17 @@ func (m Model) finishPickerSelection() Model {
 }
 
 func (m Model) closePicker() Model {
-	reopenSettings := m.settingsPickDefault || m.settingsPickRecap
+	reopenSettings := m.settingsPickDefault || m.settingsPickRecap ||
+		m.settingsPickChild || m.settingsPickExplore || m.settingsPickChildVariant
 	m = m.clearFocus(focusPicker)
 	m.pickerKind = pickerKindModel
 	m.pickerSkillItems = nil
 	m.dragOn = false
 	m.settingsPickDefault = false
 	m.settingsPickRecap = false
+	m.settingsPickChild = false
+	m.settingsPickExplore = false
+	m.settingsPickChildVariant = false
 	if reopenSettings {
 		return m.openSettings()
 	}
@@ -633,7 +677,7 @@ func (m *Model) applyFilter() {
 		return
 	}
 	if m.pickerKind == pickerKindModel {
-		for _, choice := range m.modelChoices() {
+		for _, choice := range m.modelPickerChoices() {
 			providerLabel := choice.info.Provider
 			if providerLabel == "" {
 				providerLabel = modelProviderLabel(choice.provider)
@@ -741,7 +785,7 @@ func (m Model) openKindPicker(kind string) Model {
 		if id != current {
 			continue
 		}
-		if kind == pickerKindModel && m.modelProviderAt(i) != activeProvider {
+		if kind == pickerKindModel && !m.settingsModelPickerUsesInherit() && m.modelProviderAt(i) != activeProvider {
 			continue
 		}
 		m.pickerCursor = i
@@ -766,7 +810,8 @@ func (m Model) pickerSource() []string {
 		return out
 	}
 	if m.pickerKind == pickerKindVariant {
-		info, ok := m.modelInfoForProvider(m.modelLabel(), m.projectSettings.EffectiveProvider())
+		modelID, providerID := m.variantPickerModel()
+		info, ok := m.modelInfoForProvider(modelID, providerID)
 		if !ok {
 			return nil
 		}
@@ -778,6 +823,26 @@ func (m Model) pickerSource() []string {
 	return m.models
 }
 
+func (m Model) variantPickerModel() (string, string) {
+	if m.settingsPickChildVariant {
+		cfg := m.projectSettings
+		return childModel(cfg), cfg.EffectiveOrchestrator().Provider
+	}
+	return m.modelLabel(), m.projectSettings.EffectiveProvider()
+}
+
+func (m Model) modelPickerChoices() []modelChoice {
+	choices := m.modelChoices()
+	if !m.settingsModelPickerUsesInherit() {
+		return choices
+	}
+	return append([]modelChoice{{id: ""}}, choices...)
+}
+
+func (m Model) settingsModelPickerUsesInherit() bool {
+	return m.settingsPickChild || m.settingsPickExplore
+}
+
 func (m Model) pickerSelectedValue() string {
 	if m.pickerKind == pickerKindSkills {
 		if len(m.activeSkills) > 0 {
@@ -786,10 +851,19 @@ func (m Model) pickerSelectedValue() string {
 		return ""
 	}
 	if m.pickerKind == pickerKindVariant {
+		if m.settingsPickChildVariant {
+			return m.projectSettings.Agents.ModelVariant
+		}
 		return m.variant
 	}
 	if m.pickerKind == pickerKindProvider {
 		return m.projectSettings.EffectiveProvider()
+	}
+	if m.settingsPickChild {
+		return m.projectSettings.Agents.ModelOverride
+	}
+	if m.settingsPickExplore {
+		return m.projectSettings.Agents.ExploreModel
 	}
 	if m.settingsPickRecap {
 		return m.projectSettings.EffectiveRecap().Model
@@ -809,6 +883,12 @@ func (m Model) pickerSelectedLabel() string {
 		return "none"
 	}
 	if m.pickerKind == pickerKindVariant {
+		if m.settingsPickChildVariant {
+			if m.projectSettings.Agents.ModelVariant == "" {
+				return "default"
+			}
+			return m.projectSettings.Agents.ModelVariant
+		}
 		if m.variant != "" {
 			return m.variant
 		}
@@ -819,6 +899,18 @@ func (m Model) pickerSelectedLabel() string {
 			return descriptor.Label
 		}
 		return m.projectSettings.EffectiveProvider()
+	}
+	if m.settingsPickChild && m.projectSettings.Agents.ModelOverride == "" {
+		return "inherit"
+	}
+	if m.settingsPickExplore && m.projectSettings.Agents.ExploreModel == "" {
+		return "inherit"
+	}
+	if m.settingsPickChild {
+		return m.projectSettings.Agents.ModelOverride
+	}
+	if m.settingsPickExplore {
+		return m.projectSettings.Agents.ExploreModel
 	}
 	current := m.model
 	if current == "" && m.client != nil {
@@ -850,6 +942,9 @@ func (m Model) pickerItemLabelForProvider(id, providerID string) string {
 			return descriptor.Label
 		}
 		return id
+	}
+	if id == "" && m.settingsModelPickerUsesInherit() {
+		return "inherit"
 	}
 	label := id
 	info, ok := m.modelInfoForProvider(id, providerID)

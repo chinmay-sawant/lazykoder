@@ -103,6 +103,12 @@ spawns; follow with `task_wait`). Default child step budget is 1000
 `max_steps`). If a child hits its step limit after doing work, the job
 completes with a partial summary and a note instead of status `failed`.
 
+Background jobs do not inherit cancellation from the parent turn. They keep
+running after the parent response ends and still obey their configured timeout.
+`task_cancel` and manager shutdown cancel them explicitly. When a child model
+has no explicit variant, the manager selects the first supported variant in
+that model's profile.
+
 Child wall-clock lifetime is **not** a `task` argument. It always comes
 from project settings `agents.default_timeout_sec` (default 600s / 10m).
 Model-supplied `timeout_ms` / `timeout_sec` fields are ignored so a parent

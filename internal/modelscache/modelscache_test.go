@@ -45,6 +45,9 @@ func TestProviderFromEndpoint(t *testing.T) {
 	if got := ProviderFromEndpoint("https://opencode.ai/zen/v1/chat/completions", "deepseek-v4-flash-free"); got != ProviderOpenCodeZen {
 		t.Fatalf("zen = %q", got)
 	}
+	if got := ProviderFromEndpoint("cli://grok/chat/completions", "grok-4.6"); got != "grok" {
+		t.Fatalf("grok = %q", got)
+	}
 	if got := ProviderOf(nil, "deepseek-v4-flash-free"); got != ProviderOpenCodeZen {
 		t.Fatalf("free fallback = %q", got)
 	}

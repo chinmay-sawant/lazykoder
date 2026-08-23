@@ -19,6 +19,7 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
 	"github.com/chinmay-sawant/lazykoder/internal/provider"
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
+	"github.com/chinmay-sawant/lazykoder/internal/provider/subscription"
 	"github.com/chinmay-sawant/lazykoder/internal/tips"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
@@ -1555,6 +1556,56 @@ func TestRefreshWritesModelsCache(t *testing.T) {
 	flash, ok := modelscache.InfoOf(infos, "deepseek-v4-flash")
 	if !ok || !strings.HasSuffix(flash.Endpoint, "/chat/completions") {
 		t.Fatalf("go model endpoint = %+v", flash)
+	}
+}
+
+func TestRefreshLoadsGrokCatalog(t *testing.T) {
+	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
+	codex := subscription.NewCodex("", subscription.WithCatalogLoader(func(context.Context) (subscription.ModelCatalog, error) {
+		return subscription.ModelCatalog{Models: []opencode.ModelInfo{{
+			ID:       "gpt-account-default",
+			Provider: provider.IDCodex,
+		}}}, nil
+	}))
+	grok := subscription.NewGrok("grok-4.6", subscription.WithCatalogLoader(func(context.Context) (subscription.ModelCatalog, error) {
+		return subscription.ModelCatalog{Models: []opencode.ModelInfo{
+			{ID: "grok-4.6", Provider: provider.IDGrok, Endpoint: "cli://grok/chat/completions", Variants: []string{"low", "medium", "high", "xhigh"}},
+			{ID: "grok-4.5", Provider: provider.IDGrok, Endpoint: "cli://grok/chat/completions", Variants: []string{"low", "medium", "high", "xhigh"}},
+		}}, nil
+	}))
+	m := New(Options{
+		Store:   newTestStore(t),
+		Client:  newClient(fake.srv),
+		Workdir: t.TempDir(),
+		NewProviderClient: func(id string) (provider.Client, error) {
+			switch id {
+			case provider.IDCodex:
+				return codex, nil
+			case provider.IDGrok:
+				return grok, nil
+			default:
+				return nil, nil
+			}
+		},
+	})
+	msg, ok := m.refreshModels().(modelsMsg)
+	if !ok {
+		t.Fatalf("refreshModels returned %T", msg)
+	}
+	if msg.err != nil {
+		t.Fatalf("refreshModels err = %v", msg.err)
+	}
+	if !containsModel(msg.list, "grok-4.6") || !containsModel(msg.list, "grok-4.5") {
+		t.Fatalf("Grok models missing from refresh: %v", msg.list)
+	}
+	for _, id := range []string{"grok-4.6", "grok-4.5"} {
+		info, found := modelscache.InfoOf(msg.infos, id)
+		if !found || info.Provider != provider.IDGrok || info.Endpoint != "cli://grok/chat/completions" {
+			t.Fatalf("Grok model %q = %+v, found=%t", id, info, found)
+		}
+		if strings.Join(info.Variants, ",") != "low,medium,high,xhigh" {
+			t.Fatalf("Grok model %q variants = %v", id, info.Variants)
+		}
 	}
 }
 

@@ -322,6 +322,7 @@ func TestSaveLoadRoundTripWithAgents(t *testing.T) {
 			DefaultTimeoutSec:    120,
 			ChildMaxSteps:        20,
 			ModelOverride:        "fast-model",
+			ModelVariant:         "medium",
 			ExploreModel:         "explore-model",
 			BashConfirm:          "deny",
 			AllowParallelWriters: true,

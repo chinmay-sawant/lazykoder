@@ -67,7 +67,7 @@ func (m Model) attachSubMgr(cfg settings.Settings, recoverJobs bool) Model {
 		Workdir:  m.workdir,
 		Model:    childModel(cfg),
 		Endpoint: m.childModelEndpoint(cfg),
-		Variant:  cfg.EffectiveVariant(),
+		Variant:  m.childModelVariant(cfg),
 		Profiles: m.subagentModelProfiles(),
 		Confirm:  m.confirmHook,
 		Ask:      m.runtimeAsk,
@@ -103,7 +103,7 @@ func (m Model) agentOptions() agent.Options {
 		Provider:             m.projectSettings.EffectiveProvider(),
 		Model:                m.model,
 		Endpoint:             m.modelEndpoint(),
-		Variant:              m.variant,
+		Variant:              m.effectiveVariantFor(m.modelLabel(), m.projectSettings.EffectiveProvider(), m.variant),
 		Confirm:              m.confirmHook,
 		Ask:                  m.askHook,
 		BashAllowlist:        m.projectSettings.EffectiveAgents().BashAllowlist,
@@ -386,7 +386,7 @@ func (m Model) wireSubMgrRuntime() {
 		Workdir:  m.workdir,
 		Model:    childModel(m.projectSettings),
 		Endpoint: m.childModelEndpoint(m.projectSettings),
-		Variant:  m.variant,
+		Variant:  m.childModelVariant(m.projectSettings),
 		Profiles: m.subagentModelProfiles(),
 		Confirm:  m.confirmHook,
 		Ask:      m.runtimeAsk,
@@ -452,6 +452,12 @@ func childModel(cfg settings.Settings) string {
 		return model
 	}
 	return provider.DefaultModel(cfg.EffectiveOrchestrator().Provider)
+}
+
+func (m Model) childModelVariant(cfg settings.Settings) string {
+	a := cfg.EffectiveAgents()
+	providerID := cfg.EffectiveOrchestrator().Provider
+	return m.effectiveVariantFor(childModel(cfg), providerID, a.ModelVariant)
 }
 
 func (m Model) childModelEndpoint(cfg settings.Settings) string {
@@ -585,7 +591,7 @@ func (m Model) scheduleRecap() tea.Cmd {
 			_ = store.CancelRecap(ctx, record.ID)
 			return recapDoneMsg{}
 		}
-		worker := recap.NewWorker(client, model, info, "")
+		worker := recap.NewWorker(client, model, info, m.effectiveVariantFor(model, m.projectSettings.EffectiveProvider(), ""))
 		_, _ = recap.Run(ctx, recap.RunInput{
 			Store:    store,
 			Record:   record,
@@ -608,9 +614,9 @@ func (m Model) scheduleMemoryUpdate() tea.Cmd {
 		return nil
 	}
 	sessionID := m.session.ID
-	model := recapCfg.Model
-	if !recapCfg.Enabled {
-		model = m.projectSettings.EffectiveModel()
+	model := m.memoryWorkerModel()
+	if model == "" {
+		return nil
 	}
 	workdir, err := filepath.Abs(m.workdir)
 	if err != nil {
@@ -676,7 +682,7 @@ func (m Model) scheduleMemoryUpdate() tea.Cmd {
 		if workerModel != model {
 			workerInfo = m.recapModelInfo(workerModel)
 		}
-		worker := recap.NewMemoryWorker(client, workerModel, workerInfo, "")
+		worker := recap.NewMemoryWorker(client, workerModel, workerInfo, m.effectiveVariantFor(workerModel, m.projectSettings.EffectiveProvider(), ""))
 		runErr := recap.RunMemoryUpdate(ctx, recap.MemoryRunInput{
 			Store:            store,
 			Record:           record,
@@ -689,6 +695,28 @@ func (m Model) scheduleMemoryUpdate() tea.Cmd {
 		})
 		return memoryDoneMsg{err: runErr}
 	}
+}
+
+func (m Model) memoryWorkerModel() string {
+	if recap := m.projectSettings.EffectiveRecap(); recap.Enabled {
+		if model := strings.TrimSpace(recap.Model); model != "" {
+			return model
+		}
+	}
+	candidates := []string{m.model}
+	if m.session != nil {
+		candidates = append(candidates, m.session.Model)
+	}
+	if m.client != nil {
+		candidates = append(candidates, m.client.Model())
+	}
+	candidates = append(candidates, m.projectSettings.EffectiveModel())
+	for _, candidate := range candidates {
+		if model := strings.TrimSpace(candidate); model != "" {
+			return model
+		}
+	}
+	return ""
 }
 
 func recapEnabledAtPath(settingsPath string) bool {
@@ -743,7 +771,7 @@ func (m Model) recoverRecaps() tea.Msg {
 			_ = m.store.FailRecap(ctx, record.ID, "source snapshot unavailable: "+err.Error())
 			continue
 		}
-		worker := recap.NewWorker(m.client, record.Model, m.recapModelInfo(record.Model), "")
+		worker := recap.NewWorker(m.client, record.Model, m.recapModelInfo(record.Model), m.effectiveVariantFor(record.Model, m.projectSettings.EffectiveProvider(), ""))
 		_, _ = recap.Run(ctx, recap.RunInput{
 			Store:    m.store,
 			Record:   record,
@@ -790,7 +818,7 @@ func (m Model) recoverMemoryUpdates() tea.Msg {
 			_ = m.store.FailMemoryUpdate(ctx, update.ID, "source snapshot unavailable: "+err.Error())
 			continue
 		}
-		worker := recap.NewMemoryWorker(m.client, update.Model, m.recapModelInfo(update.Model), "")
+		worker := recap.NewMemoryWorker(m.client, update.Model, m.recapModelInfo(update.Model), m.effectiveVariantFor(update.Model, m.projectSettings.EffectiveProvider(), ""))
 		_ = recap.RunMemoryUpdate(ctx, recap.MemoryRunInput{
 			Store:            m.store,
 			Record:           update,

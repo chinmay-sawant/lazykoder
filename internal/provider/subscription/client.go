@@ -70,7 +70,7 @@ func NewCodex(model string, opts ...Option) *Client {
 
 // NewGrok returns a Grok-subscription client backed by the Grok CLI.
 func NewGrok(model string, opts ...Option) *Client {
-	return newClient(providerGrok, model, nil, opts...)
+	return newClient(providerGrok, model, grokModelCatalog, opts...)
 }
 
 func newClient(providerName, model string, catalogLoad CatalogLoader, opts ...Option) *Client {
@@ -420,6 +420,9 @@ func runGrok(ctx context.Context, request Request) (string, error) {
 	}
 	if request.Model != "" {
 		args = append(args, "--model", request.Model)
+	}
+	if request.ReasoningEffort != "" {
+		args = append(args, "--reasoning-effort", request.ReasoningEffort)
 	}
 	if request.Workdir != "" {
 		args = append(args, "--cwd", request.Workdir)

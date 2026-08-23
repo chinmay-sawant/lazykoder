@@ -228,6 +228,76 @@ func TestMemoryScheduleCreatesFileFromOneCompletedTurn(t *testing.T) {
 	}
 }
 
+func TestMemoryScheduleUsesCurrentModelWhenProviderDefaultIsEmpty(t *testing.T) {
+	store := newTestStore(t)
+	workdir := t.TempDir()
+	session, err := store.CreateSession(context.Background(), db.Session{
+		Directory: workdir,
+		Provider:  "codex",
+		Model:     "gpt-account-default",
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	userText := "Remember that the memory worker must use the active model."
+	user, err := store.InsertMessage(context.Background(), db.Message{SessionID: session.ID, Role: "user"})
+	if err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+	if _, err := store.InsertPart(context.Background(), db.Part{MessageID: user.ID, Type: "text", Text: &userText}); err != nil {
+		t.Fatalf("insert user text: %v", err)
+	}
+	assistantText := "The memory worker will use the active model."
+	assistant, err := store.InsertMessage(context.Background(), db.Message{SessionID: session.ID, Role: "assistant"})
+	if err != nil {
+		t.Fatalf("insert assistant: %v", err)
+	}
+	if _, err := store.InsertPart(context.Background(), db.Part{MessageID: assistant.ID, Type: "text", Text: &assistantText}); err != nil {
+		t.Fatalf("insert assistant text: %v", err)
+	}
+	finish := "stop"
+	if _, err := store.InsertPart(context.Background(), db.Part{MessageID: assistant.ID, Type: "step-finish", FinishReason: &finish}); err != nil {
+		t.Fatalf("insert assistant finish: %v", err)
+	}
+	content := `{"preferences":[{"text":"Use the active model","evidence":"The test requires the current session model.","source_message_ids":["` + user.ID + `"]}],"decisions":[],"things_to_avoid":[],"questions":[],"recent_context":[],"supersessions":[]}`
+	fake := newFakeProvider(t, 0, respBody(content, "stop", nil))
+	cfg := settings.Default()
+	cfg.Provider.Active = "codex"
+	cfg.Model.Default = ""
+	cfg.Recap.Enabled = false
+	cfg.Skills.Remember = true
+	m := New(Options{
+		Store:    store,
+		Client:   opencode.NewClient("test-key", opencode.WithBaseURL(fake.srv.URL)),
+		Workdir:  workdir,
+		Session:  &session,
+		Settings: &cfg,
+	})
+	cmd := m.scheduleMemoryUpdate()
+	if cmd == nil {
+		t.Fatal("scheduleMemoryUpdate returned nil")
+	}
+	if msg := cmd(); msg != nil {
+		if done, ok := msg.(memoryDoneMsg); ok && done.err != nil {
+			t.Fatalf("memory update: %v", done.err)
+		}
+	}
+	body, err := os.ReadFile(filepath.Join(workdir, "knowledge-base", "memories.md"))
+	if err != nil {
+		t.Fatalf("memories.md was not created: %v", err)
+	}
+	if !strings.Contains(string(body), "Use the active model") {
+		t.Fatalf("memories.md = %q", body)
+	}
+	updates, err := store.ListMemoryUpdatesForSession(context.Background(), workdir, session.ID)
+	if err != nil {
+		t.Fatalf("list memory updates: %v", err)
+	}
+	if len(updates) != 1 || updates[0].Model != session.Model {
+		t.Fatalf("memory updates = %+v, want model %q", updates, session.Model)
+	}
+}
+
 func TestMemoryRecoveryRetriesInsufficientContextFailure(t *testing.T) {
 	store := newTestStore(t)
 	workdir := t.TempDir()
