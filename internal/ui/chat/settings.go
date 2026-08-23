@@ -10,7 +10,6 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 	"github.com/chinmay-sawant/lazykoder/internal/settings"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
@@ -931,6 +930,9 @@ func (m Model) cycleDefaultModel(delta int) Model {
 		list = []string{settings.DefaultModelID}
 	}
 	cur := m.projectSettings.Model.Default
+	if cur == "" && m.client != nil {
+		cur = m.client.Model()
+	}
 	if cur == "" {
 		cur = settings.DefaultModelID
 	}
@@ -1055,11 +1057,11 @@ func (m Model) defaultVariantChoices() []string {
 	// Empty string first = provider default.
 	out := []string{""}
 	seen := map[string]bool{"": true}
-	modelID := m.projectSettings.Model.Default
+	modelID := m.modelLabel()
 	if modelID == "" {
 		modelID = settings.DefaultModelID
 	}
-	if info, ok := modelscache.InfoOf(m.modelInfos, modelID); ok {
+	if info, ok := m.selectedModelInfo(modelID); ok {
 		for _, v := range info.Variants {
 			v = strings.TrimSpace(v)
 			if v == "" || seen[v] {
@@ -1115,7 +1117,7 @@ func (m Model) setDefaultModel(id string) Model {
 		id = settings.DefaultModelID
 	}
 	m.projectSettings.Model.Default = id
-	if !modelscache.HasVariant(m.modelInfos, id, m.projectSettings.Model.Variant) {
+	if !m.modelHasVariant(id, m.projectSettings.Model.Variant) {
 		m.projectSettings.Model.Variant = ""
 	}
 	// Apply to the live chat when there is no session yet, or the live

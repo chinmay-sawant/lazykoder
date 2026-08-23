@@ -54,6 +54,9 @@ func TestParseModelsDevReadsPricesAndVariants(t *testing.T) {
 	if luna.CacheWritePerM != 0.25 || !containsID(luna.Variants, "max") || !containsID(luna.Variants, "xhigh") {
 		t.Fatalf("gpt-5.6-luna = %+v", luna)
 	}
+	if luna.Endpoint != opencode.RouteForModel(opencode.DefaultBaseURL, luna.ID).Endpoint {
+		t.Fatalf("gpt-5.6-luna endpoint = %q", luna.Endpoint)
+	}
 	free := got["deepseek-v4-flash-free"]
 	if !free.Free || !containsID(free.Variants, "max") {
 		t.Fatalf("free model = %+v", free)

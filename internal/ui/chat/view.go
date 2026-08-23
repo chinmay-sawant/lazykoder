@@ -11,7 +11,6 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
 	"github.com/chinmay-sawant/lazykoder/internal/tips"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
@@ -479,7 +478,7 @@ func (m Model) composerFooter(width int) string {
 }
 
 func (m Model) footerPieces() (tokens, cache, cost, tps string) {
-	window := modelscache.ContextOf(m.modelInfos, m.modelLabel())
+	window := m.modelContext(m.modelLabel())
 	if m.statusSegmentEnabled("tokens") {
 		switch {
 		case m.tokensUsed > 0 && window > 0:
@@ -823,6 +822,7 @@ func (m Model) helpOverlay() string {
 		{"/settings", "project defaults"},
 		{"/agents", "sub-agents + logs"},
 		{"/status", "status details and visibility"},
+		{"/provider", "switch chat provider"},
 		{"/model", "switch live model"},
 		{"/variant", "reasoning effort"},
 		{"/refresh", "reload models.json"},

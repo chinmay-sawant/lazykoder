@@ -100,7 +100,7 @@ func ParseModelsDev(raw []byte) (map[string]Info, error) {
 
 func liveInfo(id string, m liveModel, provider string) Info {
 	info := Info{ID: id, Context: m.Limit.Context, Variants: effortVariants(m.ReasoningOptions)}
-	if route, ok := opencode.RouteForCatalogProvider(opencode.DefaultBaseURL, provider); ok {
+	if route, ok := opencode.RouteForCatalogModel(opencode.DefaultBaseURL, provider, id); ok {
 		info.Endpoint = route.Endpoint
 		info.Provider = route.Provider
 	}

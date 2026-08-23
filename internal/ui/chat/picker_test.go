@@ -13,6 +13,10 @@ import (
 
 	"github.com/chinmay-sawant/lazykoder/internal/db"
 	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
+	"github.com/chinmay-sawant/lazykoder/internal/provider"
+	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
+	"github.com/chinmay-sawant/lazykoder/internal/provider/subscription"
+	"github.com/chinmay-sawant/lazykoder/internal/settings"
 )
 
 func TestModelPickerOpensOnlyFromModelClick(t *testing.T) {
@@ -30,6 +34,213 @@ func TestModelPickerOpensOnlyFromModelClick(t *testing.T) {
 	m = clickModelStatus(t, m)
 	if !m.pickerMode {
 		t.Fatal("clicking the model status did not open the picker")
+	}
+}
+
+func TestCodexCatalogDefaultsToLunaLow(t *testing.T) {
+	client := subscription.NewCodex("", subscription.WithCatalogLoader(func(context.Context) (subscription.ModelCatalog, error) {
+		return subscription.ModelCatalog{
+			Default:        "gpt-5.6-luna",
+			DefaultVariant: "low",
+			Models: []opencode.ModelInfo{{
+				ID:       "gpt-5.6-luna",
+				Provider: provider.IDCodex,
+				Variants: []string{"low", "high"},
+			}},
+		}, nil
+	}))
+	infos, err := client.ModelInfos(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := settings.Default()
+	cfg.Provider.Active = provider.IDCodex
+	cfg.Model.Default = ""
+	cfg.Model.Variant = ""
+	m := New(Options{Store: newTestStore(t), Client: client, Settings: &cfg, Workdir: t.TempDir()})
+	next, _ := m.Update(modelsMsg{
+		list:  modelscache.IDs(toCacheInfos(infos)),
+		infos: toCacheInfos(infos),
+		defaults: map[string]modelDefault{
+			provider.IDCodex: {model: client.Model(), variant: client.DefaultVariant()},
+		},
+	})
+	m = next.(Model)
+	if m.model != "gpt-5.6-luna" || m.variant != "low" {
+		t.Fatalf("selected model = %q variant = %q, want gpt-5.6-luna with low", m.model, m.variant)
+	}
+	if m.projectSettings.Model.Default != "gpt-5.6-luna" || m.projectSettings.Model.Variant != "low" {
+		t.Fatalf("saved defaults = %+v", m.projectSettings.Model)
+	}
+}
+
+func TestModelPickerGroupsAndRoutesCrossProviderSelection(t *testing.T) {
+	openCodeClient := deadClient()
+	codexClient := subscription.NewCodex("gpt-5.6-luna")
+	cfg := settings.Default()
+	m := New(Options{
+		Store:    newTestStore(t),
+		Client:   openCodeClient,
+		Settings: &cfg,
+		Workdir:  t.TempDir(),
+		NewProviderClient: func(id string) (provider.Client, error) {
+			switch id {
+			case provider.IDCodex:
+				return codexClient, nil
+			case provider.IDOpenCode:
+				return openCodeClient, nil
+			default:
+				return nil, nil
+			}
+		},
+	})
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 36})
+	m = mm.(Model)
+	m.models = []string{"deepseek-v4-flash", "gpt-5.6-luna", "gpt-5.6-luna"}
+	m.modelInfos = []modelscache.Info{
+		{ID: "deepseek-v4-flash", Provider: modelscache.ProviderOpenCodeGo},
+		{ID: "gpt-5.6-luna", Provider: modelscache.ProviderOpenCodeGo},
+		{ID: "gpt-5.6-luna", Provider: provider.IDCodex, Variants: []string{"low", "high"}},
+	}
+	m.modelDefaults = map[string]modelDefault{
+		provider.IDCodex: {model: "gpt-5.6-luna", variant: "low"},
+	}
+	m = m.openKindPicker(pickerKindModel)
+	content := stripANSI(m.pickerContent(m.pickerVp.Width()))
+	if !strings.Contains(content, "OpenCode") || !strings.Contains(content, "Codex") {
+		t.Fatalf("group headings missing: %q", content)
+	}
+	if got := strings.Count(content, "gpt-5.6-luna"); got != 2 {
+		t.Fatalf("shared model rows = %d, want 2: %q", got, content)
+	}
+	headingY := m.pickerDrawerTop() + 1
+	if _, ok := m.pickerIndexAtScreenY(headingY); ok {
+		t.Fatalf("provider heading at y=%d must not be selectable", headingY)
+	}
+	if index, ok := m.pickerIndexAtScreenY(headingY + 1); !ok || index != 0 {
+		t.Fatalf("first model row = index:%d ok:%t, want 0", index, ok)
+	}
+
+	m, _ = m.selectPickerItem(2)
+	if m.projectSettings.EffectiveProvider() != provider.IDCodex {
+		t.Fatalf("provider = %q, want codex", m.projectSettings.EffectiveProvider())
+	}
+	if m.client != codexClient {
+		t.Fatalf("client was not switched to Codex: %T", m.client)
+	}
+	if m.model != "gpt-5.6-luna" || m.variant != "low" {
+		t.Fatalf("selected model = %q variant = %q", m.model, m.variant)
+	}
+
+	m = m.openKindPicker(pickerKindModel)
+	m, _ = m.selectPickerItem(1)
+	if m.projectSettings.EffectiveProvider() != provider.IDOpenCode {
+		t.Fatalf("provider after returning to OpenCode = %q", m.projectSettings.EffectiveProvider())
+	}
+	if m.client != openCodeClient {
+		t.Fatalf("client was not switched back to OpenCode: %T", m.client)
+	}
+	if m.model != "gpt-5.6-luna" {
+		t.Fatalf("OpenCode model = %q", m.model)
+	}
+}
+
+func TestPromptModelPickerArrowMovesAcrossProviderGroups(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	m.models = []string{"gpt-5.6-luna", "gpt-5.6-luna"}
+	m.modelInfos = []modelscache.Info{
+		{ID: "gpt-5.6-luna", Provider: modelscache.ProviderOpenCodeGo},
+		{ID: "gpt-5.6-luna", Provider: provider.IDCodex},
+	}
+	m = m.syncSlash("/model luna")
+	if !m.pickerMode || !m.pickerFromPrompt {
+		t.Fatalf("picker state = mode=%v fromPrompt=%v", m.pickerMode, m.pickerFromPrompt)
+	}
+	if m.pickerCursor != 0 {
+		t.Fatalf("initial picker cursor = %d, want 0", m.pickerCursor)
+	}
+
+	next, _ := m.updatePickerKey(tea.KeyPressMsg{Code: tea.KeyDown})
+	if next.pickerCursor != 1 {
+		t.Fatalf("down cursor = %d, want 1 for the Codex row", next.pickerCursor)
+	}
+}
+
+func TestPromptModelPickerKeypadDownMovesAcrossProviderGroups(t *testing.T) {
+	m := New(Options{Client: deadClient(), Workdir: t.TempDir()})
+	m.models = []string{"gpt-5.6-luna", "gpt-5.6-luna"}
+	m.modelInfos = []modelscache.Info{
+		{ID: "gpt-5.6-luna", Provider: modelscache.ProviderOpenCodeGo},
+		{ID: "gpt-5.6-luna", Provider: provider.IDCodex},
+	}
+	m = m.syncSlash("/model luna")
+
+	next, _ := m.updatePickerKey(tea.KeyPressMsg{Code: tea.KeyKpDown})
+	if next.pickerCursor != 1 {
+		t.Fatalf("keypad down cursor = %d, want 1 for the Codex row", next.pickerCursor)
+	}
+}
+
+func TestLoadSessionRestoresSessionProviderClient(t *testing.T) {
+	openCodeClient := deadClient()
+	codexClient := subscription.NewCodex("gpt-5.6-luna")
+	m := New(Options{
+		Client: openCodeClient,
+		Settings: func() *settings.Settings {
+			cfg := settings.Default()
+			cfg.Provider.Active = provider.IDOpenCode
+			return &cfg
+		}(),
+		NewProviderClient: func(id string) (provider.Client, error) {
+			if id == provider.IDCodex {
+				return codexClient, nil
+			}
+			return openCodeClient, nil
+		},
+		Workdir: t.TempDir(),
+	})
+	sess := db.Session{ID: "session-codex", Provider: provider.IDCodex, Model: "gpt-5.6-luna"}
+
+	m = m.loadSession(&sess)
+	if m.projectSettings.EffectiveProvider() != provider.IDCodex {
+		t.Fatalf("provider after resume = %q, want codex", m.projectSettings.EffectiveProvider())
+	}
+	if m.client != codexClient {
+		t.Fatalf("client after resume = %T, want Codex client", m.client)
+	}
+}
+
+func TestSubagentProfilesUseTheConfiguredChildProvider(t *testing.T) {
+	cfg := settings.Default()
+	cfg.Orchestrator.Provider = provider.IDOpenCode
+	m := New(Options{Client: deadClient(), Settings: &cfg, Workdir: t.TempDir()})
+	m.modelInfos = []modelscache.Info{
+		{ID: "gpt-5.6-luna", Provider: provider.IDCodex, Endpoint: "cli://codex/chat/completions"},
+		{ID: "gpt-5.6-luna", Provider: modelscache.ProviderOpenCodeGo, Endpoint: "https://opencode.ai/zen/go/v1/chat/completions"},
+	}
+
+	profiles := m.subagentModelProfiles()
+	if len(profiles) != 1 {
+		t.Fatalf("profiles = %+v, want one OpenCode row", profiles)
+	}
+	if profiles[0].ID != "gpt-5.6-luna" || profiles[0].Endpoint != "https://opencode.ai/zen/go/v1/chat/completions" {
+		t.Fatalf("profile = %+v, want OpenCode Luna endpoint", profiles[0])
+	}
+}
+
+func TestMergeKeepsSharedModelIDsAcrossProviders(t *testing.T) {
+	infos := modelscache.MergeByID(
+		[]modelscache.Info{{ID: "gpt-5.6-luna", Provider: provider.IDCodex}},
+		[]modelscache.Info{{ID: "gpt-5.6-luna", Provider: modelscache.ProviderOpenCodeGo}},
+	)
+	if len(infos) != 2 {
+		t.Fatalf("shared model rows = %d, want 2", len(infos))
+	}
+	if got := providerIDForModelInfo(infos[0]); got != provider.IDCodex {
+		t.Fatalf("shared model provider = %q, want codex", got)
+	}
+	if got := providerIDForModelInfo(infos[1]); got != provider.IDOpenCode {
+		t.Fatalf("shared model provider = %q, want opencode", got)
 	}
 }
 

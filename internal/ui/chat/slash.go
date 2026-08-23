@@ -24,7 +24,7 @@ type slashPaletteGroup struct {
 // slashPaletteGroups is the painted order. Headings are not selectable.
 var slashPaletteGroups = []slashPaletteGroup{
 	{title: "Session", names: []string{"/new", "/resume", "/continue", "/compact"}},
-	{title: "Model", names: []string{"/model", "/variant", "/refresh"}},
+	{title: "Model", names: []string{"/provider", "/model", "/variant", "/refresh"}},
 	{title: "Project", names: []string{"/agents", "/history", "/memory", "/spawn", "/settings", "/skills", "/usage"}},
 	{title: "Help", names: []string{"/help"}},
 }
@@ -73,7 +73,7 @@ func (m Model) slashView() string {
 			if len(groupItems) == 0 {
 				continue
 			}
-			if gi > 0 || body.Len() > 0 {
+			if !compact && (gi > 0 || body.Len() > 0) {
 				body.WriteString("\n")
 			}
 			if compact && len(groupItems) == 1 {
@@ -201,6 +201,8 @@ func (m Model) runSlashArg(name, extra string) (Model, tea.Cmd) {
 		return m.openSessionPicker(), nil
 	case "/model":
 		return m.openModelSearch(), nil
+	case "/provider":
+		return m.openProviderPicker(), nil
 	case "/variant":
 		return m.openVariantPicker(), nil
 	case "/refresh":

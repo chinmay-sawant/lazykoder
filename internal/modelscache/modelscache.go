@@ -161,20 +161,32 @@ func HasVariant(infos []Info, id, variant string) bool {
 	return false
 }
 
-// MergeByID appends extras whose ids are not already in base.
+// MergeByID appends extras whose provider and ids are not already in base.
+// Providers may expose the same model ID, so the provider is part of the
+// identity used for this merge.
 func MergeByID(base, extra []Info) []Info {
 	seen := make(map[string]struct{}, len(base))
 	for _, m := range base {
-		seen[m.ID] = struct{}{}
+		seen[mergeKey(m)] = struct{}{}
 	}
 	out := append([]Info(nil), base...)
 	for _, m := range extra {
-		if _, ok := seen[m.ID]; ok {
+		key := mergeKey(m)
+		if _, ok := seen[key]; ok {
 			continue
 		}
+		seen[key] = struct{}{}
 		out = append(out, m)
 	}
 	return out
+}
+
+func mergeKey(info Info) string {
+	provider := info.Provider
+	if provider == "" {
+		provider = ProviderFromEndpoint(info.Endpoint, info.ID)
+	}
+	return provider + "\x00" + info.ID
 }
 
 // CostUSD estimates USD for a step from token counts and list prices.

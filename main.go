@@ -11,7 +11,6 @@ import (
 
 	"github.com/chinmay-sawant/lazykoder/internal/envfile"
 	"github.com/chinmay-sawant/lazykoder/internal/provider"
-	"github.com/chinmay-sawant/lazykoder/internal/provider/openai"
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 	"github.com/chinmay-sawant/lazykoder/internal/settings"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/chat"
@@ -45,19 +44,11 @@ func main() {
 			initial = err.Error()
 		}
 	}
-	key, keyErr := opencode.APIKeyFromEnv()
-	var client provider.Client
-	var childClient provider.Client
-	if cfg.EffectiveProvider() == "openai" {
-		key, keyErr = openai.APIKeyFromEnv()
-		client = openai.NewClient(key)
-		childKey, childErr := opencode.APIKeyFromEnv()
-		if childErr == nil {
-			childClient = opencode.NewClient(childKey)
-		}
-	} else {
-		client = opencode.NewClient(key)
-		childClient = client
+	client, keyErr := provider.NewClient(cfg.EffectiveProvider())
+	childProvider := cfg.EffectiveOrchestrator().Provider
+	childClient := client
+	if childProvider != cfg.EffectiveProvider() {
+		childClient, _ = provider.NewClient(childProvider)
 	}
 	if keyErr != nil {
 		initial = keyErr.Error()
@@ -67,19 +58,26 @@ func main() {
 		MaxRetries: retry.MaxRetries,
 		Delay:      time.Duration(retry.DelaySeconds) * time.Second,
 	})
+	if childClient != client {
+		childClient.SetRetryPolicy(opencode.RetryPolicy{
+			MaxRetries: retry.MaxRetries,
+			Delay:      time.Duration(retry.DelaySeconds) * time.Second,
+		})
+	}
 
 	// Always start fresh. Past runs stay in SQLite and load via /resume.
 	p := tea.NewProgram(chat.New(chat.Options{
-		Store:         env.DB,
-		Client:        client,
-		ChildClient:   childClient,
-		Workdir:       cwd,
-		MaxSteps:      cfg.EffectiveMaxSteps(),
-		InitialErr:    initial,
-		CachePath:     filepath.Join(env.Dir, "models.json"),
-		SettingsPath:  settingsPath,
-		Settings:      &cfg,
-		WorktreeDirty: chat.DefaultWorktreeDirty,
+		Store:             env.DB,
+		Client:            client,
+		ChildClient:       childClient,
+		NewProviderClient: provider.NewClient,
+		Workdir:           cwd,
+		MaxSteps:          cfg.EffectiveMaxSteps(),
+		InitialErr:        initial,
+		CachePath:         filepath.Join(env.Dir, "models.json"),
+		SettingsPath:      settingsPath,
+		Settings:          &cfg,
+		WorktreeDirty:     chat.DefaultWorktreeDirty,
 	}))
 	final, err := p.Run()
 	if err != nil {

@@ -17,6 +17,7 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/db"
 	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
 	"github.com/chinmay-sawant/lazykoder/internal/orchestrator"
+	"github.com/chinmay-sawant/lazykoder/internal/provider"
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 	"github.com/chinmay-sawant/lazykoder/internal/recap"
 	"github.com/chinmay-sawant/lazykoder/internal/settings"
@@ -57,11 +58,16 @@ func (m Model) attachSubMgr(cfg settings.Settings, recoverJobs bool) Model {
 	if childClient == nil {
 		childClient = m.client
 	}
-	runner := subagent.AgentRunner{Store: m.store, Client: childClient}
+	runner := subagent.AgentRunner{
+		Store:    m.store,
+		Client:   childClient,
+		Provider: cfg.EffectiveOrchestrator().Provider,
+	}
 	m.subMgr = subagent.NewManager(subagent.ConfigFromSettings(cfg), runner)
 	rt := subagent.Runtime{
 		Workdir:  m.workdir,
-		Model:    cfg.EffectiveModel(),
+		Model:    childModel(cfg),
+		Endpoint: m.childModelEndpoint(cfg),
 		Variant:  cfg.EffectiveVariant(),
 		Profiles: m.subagentModelProfiles(),
 		Confirm:  m.confirmHook,
@@ -95,6 +101,7 @@ func (m Model) agentOptions() agent.Options {
 	opts := agent.Options{
 		Session:              m.session,
 		MaxSteps:             m.maxSteps,
+		Provider:             m.projectSettings.EffectiveProvider(),
 		Model:                m.model,
 		Endpoint:             m.modelEndpoint(),
 		Variant:              m.variant,
@@ -102,11 +109,11 @@ func (m Model) agentOptions() agent.Options {
 		Ask:                  m.askHook,
 		BashAllowlist:        m.projectSettings.EffectiveAgents().BashAllowlist,
 		BashAllowlistEnabled: m.projectSettings.EffectiveAgents().BashAllowlistEnabled,
-		ContextWindow:        int64(modelscache.ContextOf(m.modelInfos, m.modelLabel())),
+		ContextWindow:        int64(m.modelContext(m.modelLabel())),
 		TokensUsed:           m.tokensUsed,
 		OutgoingModel:        m.prevModel,
 		OutgoingWindow:       m.prevWindow,
-		OutgoingEndpoint:     modelscache.EndpointOf(m.modelInfos, m.prevModel),
+		OutgoingEndpoint:     m.modelEndpointFor(m.prevModel),
 		CompactAuto:          cfg.Auto,
 		CompactPercent:       cfg.Percent,
 		KeepTokens:           cfg.KeepTokens,
@@ -114,7 +121,7 @@ func (m Model) agentOptions() agent.Options {
 		Orchestrator: orchestrator.Config{
 			Enabled:      m.projectSettings.EffectiveAgents().Enabled && m.projectSettings.EffectiveOrchestrator().Enabled,
 			Review:       m.projectSettings.EffectiveOrchestrator().Review,
-			Model:        m.modelLabel(),
+			Model:        m.model,
 			Endpoint:     m.modelEndpoint(),
 			MaxSubtasks:  orchestrator.MaxSubtasks,
 			ExploreClass: m.projectSettings.EffectiveOrchestrator().ExploreClass,
@@ -370,12 +377,16 @@ func (m Model) wireSubMgrRuntime() {
 	if childClient == nil {
 		childClient = m.client
 	}
-	m.subMgr.SetRunner(subagent.AgentRunner{Store: m.store, Client: childClient})
+	m.subMgr.SetRunner(subagent.AgentRunner{
+		Store:    m.store,
+		Client:   childClient,
+		Provider: m.projectSettings.EffectiveOrchestrator().Provider,
+	})
 	m.subMgr.SetStore(m.store)
 	m.subMgr.SetRuntime(subagent.Runtime{
 		Workdir:  m.workdir,
-		Model:    m.model,
-		Endpoint: m.modelEndpoint(),
+		Model:    childModel(m.projectSettings),
+		Endpoint: m.childModelEndpoint(m.projectSettings),
 		Variant:  m.variant,
 		Profiles: m.subagentModelProfiles(),
 		Confirm:  m.confirmHook,
@@ -416,8 +427,17 @@ func (m Model) explicitSkillContexts(ctx context.Context) []skills.Context {
 }
 
 func (m Model) subagentModelProfiles() []subagent.ModelProfile {
-	profiles := make([]subagent.ModelProfile, 0, len(m.modelInfos))
-	for _, info := range m.modelInfos {
+	childProvider := m.projectSettings.EffectiveOrchestrator().Provider
+	infos := modelInfosForProvider(m.modelInfos, childProvider)
+	if len(infos) == 0 {
+		for _, info := range m.modelInfos {
+			if providerIDForModelInfo(info) == "" {
+				infos = append(infos, info)
+			}
+		}
+	}
+	profiles := make([]subagent.ModelProfile, 0, len(infos))
+	for _, info := range infos {
 		profiles = append(profiles, subagent.ModelProfile{
 			ID:            info.ID,
 			Endpoint:      info.Endpoint,
@@ -426,6 +446,29 @@ func (m Model) subagentModelProfiles() []subagent.ModelProfile {
 		})
 	}
 	return profiles
+}
+
+func childModel(cfg settings.Settings) string {
+	if model := strings.TrimSpace(cfg.EffectiveAgents().ModelOverride); model != "" {
+		return model
+	}
+	return provider.DefaultModel(cfg.EffectiveOrchestrator().Provider)
+}
+
+func (m Model) childModelEndpoint(cfg settings.Settings) string {
+	model := childModel(cfg)
+	if info, ok := m.modelInfoForProvider(model, cfg.EffectiveOrchestrator().Provider); ok {
+		if endpoint := canonicalModelEndpoint(m.childClient, info); endpoint != "" {
+			return endpoint
+		}
+	}
+	if model == m.model && m.client != nil && (m.childClient == nil || m.childClient.BaseURL() == m.client.BaseURL()) {
+		return m.modelEndpoint()
+	}
+	if m.childClient == nil {
+		return ""
+	}
+	return opencode.ChatURLForModel(m.childClient.BaseURL(), model)
 }
 
 // startTurn arms channels, builds the Agent, and returns watch/pulse cmds.
@@ -763,10 +806,8 @@ func (m Model) recoverMemoryUpdates() tea.Msg {
 }
 
 func (m Model) recapModelInfo(model string) modelscache.Info {
-	for _, info := range m.modelInfos {
-		if info.ID == model {
-			return info
-		}
+	if info, ok := m.selectedModelInfo(model); ok {
+		return info
 	}
 	info := modelscache.Info{ID: model}
 	if m.client != nil {

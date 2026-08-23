@@ -39,6 +39,11 @@ func ChatURL(base string) string {
 	return strings.TrimSuffix(base, "/") + "/chat/completions"
 }
 
+// ResponsesURL returns the OpenAI Responses URL for an API base.
+func ResponsesURL(base string) string {
+	return strings.TrimSuffix(base, "/") + "/responses"
+}
+
 // Route is the endpoint and provider identity selected for a model.
 type Route struct {
 	Endpoint string
@@ -77,15 +82,25 @@ func RouteForModel(base, id string) Route {
 			return Route{Endpoint: endpoint, Provider: ProviderZen}
 		}
 	}
+	if isResponsesModel(id) {
+		return Route{Endpoint: ResponsesURL(base), Provider: ProviderGo}
+	}
 	return Route{Endpoint: ChatURL(base), Provider: ProviderGo}
 }
 
 // RouteForCatalogProvider turns a models.dev provider key into the matching
-// OpenCode chat route. Unknown keys have no OpenCode route.
+// OpenCode route. Unknown keys have no OpenCode route.
 func RouteForCatalogProvider(base, provider string) (Route, bool) {
+	return RouteForCatalogModel(base, provider, "")
+}
+
+// RouteForCatalogModel turns a models.dev provider and model id into the
+// matching OpenCode route. The model id is used only for protocol capabilities
+// that differ within the same provider.
+func RouteForCatalogModel(base, provider, id string) (Route, bool) {
 	switch provider {
 	case "opencode-go":
-		return Route{Endpoint: ChatURL(base), Provider: ProviderGo}, true
+		return RouteForModel(base, id), true
 	case "opencode":
 		endpoint, ok := ZenChatURL(base)
 		if !ok {
@@ -99,6 +114,18 @@ func RouteForCatalogProvider(base, provider string) (Route, bool) {
 
 func isFreeModelID(id string) bool {
 	return strings.HasSuffix(id, "-free") || id == "big-pickle"
+}
+
+// OpenCode's Go gateway exposes Responses for this model family while the
+// remaining Go catalog continues to use chat completions. Keep this protocol
+// capability in one route table so callers do not grow model-specific checks.
+var responsesModels = map[string]struct{}{
+	"gpt-5.6-luna": {},
+}
+
+func isResponsesModel(id string) bool {
+	_, ok := responsesModels[strings.TrimSpace(id)]
+	return ok
 }
 
 // ErrMissingAPIKey is returned when no API key is available from the environment.
@@ -579,6 +606,9 @@ func waitForRetry(ctx context.Context, policy RetryPolicy) error {
 
 // Chat POSTs <base>/chat/completions with Authorization: Bearer <key>.
 func (c *Client) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
+	if isResponsesEndpoint(c.chatURL(req)) {
+		return c.chatResponses(ctx, req)
+	}
 	resp, err := c.postChat(ctx, req, false)
 	if err != nil {
 		return nil, err
@@ -648,14 +678,14 @@ func (c *Client) ModelInfos(ctx context.Context) ([]ModelInfo, error) {
 		return nil, fmt.Errorf("opencode: decode models response: %w", err)
 	}
 	out := make([]ModelInfo, 0, len(wire.Data))
-	endpoint := ChatURL(c.baseURL)
 	for _, m := range wire.Data {
 		if m.ID == "" {
 			continue
 		}
 		info := m.info()
-		info.Endpoint = endpoint
-		info.Provider = ProviderGo
+		route := RouteForModel(c.baseURL, m.ID)
+		info.Endpoint = route.Endpoint
+		info.Provider = route.Provider
 		out = append(out, info)
 	}
 	return out, nil

@@ -328,6 +328,16 @@ func (s *Store) UpdateSessionModel(ctx context.Context, sessionID, model string)
 	return nil
 }
 
+// UpdateSessionProvider sets the provider route of a session and bumps
+// time_updated.
+func (s *Store) UpdateSessionProvider(ctx context.Context, sessionID, provider string) error {
+	if _, err := s.db.ExecContext(ctx, `UPDATE sessions SET provider = ?, time_updated = ? WHERE id = ?`,
+		provider, time.Now().UnixMilli(), sessionID); err != nil {
+		return fmt.Errorf("db: update session provider: %w", err)
+	}
+	return nil
+}
+
 // UpdateSessionVariant sets the reasoning variant of a session and bumps
 // time_updated. An empty variant clears the column.
 func (s *Store) UpdateSessionVariant(ctx context.Context, sessionID, variant string) error {

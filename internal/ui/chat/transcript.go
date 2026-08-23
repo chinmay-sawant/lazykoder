@@ -17,6 +17,7 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/agent"
 	"github.com/chinmay-sawant/lazykoder/internal/db"
 	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
+	"github.com/chinmay-sawant/lazykoder/internal/provider"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/edit"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/markdown"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
@@ -88,7 +89,7 @@ func (m *Model) replay(sessionID string) {
 	m.items = append(m.items, res.items...)
 	m.inputHistory = append(m.inputHistory, res.history...)
 	for _, u := range res.usage {
-		m.applyUsage(u.part, u.modelID)
+		m.applyUsage(u.part, u.modelID, u.providerID)
 	}
 	for _, p := range res.compactMeter {
 		m.applyCompactMeter(p)
@@ -97,7 +98,7 @@ func (m *Model) replay(sessionID string) {
 	m.syncTranscript()
 }
 
-func (m *Model) applyUsage(p db.Part, modelID string) {
+func (m *Model) applyUsage(p db.Part, modelID, providerID string) {
 	var in, out, total int64
 	if p.TokensInput != nil {
 		in = *p.TokensInput
@@ -125,7 +126,7 @@ func (m *Model) applyUsage(p db.Part, modelID string) {
 	if p.TokensCacheRead != nil {
 		hit = *p.TokensCacheRead
 	}
-	m.addStepCost(p, modelID)
+	m.addStepCost(p, modelID, providerID)
 
 	miss := cacheMissTokens(in, hit)
 	if hit > 0 {
@@ -204,8 +205,11 @@ func estimateModelContext(items []transcriptItem) int64 {
 	return n
 }
 
-func (m *Model) addStepCost(p db.Part, modelID string) {
-	m.sessionCost += stepCostUSD(p, m.modelInfos, m.usageModelID(modelID))
+func (m *Model) addStepCost(p db.Part, modelID, providerID string) {
+	if providerID == "" {
+		providerID = m.projectSettings.EffectiveProvider()
+	}
+	m.sessionCost += stepCostUSD(p, m.modelInfos, m.usageModelID(modelID), providerID)
 }
 
 func (m *Model) recomputeSessionCost() {
@@ -251,11 +255,15 @@ func sessionUsageOf(store *db.Store, infos []modelscache.Info, sessionID string)
 		if modelID == "" {
 			modelID = sess.Model
 		}
+		providerID := msg.ProviderID
+		if providerID == "" {
+			providerID = sess.Provider
+		}
 		for _, p := range parts {
 			if p.Type != "step-finish" {
 				continue
 			}
-			out.Cost += stepCostUSD(p, infos, modelID)
+			out.Cost += stepCostUSD(p, infos, modelID, providerID)
 			var in, hit int64
 			if p.TokensInput != nil {
 				in = *p.TokensInput
@@ -274,7 +282,7 @@ func sessionUsageOf(store *db.Store, infos []modelscache.Info, sessionID string)
 	return out
 }
 
-func stepCostUSD(p db.Part, infos []modelscache.Info, modelID string) float64 {
+func stepCostUSD(p db.Part, infos []modelscache.Info, modelID, providerID string) float64 {
 	if p.Cost != nil && *p.Cost > 0 {
 		return *p.Cost
 	}
@@ -295,20 +303,49 @@ func stepCostUSD(p db.Part, infos []modelscache.Info, modelID string) float64 {
 		written = *p.TokensCacheWrite
 	}
 	if in > 0 || out > 0 || hit > 0 || written > 0 {
-		return costUSDFor(infos, modelID, in, out, hit, written)
+		return costUSDFor(infos, modelID, providerID, in, out, hit, written)
 	}
 	if total > 0 {
-		return costUSDFor(infos, modelID, 0, total, 0, 0)
+		return costUSDFor(infos, modelID, providerID, 0, total, 0, 0)
 	}
 	return 0
 }
 
-func costUSDFor(infos []modelscache.Info, modelID string, input, output, cacheRead, cacheWrite int64) float64 {
-	info, ok := modelscache.InfoOf(infos, modelID)
+func costUSDFor(infos []modelscache.Info, modelID, providerID string, input, output, cacheRead, cacheWrite int64) float64 {
+	info, ok := infoForModelProvider(infos, modelID, providerID)
 	if !ok {
 		return 0
 	}
 	return info.CostUSD(input, output, cacheRead, cacheWrite)
+}
+
+func infoForModelProvider(infos []modelscache.Info, modelID, providerID string) (modelscache.Info, bool) {
+	if providerID != "" {
+		providerID = provider.Normalize(providerID)
+	}
+	var fallback modelscache.Info
+	hasFallback := false
+	for _, info := range infos {
+		if info.ID != modelID {
+			continue
+		}
+		marked, ok := modelscache.InfoOf([]modelscache.Info{info}, modelID)
+		if !ok {
+			continue
+		}
+		rowProvider := providerIDForModelInfo(marked)
+		if providerID == "" || rowProvider == providerID {
+			return marked, true
+		}
+		if rowProvider == "" && !hasFallback {
+			fallback = marked
+			hasFallback = true
+		}
+	}
+	if hasFallback {
+		return fallback, true
+	}
+	return modelscache.Info{}, false
 }
 
 func cacheMissTokens(input, hit int64) int64 {
@@ -706,7 +743,7 @@ func (m *Model) applyPart(p db.Part) {
 		})
 	case "step-finish":
 		m.collapseLiveReasoning()
-		m.applyUsage(p, m.model)
+		m.applyUsage(p, m.model, m.projectSettings.EffectiveProvider())
 	case agent.CompactPartType:
 		m.applyCompactNotice(p)
 	}

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chinmay-sawant/lazykoder/internal/provider"
 	"github.com/chinmay-sawant/lazykoder/internal/roles"
 )
 
@@ -128,6 +129,7 @@ type Provider struct {
 type Orchestrator struct {
 	Enabled      bool   `json:"enabled"`
 	Review       bool   `json:"review"`
+	Provider     string `json:"provider"`
 	ExploreClass string `json:"explore_class"`
 	PlanClass    string `json:"plan_class"`
 	GeneralClass string `json:"general_class"`
@@ -229,6 +231,7 @@ func Default() Settings {
 		Orchestrator: Orchestrator{
 			Enabled:      true,
 			Review:       true,
+			Provider:     provider.IDOpenCode,
 			ExploreClass: "flash",
 			PlanClass:    "pro",
 			GeneralClass: "pro",
@@ -310,19 +313,15 @@ func (s Settings) EffectiveMaxSteps() int {
 	return s.Slot.MaxSteps
 }
 
-// EffectiveModel is the default model id (never empty after normalize).
+// EffectiveModel is the default model id. It is empty when the selected
+// provider owns a live default model selection.
 func (s Settings) EffectiveModel() string {
 	return s.normalized().Model.Default
 }
 
-// EffectiveProvider returns the supported active provider name.
+// EffectiveProvider returns the canonical active provider name.
 func (s Settings) EffectiveProvider() string {
-	switch strings.ToLower(strings.TrimSpace(s.normalized().Provider.Active)) {
-	case "openai":
-		return "openai"
-	default:
-		return "opencode"
-	}
+	return provider.Normalize(s.normalized().Provider.Active)
 }
 
 // EffectiveOrchestrator returns normalized orchestration settings.
@@ -387,15 +386,12 @@ func (s Settings) normalized() Settings {
 	if s.Slot.MaxSteps > MaxMaxSteps {
 		s.Slot.MaxSteps = MaxMaxSteps
 	}
+	s.Provider.Active = provider.Normalize(s.Provider.Active)
 	s.Model.Default = strings.TrimSpace(s.Model.Default)
 	if s.Model.Default == "" {
-		s.Model.Default = DefaultModelID
+		s.Model.Default = provider.DefaultModel(s.Provider.Active)
 	}
 	s.Model.Variant = strings.TrimSpace(s.Model.Variant)
-	s.Provider.Active = strings.ToLower(strings.TrimSpace(s.Provider.Active))
-	if s.Provider.Active != "openai" && s.Provider.Active != "opencode" {
-		s.Provider.Active = "opencode"
-	}
 	s.Orchestrator = s.Orchestrator.normalized()
 	s.Agents = s.Agents.normalized()
 	s.Compaction = s.Compaction.normalized()
@@ -542,7 +538,7 @@ func NormalizeAfterLoad(s Settings, raw []byte) Settings {
 	if !jsonHasKey(raw, "slot", "limit_enabled") {
 		s.Slot.LimitEnabled = true
 	}
-	if s.Model.Default == "" {
+	if s.Model.Default == "" && s.Provider.Active != provider.IDCodex {
 		s.Model.Default = DefaultModelID
 	}
 	if !jsonHasKey(raw, "agents") {
@@ -589,6 +585,7 @@ func NormalizeAfterLoad(s Settings, raw []byte) Settings {
 }
 
 func (o Orchestrator) normalized() Orchestrator {
+	o.Provider = provider.Normalize(o.Provider)
 	o.ExploreClass = strings.TrimSpace(strings.ToLower(o.ExploreClass))
 	o.PlanClass = strings.TrimSpace(strings.ToLower(o.PlanClass))
 	o.GeneralClass = strings.TrimSpace(strings.ToLower(o.GeneralClass))

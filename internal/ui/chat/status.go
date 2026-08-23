@@ -9,7 +9,6 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/chinmay-sawant/lazykoder/internal/db"
-	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
 )
 
 type statusDrawerRow struct {
@@ -110,7 +109,7 @@ func (m Model) statusSegmentValue(name string) string {
 }
 
 func (m Model) statusTokensValue() string {
-	window := modelscache.ContextOf(m.modelInfos, m.modelLabel())
+	window := m.modelContext(m.modelLabel())
 	switch {
 	case m.tokensUsed > 0 && window > 0:
 		return formatTokens(m.tokensUsed) + "/" + formatTokens(int64(window))

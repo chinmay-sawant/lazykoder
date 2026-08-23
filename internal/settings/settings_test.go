@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/chinmay-sawant/lazykoder/internal/provider"
 )
 
 func TestDefault(t *testing.T) {
@@ -23,7 +25,7 @@ func TestDefault(t *testing.T) {
 		t.Fatalf("provider = %q, want opencode", s.EffectiveProvider())
 	}
 	orch := s.EffectiveOrchestrator()
-	if !orch.Enabled || !orch.Review || orch.ExploreClass != "flash" || orch.PlanClass != "pro" || orch.GeneralClass != "pro" {
+	if !orch.Enabled || !orch.Review || orch.Provider != provider.IDOpenCode || orch.ExploreClass != "flash" || orch.PlanClass != "pro" || orch.GeneralClass != "pro" {
 		t.Fatalf("orchestrator defaults = %+v", orch)
 	}
 	if s.Appearance.Theme != DefaultTheme {
@@ -76,7 +78,7 @@ func TestDefault(t *testing.T) {
 
 func TestProviderAndOrchestratorNormalize(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.json")
-	data := `{"provider":{"active":" OPENAI "},"orchestrator":{"enabled":false,"review":false,"explore_class":" ","plan_class":"PRO","general_class":" pro "}}`
+	data := `{"provider":{"active":" OPENAI "},"orchestrator":{"enabled":false,"review":false,"provider":" GROK ","explore_class":" ","plan_class":"PRO","general_class":" pro "}}`
 	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -88,8 +90,25 @@ func TestProviderAndOrchestratorNormalize(t *testing.T) {
 		t.Fatalf("provider = %q, want openai", s.EffectiveProvider())
 	}
 	orch := s.EffectiveOrchestrator()
-	if orch.Enabled || orch.Review || orch.ExploreClass != "flash" || orch.PlanClass != "pro" || orch.GeneralClass != "pro" {
+	if orch.Enabled || orch.Review || orch.Provider != provider.IDGrok || orch.ExploreClass != "flash" || orch.PlanClass != "pro" || orch.GeneralClass != "pro" {
 		t.Fatalf("normalized orchestrator = %+v", orch)
+	}
+}
+
+func TestProviderCatalogValuesNormalize(t *testing.T) {
+	for _, want := range provider.IDs() {
+		path := filepath.Join(t.TempDir(), "settings.json")
+		data := []byte(`{"provider":{"active":" ` + want + ` "}}`)
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		got, err := LoadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.EffectiveProvider() != want {
+			t.Fatalf("provider %q normalized to %q", want, got.EffectiveProvider())
+		}
 	}
 }
 

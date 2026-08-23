@@ -50,6 +50,19 @@ func TestProviderFromEndpoint(t *testing.T) {
 	}
 }
 
+func TestMergeByIDKeepsSameModelIDAcrossProviders(t *testing.T) {
+	got := MergeByID(
+		[]Info{{ID: "gpt-5.6-luna", Provider: "codex"}},
+		[]Info{{ID: "gpt-5.6-luna", Provider: ProviderOpenCodeGo}},
+	)
+	if len(got) != 2 {
+		t.Fatalf("merged rows = %d, want 2: %+v", len(got), got)
+	}
+	if got[0].Provider != "codex" || got[1].Provider != ProviderOpenCodeGo {
+		t.Fatalf("merged providers = %q, %q", got[0].Provider, got[1].Provider)
+	}
+}
+
 func TestLoadStaleBeyondTTL(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "models.json")
 	now := time.Now()

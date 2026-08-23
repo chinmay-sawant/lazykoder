@@ -18,8 +18,9 @@ const maxTitleRunes = 60
 
 // AgentRunner runs a child job via agent.Agent on a dedicated child session.
 type AgentRunner struct {
-	Store  *db.Store
-	Client provider.Client
+	Store    *db.Store
+	Client   provider.Client
+	Provider string
 }
 
 // Run creates (or resumes) a child session, runs one agent turn, and returns a summary.
@@ -66,6 +67,7 @@ func (r AgentRunner) Run(ctx context.Context, job Job) (Result, error) {
 			Title:           title,
 			Directory:       workdir,
 			Model:           job.Model,
+			Provider:        r.Provider,
 			Variant:         strPtr(job.Variant),
 			ParentSessionID: parentID,
 			Kind:            db.SessionKindSubagent,
@@ -103,6 +105,7 @@ func (r AgentRunner) Run(ctx context.Context, job Job) (Result, error) {
 	ag := agent.New(r.Store, r.Client, workdir, agent.Options{
 		Session:          &sess,
 		MaxSteps:         job.MaxSteps,
+		Provider:         r.Provider,
 		Model:            job.Model,
 		Endpoint:         job.Endpoint,
 		Variant:          job.Variant,

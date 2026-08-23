@@ -39,6 +39,9 @@ var ErrStepLimit = errors.New("agent: step limit reached")
 type Options struct {
 	Session  *db.Session
 	MaxSteps int
+	// Provider identifies the client route used for persisted session and
+	// message metadata.
+	Provider string
 	// Model overrides the provider default for new sessions and every
 	// chat request. When empty the client default applies.
 	Model string
@@ -685,6 +688,7 @@ func (a *Agent) ensureSession(ctx context.Context, userText string, events chan<
 	sess, err := a.store.CreateSession(ctx, db.Session{
 		Title:     truncateRunes(strings.TrimSpace(userText), maxSessionTitle),
 		Directory: a.workdir,
+		Provider:  a.opts.Provider,
 		Model:     a.opts.Model,
 		Variant:   strPtr(a.opts.Variant),
 	})
@@ -698,9 +702,12 @@ func (a *Agent) ensureSession(ctx context.Context, userText string, events chan<
 
 func (a *Agent) writeUserTurn(ctx context.Context, userText string, events chan<- Event) error {
 	m, err := a.store.InsertMessage(ctx, db.Message{
-		SessionID: a.sessionID(),
-		Role:      "user",
-		Agent:     a.opts.AgentName,
+		SessionID:  a.sessionID(),
+		Role:       "user",
+		Agent:      a.opts.AgentName,
+		ProviderID: a.opts.Provider,
+		ModelID:    a.opts.Model,
+		Variant:    strPtr(a.opts.Variant),
 	})
 	if err != nil {
 		return fmt.Errorf("agent: insert user message: %w", err)

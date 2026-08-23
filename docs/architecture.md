@@ -2,11 +2,11 @@
 
 ## Overview
 
-lazykoder is a Bubble Tea TUI agent harness for OpenAI-compatible providers.
-OpenCode Go remains the default provider, and `provider.active=openai` selects
-the OpenAI chat-completions client. The app keeps its own project-local
-session store and owns the tool loop: it is not a wrapper around the OpenCode
-CLI or its global `~/.local/share/opencode/opencode.db`.
+lazykoder is a Bubble Tea TUI agent harness for API-key and subscription
+providers. OpenCode Go remains the default provider. `/provider` selects the
+parent provider, while `orchestrator.provider` selects the child provider. The
+app keeps its own project-local session store and owns the tool loop: it is not
+a wrapper around the OpenCode CLI or its global `~/.local/share/opencode/opencode.db`.
 
 ## Package map
 
@@ -16,8 +16,9 @@ CLI or its global `~/.local/share/opencode/opencode.db`.
 | `internal/workspace` | create `.lazykoder/`, open + migrate the db, ensure `.gitignore` |
 | `internal/db` | numbered migrations + session/message/part/tool/recap/memory store |
 | `internal/provider/opencode` | HTTP client for the OpenCode Go API |
-| `internal/provider` | shared client contract used by the agent and UI |
+| `internal/provider` | shared client contract, provider catalog, and factory |
 | `internal/provider/openai` | OpenAI chat-completions client and model catalog |
+| `internal/provider/subscription` | constrained Codex and Grok CLI adapters that retain lazykoder's tool boundary |
 | `internal/agent` | turn loop, `buildHistory`, compact policy and summarizer run |
 | `internal/orchestrator` | bounded no-tools planning and strict plan parsing |
 | `internal/recap` | time-windowed snapshots, hidden no-tools workers, and atomic local artifacts |
@@ -43,8 +44,8 @@ cwd = process working directory
      open .lazykoder/lazykoder.db  (create if missing)
      migrate schema
      ensure .gitignore lists .lazykoder/ (append only)
-3. load `provider.active`; read `OPENAI_API_KEY` for OpenAI or
-   `OPENCODE_API_KEY` with `OPENCODE_ZEN_API_KEY` fallback for OpenCode
+3. load `provider.active`; create the parent client and create the child
+   client from `orchestrator.provider` (OpenCode is the child default)
 4. tea.NewProgram(chat.New(...))   # Session is nil: every launch is fresh
                                    # Workdir is the project cwd; env.Dir is .lazykoder for db + models.json
 5. first send creates a session row, a user text part, provider calls,
@@ -75,8 +76,10 @@ The client is OpenAI-compatible:
   The `tools` key is omitted entirely when no tools are advertised.
 - `ChatRequest.Model` overrides the client default per request when non-empty
   (used by the model picker).
-- `ChatRequest.Endpoint` is the full chat-completions URL from
-  `.lazykoder/models.json`. Go models use `/zen/go/v1/chat/completions`.
+- `ChatRequest.Endpoint` is the full provider URL from
+  `.lazykoder/models.json`. Most Go models use
+  `/zen/go/v1/chat/completions`; catalog routes that advertise the Responses
+  protocol use `/zen/go/v1/responses`.
   Free Zen models (for example `deepseek-v4-flash-free`) use
   `/zen/v1/chat/completions`. Empty falls back to the client default.
 - Responses map defensively: `reasoning` or `reasoning_content`, usage with
@@ -84,16 +87,31 @@ The client is OpenAI-compatible:
 - HTTP errors become readable errors with status code and a body snippet.
 - The API key is never logged, never persisted and never rendered.
 
+The OpenCode client selects the wire protocol from the stored route. Chat
+routes send `messages`; Responses routes translate the same transcript into
+`input`, function tools, function calls, and function-call outputs, then parse
+Responses SSE events back into lazykoder deltas. Cached OpenCode routes are
+re-derived when a turn starts so an older `/chat/completions` entry cannot
+override a current Responses route.
+
 `GET /models` is fetched at startup (non-blocking, 10s timeout) to show the
 model count and to feed the interactive picker (`/model` or the footer
 model chip).
 
-OpenAI uses `https://api.openai.com/v1` by default and reads
-`OPENAI_API_KEY`. It uses the same chat, streaming, retry, and model-cache
-seams. OpenAI does not expose the OpenCode usage windows or free-model route,
-so those values are empty for that provider. When the parent is OpenAI, task
-children use a separately supplied OpenCode client when an OpenCode key is
-available.
+OpenAI uses `https://api.openai.com/v1/chat/completions` with
+`OPENAI_API_KEY`, and xAI uses `https://api.x.ai/v1/chat/completions` with
+`XAI_API_KEY`. Codex uses the persistent session created by `codex login` and
+reads its current account-scoped model catalog through `codex app-server`
+`model/list`. It does not carry a hard-coded Codex model name. Grok uses the
+persistent device-authentication session created by
+`grok login --device-auth`. The subscription adapters request strict JSON from
+the official CLI, encode tool arguments as JSON strings for the strict schema
+contract, validate every requested lazykoder tool, and leave tool execution to
+the existing policy layer. The hidden orchestrator plan call uses
+the parent client; child jobs use the separately configured child client and
+model settings. Provider identity is carried with each model row and session,
+so duplicate model IDs cannot select the wrong client. Child model profiles
+are narrowed to the configured child provider before execution.
 
 ## Project instructions (AGENTS.md)
 

@@ -5,10 +5,23 @@ visible under confirm, ask, slash, and help overlays. The model and session
 pickers are centered cards.
 
 The active provider comes from `provider.active` in
-`.lazykoder/settings.json`. OpenCode is the default. `/model` reads the
-selected provider's cached catalog. `/memory` shows the exact bounded context
+`.lazykoder/settings.json`. OpenCode is the default. `/model` shows available
+OpenCode and Codex models in one drawer. `/memory` shows the exact bounded context
 for the next parent turn and toggles injection for the current session.
 `/history` shows current-chat memory entries with their update status.
+`/provider` shows the persisted selected or not-selected state and the
+provider authentication state. API-key providers show `key set` or `key
+missing`. Codex and Grok show `checking sign-in`, `signed in`, `sign in
+required`, or `CLI missing`. Selecting a signed-out Codex provider hands the
+terminal to `codex login`; selecting Grok runs `grok login --device-auth` and
+prints the device-login URL and code. Provider-owned sessions remain outside
+`.lazykoder/` and persist across lazykoder restarts.
+
+For Codex, `/model` reads the current signed-in account catalog from the
+installed Codex app server when lazykoder starts, when the provider is selected,
+or when `/refresh` runs. `gpt-5.6-luna` with `low` reasoning is the default
+when that account catalog supports it. Otherwise lazykoder uses the account
+default.
 
 ## Chat view
 
@@ -169,6 +182,7 @@ draft in the input box (**edit**). Actions:
 | click a collapsed tool header | expand that tool card (click again to collapse) |
 | `ctrl+s` | open the session picker (idle only) |
 | `/resume` | same as `ctrl+s` |
+| `/provider` | open the parent provider picker |
 | `/model` | open the model picker |
 | `/agents` | open the sub-agent list and logs (aliases `/subs`) |
 | `/status` | open the status details and visibility drawer |
@@ -272,11 +286,11 @@ chat underneath.
 ## Model picker
 
 `/model` or a click on the model status opens a full-width drawer above
-the prompt, the same place as the `/` command list. The drawer shows
-more rows than the slash menu so more models stay visible, including
-free OpenCode models. Each row shows the provider on the right
-(`opencode go` or `opencode zen`). Navigation: `j`/`k` or arrows;
-`enter` or a click selects, `esc`/`q` cancels. `/` enters model
+the prompt, the same place as the `/` command list. The drawer groups rows
+under `OpenCode` and `Codex`. The headings are not selectable. Each row keeps
+its provider label on the right, such as `opencode go`, `opencode zen`, or
+`codex`. Navigation: `j`/`k` or arrows; `enter` or a click selects,
+`esc`/`q` cancels. `/` enters model
 filtering (also by provider) and `r` refreshes the model list.
 Typing `/model` (or `/mode` then enter) opens the drawer with a
 trailing space so you can type a search right away. `/model ope`
@@ -385,8 +399,10 @@ The persisted `skills` settings group contains `enabled`, `auto_detect`,
 `max_body_bytes`, and `max_context_bytes`.
 
 When the step limit is off the agent still has a large safety bound so a
-runaway loop cannot run forever. `/model` and `/variant` still change only
-the **current session**; the settings card is the project default.
+runaway loop cannot run forever. `/model` and `/variant` change the current
+session. Selecting a model from another provider group also saves that parent
+provider and model as the project default. The settings card can change the
+defaults directly.
 
 When a successful parent turn leaves a dirty worktree, `commit and push`
 appears above the composer for 90 seconds. Click it or press `ctrl+g` to start

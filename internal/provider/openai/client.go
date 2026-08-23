@@ -49,6 +49,16 @@ func WithModel(value string) Option {
 	}
 }
 
+// WithProviderName changes the catalog label used by a compatible endpoint.
+func WithProviderName(value string) Option {
+	return func(client *Client) {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			client.providerName = value
+		}
+	}
+}
+
 // WithHTTPClient sets the HTTP transport.
 func WithHTTPClient(value *http.Client) Option {
 	return func(client *Client) {
@@ -72,19 +82,21 @@ func WithRetryPolicy(value opencode.RetryPolicy) Option {
 // supplies the common JSON and streaming parser, while this wrapper owns the
 // provider identity and defaults.
 type Client struct {
-	apiKey      string
-	model       string
-	inner       *opencode.Client
-	retryPolicy opencode.RetryPolicy
+	apiKey       string
+	model        string
+	providerName string
+	inner        *opencode.Client
+	retryPolicy  opencode.RetryPolicy
 }
 
 // NewClient returns an OpenAI client using the standard v1 endpoint.
 func NewClient(apiKey string, opts ...Option) *Client {
 	policy := opencode.DefaultRetryPolicy()
 	client := &Client{
-		apiKey:      apiKey,
-		model:       DefaultModelID,
-		retryPolicy: policy,
+		apiKey:       apiKey,
+		model:        DefaultModelID,
+		providerName: ProviderName,
+		retryPolicy:  policy,
 		inner: opencode.NewClient(apiKey,
 			opencode.WithBaseURL(DefaultBaseURL),
 			opencode.WithModel(DefaultModelID),
@@ -145,7 +157,7 @@ func (client *Client) ModelInfos(ctx context.Context) ([]opencode.ModelInfo, err
 		return nil, err
 	}
 	for index := range infos {
-		infos[index].Provider = ProviderName
+		infos[index].Provider = client.providerName
 		infos[index].Endpoint = opencode.ChatURL(client.BaseURL())
 	}
 	return infos, nil

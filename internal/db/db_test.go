@@ -661,6 +661,25 @@ func TestUpdateSessionModel(t *testing.T) {
 	}
 }
 
+func TestUpdateSessionProvider(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	sess, err := s.CreateSession(ctx, Session{Directory: "/a"})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if err := s.UpdateSessionProvider(ctx, sess.ID, "codex"); err != nil {
+		t.Fatalf("UpdateSessionProvider: %v", err)
+	}
+	got, err := s.GetSession(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if got.Provider != "codex" {
+		t.Fatalf("provider = %q, want codex", got.Provider)
+	}
+}
+
 func TestInsertMessageBumpsSessionTimeUpdated(t *testing.T) {
 	ctx := context.Background()
 	s := openTestStore(t)

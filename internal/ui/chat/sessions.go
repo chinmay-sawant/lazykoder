@@ -11,6 +11,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/chinmay-sawant/lazykoder/internal/db"
+	"github.com/chinmay-sawant/lazykoder/internal/provider"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
 
@@ -370,6 +371,11 @@ func (m Model) loadSession(sess *db.Session) Model {
 	m.prompt.SetValue("")
 	m.session = sess
 	if sess != nil {
+		if sessionProvider := provider.Normalize(sess.Provider); sessionProvider != m.projectSettings.EffectiveProvider() {
+			if descriptor, ok := provider.DescriptorFor(sessionProvider); ok {
+				m = m.configureProvider(descriptor)
+			}
+		}
 		m.model = sess.Model
 		m.variant = ""
 		if sess.Variant != nil {

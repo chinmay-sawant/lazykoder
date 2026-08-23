@@ -17,6 +17,7 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/agent"
 	"github.com/chinmay-sawant/lazykoder/internal/db"
 	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
+	"github.com/chinmay-sawant/lazykoder/internal/provider"
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 	"github.com/chinmay-sawant/lazykoder/internal/tips"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
@@ -1557,6 +1558,25 @@ func TestRefreshWritesModelsCache(t *testing.T) {
 	}
 }
 
+func TestCodexLiveCatalogClearsRemovedSavedModel(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	m.projectSettings.Provider.Active = provider.IDCodex
+	m.projectSettings.Model.Default = "removed-codex-model"
+	m.model = "removed-codex-model"
+
+	next, _ := m.Update(modelsMsg{infos: []modelscache.Info{{
+		ID:       "gpt-account-default",
+		Provider: provider.IDCodex,
+	}}})
+	m = next.(Model)
+	if m.projectSettings.Model.Default != "" {
+		t.Fatalf("saved Codex model = %q, want live default", m.projectSettings.Model.Default)
+	}
+	if m.model != "" {
+		t.Fatalf("live Codex model = %q, want provider default", m.model)
+	}
+}
+
 func TestRefreshStampsZenEndpoint(t *testing.T) {
 	dir := t.TempDir()
 	cachePath := filepath.Join(dir, "models.json")
@@ -1618,6 +1638,18 @@ func TestModelEndpointPrefersCacheThenFreeFallback(t *testing.T) {
 	m.model = "deepseek-v4-flash"
 	if got := m.modelEndpoint(); got != "https://opencode.ai/zen/go/v1/chat/completions" {
 		t.Fatalf("go fallback = %q", got)
+	}
+}
+
+func TestModelEndpointRefreshesStaleResponsesRoute(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: opencode.NewClient("k", opencode.WithBaseURL("https://opencode.ai/zen/go/v1")), Workdir: t.TempDir()})
+	m.model = "gpt-5.6-luna"
+	m.modelInfos = []modelscache.Info{{
+		ID: "gpt-5.6-luna", Provider: modelscache.ProviderOpenCodeGo,
+		Endpoint: "https://opencode.ai/zen/go/v1/chat/completions",
+	}}
+	if got := m.modelEndpoint(); got != "https://opencode.ai/zen/go/v1/responses" {
+		t.Fatalf("stale cached endpoint = %q", got)
 	}
 }
 

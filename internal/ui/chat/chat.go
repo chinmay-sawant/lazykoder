@@ -85,6 +85,7 @@ const (
 	pickerKindModel    = "model"
 	pickerKindVariant  = "variant"
 	pickerKindSkills   = "skills"
+	pickerKindProvider = "provider"
 	// pulseInterval and pulseSteps throb the in-progress reply rail.
 	pulseInterval = 70 * time.Millisecond
 	pulseSteps    = 16
@@ -151,17 +152,20 @@ func configureThemeStyles() {
 
 // Options configures the chat model.
 type Options struct {
-	Store         *db.Store
-	Client        provider.Client
-	ChildClient   provider.Client
-	Workdir       string
-	Session       *db.Session
-	MaxSteps      int // ignored when Settings is set; kept for tests
-	InitialErr    string
-	CachePath     string // optional models cache file; empty disables caching
-	SettingsPath  string // .lazykoder/settings.json; empty skips persistence
-	Settings      *settings.Settings
-	WorktreeDirty worktreeDirtyChecker
+	Store             *db.Store
+	Client            provider.Client
+	ChildClient       provider.Client
+	NewProviderClient provider.ClientFactory
+	ProviderAuth      provider.AuthChecker
+	ProviderLogin     provider.LoginCommandFactory
+	Workdir           string
+	Session           *db.Session
+	MaxSteps          int // ignored when Settings is set; kept for tests
+	InitialErr        string
+	CachePath         string // optional models cache file; empty disables caching
+	SettingsPath      string // .lazykoder/settings.json; empty skips persistence
+	Settings          *settings.Settings
+	WorktreeDirty     worktreeDirtyChecker
 }
 
 // Model is the chat screen: title, transcript, prompt, status and confirm flow.
@@ -169,6 +173,11 @@ type Model struct {
 	store               *db.Store
 	client              provider.Client
 	childClient         provider.Client
+	newProviderClient   provider.ClientFactory
+	providerAuth        provider.AuthChecker
+	providerLogin       provider.LoginCommandFactory
+	providerAuthStatus  map[string]provider.AuthStatus
+	providerLoginTarget string
 	workdir             string
 	session             *db.Session
 	maxSteps            int
@@ -202,6 +211,7 @@ type Model struct {
 	variant              string // current reasoning variant; "" = provider default
 	models               []string
 	modelInfos           []modelscache.Info
+	modelDefaults        map[string]modelDefault
 	modelsErr            string
 	modelsCached         bool // models came from the cache, not a live fetch
 	cachePath            string
@@ -284,16 +294,17 @@ type Model struct {
 	pulseOn   bool
 	railInset int
 
-	pickerVp         viewport.Model
-	pickerItems      []string
-	pickerCursor     int
-	pickerFilter     string
-	pickerFiltering  bool
-	pickerBuilt      bool
-	pickerMode       bool
-	pickerKind       string
-	pickerFromPrompt bool
-	pickerSkillItems []skills.Skill
+	pickerVp          viewport.Model
+	pickerItems       []string
+	pickerProviderIDs []string
+	pickerCursor      int
+	pickerFilter      string
+	pickerFiltering   bool
+	pickerBuilt       bool
+	pickerMode        bool
+	pickerKind        string
+	pickerFromPrompt  bool
+	pickerSkillItems  []skills.Skill
 
 	sessionPickerMode bool
 	sessionItems      []db.Session
@@ -419,6 +430,7 @@ type tpsSample struct {
 var slashCommands = []slashCmd{
 	{name: "/new", description: "start a new session and clear the transcript"},
 	{name: "/resume", description: "open past sessions (ctrl+s, also /session)", aliases: []string{"sessions", "session"}},
+	{name: "/provider", description: "select the active chat provider"},
 	{name: "/model", description: "search and switch the live chat model"},
 	{name: "/variant", description: "switch live reasoning effort (low / medium / high / max)"},
 	{name: "/agents", description: "open the sub-agent drawer and logs", aliases: []string{"subs", "subagents"}},
@@ -438,9 +450,15 @@ var slashCommands = []slashCmd{
 type modelsMsg struct {
 	list      []string
 	infos     []modelscache.Info
+	defaults  map[string]modelDefault
 	err       error
 	fromCache bool
 	notice    string
+}
+
+type modelDefault struct {
+	model   string
+	variant string
 }
 
 type skillsMsg struct {
@@ -467,6 +485,16 @@ type memoryDoneMsg struct {
 }
 
 type tipsTickMsg struct{}
+
+type providerAuthMsg struct {
+	id     string
+	status provider.AuthStatus
+}
+
+type providerLoginMsg struct {
+	id  string
+	err error
+}
 
 // New returns a chat model for the given options.
 func New(opts Options) Model {
@@ -495,6 +523,11 @@ func New(opts Options) Model {
 		store:                  opts.Store,
 		client:                 opts.Client,
 		childClient:            opts.ChildClient,
+		newProviderClient:      opts.NewProviderClient,
+		providerAuth:           opts.ProviderAuth,
+		providerLogin:          opts.ProviderLogin,
+		providerAuthStatus:     make(map[string]provider.AuthStatus),
+		modelDefaults:          make(map[string]modelDefault),
 		workdir:                opts.Workdir,
 		session:                opts.Session,
 		maxSteps:               eff,
@@ -521,6 +554,15 @@ func New(opts Options) Model {
 		memoryInjectionEnabled: true,
 		memoryContextVp:        viewport.New(viewport.WithWidth(defaultWidth-1), viewport.WithHeight(1)),
 		renderCache:            &renderCache{},
+	}
+	if m.providerAuth == nil {
+		m.providerAuth = provider.CheckAuth
+	}
+	if m.providerLogin == nil {
+		m.providerLogin = provider.LoginCommand
+	}
+	for _, descriptor := range provider.Descriptors() {
+		m.providerAuthStatus[descriptor.ID] = provider.InitialAuthStatus(descriptor.ID)
 	}
 	// Manager boot + recover; model/confirm refreshed per turn via wireSubMgrRuntime.
 	m = m.attachSubMgr(cfg, opts.Store != nil)
@@ -553,6 +595,11 @@ func New(opts Options) Model {
 // Init starts the fetch and watcher commands.
 func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{m.confirmWatch(), m.askWatch(), m.fetchModels, tipsTick()}
+	for _, descriptor := range provider.Descriptors() {
+		if descriptor.AuthMethod != provider.AuthMethodAPIKey {
+			cmds = append(cmds, m.checkProviderAuth(descriptor.ID))
+		}
+	}
 	if m.projectSettings.EffectiveRecap().Enabled && m.store != nil && m.client != nil {
 		cmds = append(cmds, m.recoverRecaps, m.recoverMemoryUpdates)
 	}
@@ -563,7 +610,7 @@ func (m Model) Init() tea.Cmd {
 }
 
 func (m Model) fetchModels() tea.Msg {
-	if m.cachePath != "" {
+	if m.cachePath != "" && m.projectSettings.EffectiveProvider() != provider.IDCodex {
 		if infos, fresh, err := modelscache.Load(m.cachePath, time.Now(), modelscache.DefaultTTL); err == nil && fresh && len(infos) > 0 && modelscache.HasContext(infos) {
 			return modelsMsg{list: modelscache.IDs(infos), infos: infos, fromCache: true}
 		}
@@ -576,36 +623,94 @@ func (m Model) fetchModels() tea.Msg {
 func (m Model) refreshModels() tea.Msg {
 	ctx, cancel := context.WithTimeout(context.Background(), modelsTimeout)
 	defer cancel()
-	infos, err := m.client.ModelInfos(ctx)
-	cached := toCacheInfos(infos)
-	if extras, xerr := m.client.FreeModelInfos(ctx); xerr == nil && len(extras) > 0 {
-		cached = modelscache.MergeByID(cached, toCacheInfos(extras))
+	var previous []modelscache.Info
+	if m.cachePath != "" {
+		previous, _, _ = modelscache.Load(m.cachePath, time.Now(), modelscache.DefaultTTL)
 	}
-	if live, lerr := m.fetchLiveCatalog(ctx); lerr == nil {
-		cached = modelscache.ApplyLive(cached, live)
+	activeProvider := m.projectSettings.EffectiveProvider()
+	var cached []modelscache.Info
+	defaults := make(map[string]modelDefault, len(modelCatalogProviderIDs))
+	var unavailable []string
+	var activeErr error
+	loaded := false
+	for _, providerID := range modelCatalogProviderIDs {
+		client, clientErr := m.modelCatalogClient(providerID)
+		if clientErr != nil || client == nil {
+			cached = modelscache.MergeByID(cached, modelInfosForProvider(previous, providerID))
+			unavailable = append(unavailable, modelProviderLabel(providerID))
+			if providerID == activeProvider {
+				activeErr = clientErr
+			}
+			continue
+		}
+		infos, err := client.ModelInfos(ctx)
+		if err != nil {
+			cached = modelscache.MergeByID(cached, modelInfosForProvider(previous, providerID))
+			unavailable = append(unavailable, modelProviderLabel(providerID))
+			if providerID == activeProvider {
+				activeErr = err
+			}
+			continue
+		}
+		loaded = true
+		defaults[providerID] = modelDefault{
+			model:   client.Model(),
+			variant: clientDefaultVariant(client),
+		}
+		catalog := toCacheInfos(infos)
+		if providerID == provider.IDOpenCode {
+			if extras, xerr := client.FreeModelInfos(ctx); xerr == nil && len(extras) > 0 {
+				catalog = modelscache.MergeByID(catalog, toCacheInfos(extras))
+			}
+			if live, lerr := fetchLiveCatalog(ctx, client); lerr == nil {
+				catalog = modelscache.ApplyLive(catalog, live)
+			}
+		}
+		cached = modelscache.MergeByID(cached, catalog)
 	}
 	list := modelscache.IDs(cached)
-	if err == nil {
+	if loaded {
 		if m.cachePath != "" {
 			if serr := modelscache.Save(m.cachePath, cached, time.Now()); serr != nil {
 				return modelsMsg{list: list, infos: cached, err: fmt.Errorf("models cache: %w", serr)}
 			}
 		}
-		return modelsMsg{list: list, infos: cached, notice: fmt.Sprintf("models updated (%d)", len(list))}
+		notice := fmt.Sprintf("models updated (%d)", len(list))
+		if len(unavailable) > 0 {
+			notice += "; " + strings.Join(unavailable, ", ") + " unavailable"
+		}
+		return modelsMsg{list: list, infos: cached, defaults: defaults, notice: notice}
 	}
 	if m.cachePath != "" {
-		if stale, _, lerr := modelscache.Load(m.cachePath, time.Now(), modelscache.DefaultTTL); lerr == nil && len(stale) > 0 {
-			return modelsMsg{list: modelscache.IDs(stale), infos: stale, fromCache: true, err: err}
+		if len(previous) > 0 {
+			return modelsMsg{list: modelscache.IDs(previous), infos: previous, fromCache: true, err: activeErr}
 		}
 	}
-	return modelsMsg{list: list, infos: cached, err: err}
+	return modelsMsg{list: list, infos: cached, err: activeErr}
 }
 
-func (m Model) fetchLiveCatalog(ctx context.Context) (map[string]modelscache.Info, error) {
-	if m.client == nil || !strings.Contains(m.client.BaseURL(), "opencode.ai") {
+// Fetch Codex first so a signed-in subscription row owns a model ID also
+// advertised by the public OpenCode catalog. The drawer has its own display
+// order below, which keeps OpenCode first for browsing.
+var modelCatalogProviderIDs = []string{provider.IDCodex, provider.IDOpenCode}
+
+var modelPickerProviderIDs = []string{provider.IDOpenCode, provider.IDCodex}
+
+func (m Model) modelCatalogClient(id string) (provider.Client, error) {
+	if id == m.projectSettings.EffectiveProvider() && m.client != nil {
+		return m.client, nil
+	}
+	if m.newProviderClient == nil {
 		return nil, nil
 	}
-	return modelscache.Fetch(ctx, m.client.HTTP())
+	return m.newProviderClient(id)
+}
+
+func fetchLiveCatalog(ctx context.Context, client provider.Client) (map[string]modelscache.Info, error) {
+	if client == nil || !strings.Contains(client.BaseURL(), "opencode.ai") {
+		return nil, nil
+	}
+	return modelscache.Fetch(ctx, client.HTTP())
 }
 
 func toCacheInfos(infos []opencode.ModelInfo) []modelscache.Info {
@@ -637,6 +742,24 @@ func toCacheInfos(infos []opencode.ModelInfo) []modelscache.Info {
 // Update routes keys and streamed events through the model.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case providerAuthMsg:
+		m.providerAuthStatus[msg.id] = msg.status
+		if m.pickerMode && m.pickerKind == pickerKindProvider {
+			m.applyFilter()
+		}
+		if m.providerLoginTarget == msg.id && msg.status.State == provider.AuthStateReady {
+			m.providerLoginTarget = ""
+			return m.activateProvider(msg.id)
+		}
+		return m, nil
+	case providerLoginMsg:
+		if msg.err != nil {
+			m.providerLoginTarget = ""
+			m.err = "provider sign-in failed: " + msg.err.Error()
+			return m, nil
+		}
+		m.providerAuthStatus[msg.id] = provider.AuthStatus{State: provider.AuthStateChecking, Label: "checking sign-in"}
+		return m, m.checkProviderAuth(msg.id)
 	case confirmRequestMsg:
 		m.pending = &msg.req
 		qualifier := "rm"
@@ -747,8 +870,46 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tipsTick()
 	case modelsMsg:
 		m.models = msg.list
+		if msg.defaults != nil {
+			m.modelDefaults = msg.defaults
+		}
 		if len(msg.infos) > 0 {
 			m.modelInfos = msg.infos
+			if m.projectSettings.EffectiveProvider() == provider.IDCodex && msg.err == nil {
+				settingsChanged := false
+				if m.model != "" {
+					if _, ok := m.selectedModelInfo(m.model); !ok {
+						m.model = ""
+						settingsChanged = true
+					}
+				}
+				if model := m.projectSettings.Model.Default; model != "" {
+					if _, ok := m.selectedModelInfo(model); !ok {
+						m.projectSettings.Model.Default = ""
+						settingsChanged = true
+					}
+				}
+				if m.model == "" && m.client != nil {
+					if model := m.client.Model(); model != "" {
+						if _, ok := m.selectedModelInfo(model); ok {
+							m.model = model
+							m.projectSettings.Model.Default = model
+							if m.variant == "" {
+								if variant := clientDefaultVariant(m.client); m.modelHasVariant(model, variant) {
+									m.variant = variant
+									m.projectSettings.Model.Variant = variant
+								}
+							}
+							m.syncSessionModel()
+							m.syncSessionVariant()
+							settingsChanged = true
+						}
+					}
+				}
+				if settingsChanged {
+					m = m.persistSettings()
+				}
+			}
 			m.recomputeSessionCost()
 			if m.session != nil {
 				m = m.reloadSubagentRows()
@@ -1062,6 +1223,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+type defaultVariantClient interface {
+	DefaultVariant() string
+}
+
+func clientDefaultVariant(client provider.Client) string {
+	if configured, ok := client.(defaultVariantClient); ok {
+		return configured.DefaultVariant()
+	}
+	return ""
+}
+
 func (m Model) applyEvent(ev agent.Event) Model {
 	switch ev.Kind {
 	case agent.EventSessionCreated:
@@ -1194,6 +1366,7 @@ func (m Model) ensureSession(title string) Model {
 	sess, err := m.store.CreateSession(context.Background(), db.Session{
 		Title:     title,
 		Directory: m.workdir,
+		Provider:  m.projectSettings.EffectiveProvider(),
 		Model:     m.model,
 		Variant:   variantPtr,
 	})
@@ -1511,21 +1684,51 @@ func (m Model) modelLabel() string {
 	return label
 }
 
-// modelEndpoint is the chat-completions URL for the selected model.
-// models.json is the source of truth; free models without a stored
-// endpoint fall back to the Zen sibling of the Go client base.
+// modelEndpoint is the provider endpoint for the selected model. Cached
+// OpenCode rows are re-derived so a stale chat-completions cache entry cannot
+// bypass a model's current protocol route.
 func (m Model) modelEndpoint() string {
 	id := m.model
 	if id == "" && m.client != nil {
 		id = m.client.Model()
 	}
-	if ep := modelscache.EndpointOf(m.modelInfos, id); ep != "" {
-		return ep
+	if info, ok := m.selectedModelInfo(id); ok {
+		if endpoint := canonicalModelEndpoint(m.client, info); endpoint != "" {
+			return endpoint
+		}
 	}
 	if m.client == nil {
 		return ""
 	}
 	return opencode.ChatURLForModel(m.client.BaseURL(), id)
+}
+
+func (m Model) modelEndpointFor(id string) string {
+	if info, ok := m.selectedModelInfo(id); ok {
+		if endpoint := canonicalModelEndpoint(m.client, info); endpoint != "" {
+			return endpoint
+		}
+	}
+	if m.client == nil {
+		return ""
+	}
+	if id == "" {
+		id = m.client.Model()
+	}
+	if id != "" {
+		return opencode.ChatURLForModel(m.client.BaseURL(), id)
+	}
+	return ""
+}
+
+func canonicalModelEndpoint(client provider.Client, info modelscache.Info) string {
+	if info.Endpoint == "" && client == nil {
+		return ""
+	}
+	if client != nil && providerIDForModelInfo(info) == provider.IDOpenCode && info.Provider != modelscache.ProviderOpenCodeZen {
+		return opencode.RouteForModel(client.BaseURL(), info.ID).Endpoint
+	}
+	return info.Endpoint
 }
 
 func (m Model) modelChipLabel() string {

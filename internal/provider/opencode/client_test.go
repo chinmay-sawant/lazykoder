@@ -540,6 +540,7 @@ func TestRouteForModel(t *testing.T) {
 		provider string
 	}{
 		{name: "go", id: "deepseek-v4-flash", endpoint: goBase + "/chat/completions", provider: ProviderGo},
+		{name: "go responses", id: "gpt-5.6-luna", endpoint: goBase + "/responses", provider: ProviderGo},
 		{name: "zen free", id: "deepseek-v4-flash-free", endpoint: "https://opencode.ai/zen/v1/chat/completions", provider: ProviderZen},
 		{name: "big pickle", id: "big-pickle", endpoint: "https://opencode.ai/zen/v1/chat/completions", provider: ProviderZen},
 	}

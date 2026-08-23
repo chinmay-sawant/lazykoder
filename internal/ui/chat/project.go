@@ -24,8 +24,9 @@ type projectOpts struct {
 }
 
 type usageApply struct {
-	part    db.Part
-	modelID string
+	part       db.Part
+	modelID    string
+	providerID string
 }
 
 type projectResult struct {
@@ -118,7 +119,11 @@ func projectSession(store *db.Store, sessionID string, opts projectOpts) (projec
 				})
 			case "step-finish":
 				if opts.CollectUsage {
-					out.usage = append(out.usage, usageApply{part: p, modelID: msg.ModelID})
+					out.usage = append(out.usage, usageApply{
+						part:       p,
+						modelID:    msg.ModelID,
+						providerID: msg.ProviderID,
+					})
 				}
 			case agent.CompactPartType:
 				if opts.IncludeCompactNotes {

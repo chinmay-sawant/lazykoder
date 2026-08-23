@@ -436,11 +436,12 @@ func (m Model) pickerIndexAtScreenY(y int) (int, bool) {
 	if visible < 0 || visible >= m.pickerVPHeight() {
 		return -1, false
 	}
-	idx := visible + m.pickerVp.YOffset()
-	if idx < 0 || idx >= len(m.pickerItems) {
+	line := visible + m.pickerVp.YOffset()
+	lines := m.pickerLines()
+	if line < 0 || line >= len(lines) || lines[line].itemIndex < 0 {
 		return -1, false
 	}
-	return idx, true
+	return lines[line].itemIndex, true
 }
 
 // sessionIndexAtScreenY maps a screen row to a visible session in the

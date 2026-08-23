@@ -3,8 +3,9 @@
 ## Requirements
 
 - Go 1.26.4 (see `go.mod`)
-- An OpenCode API key for live chats (`OPENCODE_API_KEY`, alias
-  `OPENCODE_ZEN_API_KEY`)
+- A supported provider authentication method for live chats. See
+  [providers.md](providers.md) for API keys, subscription sign-in, and
+  `/provider` behavior.
 
 ## Build, run, verify
 
@@ -26,6 +27,10 @@ that directory.
   in the current working directory (stdlib-only parser; real env wins).
 - `.env`, `.lazykoder/`, `opencode_session_logs.json` and `bin/` are
   gitignored. The key is never logged, persisted or rendered.
+- `/provider` distinguishes selected from not selected. API-key rows show key
+  set or missing. Codex and Grok rows check their official CLI session and
+  show sign-in state without reading tokens. Do not claim a provider is
+  reachable solely because a key or CLI exists.
 
 ## Project layout
 
@@ -35,7 +40,9 @@ internal/
   workspace/                  .lazykoder init, db open, gitignore
   db/                         schema, migrations, store API
   envfile/                    .env loader
-  provider/opencode/          OpenCode Go HTTP client
+  provider/                    shared provider contract, catalog, and factory
+  provider/opencode/           OpenCode Go HTTP client
+  provider/openai/             OpenAI-compatible client wrapper
   agent/                      turn loop, history, compact, tool dispatch
   prompts/                    embedded compact.md summarizer prompt
   subagent/                   Manager, Host, AgentRunner (concurrency)
