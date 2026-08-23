@@ -154,6 +154,9 @@ with each path and SHA-256 for recovery and audit.
    the memory lifecycle without adding a visible worker row.
 10. [~] [Phase 10](phase-10-skills-discovery.md): discover project and global
     skills, expose `/skills`, inject bounded matches, and persist skill paths.
+11. [ ] [Phase 11](phase-11-browser-support.md): add safe browser-backed URL
+    understanding with rendered content, bounded links, and email-link
+    extraction.
 
 ## First-request recall
 

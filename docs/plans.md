@@ -51,6 +51,7 @@ snapshots:
 | `v0.0.10/phase-8-memory-recall-and-lifecycle.md` | memory-first recall and request lifecycle boundaries |
 | `v0.0.10/phase-9-memory-docs-and-gates.md` | memory documentation, tests, and closure gates |
 | `v0.0.10/phase-10-skills-discovery.md` | global and local skill discovery, `/skills`, auto-detection, and memory references |
+| `v0.0.10/phase-11-browser-support.md` | safe browser-backed URL understanding, rendered content, links, and email-link extraction |
 
 Each checklist row is marked `[x]` only when the gate actually passed, with
 the command and exit code recorded beside the row. Rows are never checked
