@@ -62,15 +62,16 @@ type transcriptItem struct {
 }
 
 const (
-	roleYou          = "you"
-	roleAssistant    = "assistant"
-	thinkingLabel    = "thinking"
-	maxToolTitle     = 72
-	workBracket      = "["
-	workRail         = "│"
-	workRailCols     = 2
-	streamCursor     = "▌"
-	memoryScanFrames = "⌕∘⊙∘"
+	roleYou       = "you"
+	roleAssistant = "assistant"
+	thinkingLabel = "thinking"
+	maxToolTitle  = 72
+	workBracket   = "["
+	workRail      = "│"
+	workRailCols  = 2
+	streamCursor  = "▌"
+	// memoryScanFrames follows the Braille loader from temp/4_load_animations.go.
+	memoryScanFrames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 )
 
 func (m *Model) replay(sessionID string) {

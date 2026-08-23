@@ -117,12 +117,13 @@ var allBaseToolSpecs = map[string]opencode.ToolSpec{
 	},
 	toolWebfetch: {
 		Name:        toolWebfetch,
-		Description: "Fetch an http(s) URL and return the body as text or markdown.",
+		Description: "Read an http(s) URL as text or markdown, using a browser when requested or required.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"url":    map[string]any{"type": "string"},
 				"format": map[string]any{"type": "string", "description": "markdown or text"},
+				"mode":   map[string]any{"type": "string", "description": "auto, http, or browser"},
 			},
 			"required": []string{"url"},
 		},

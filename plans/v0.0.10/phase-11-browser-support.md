@@ -1,7 +1,7 @@
 # v0.0.10 / Phase 11 - Browser-backed URL understanding
 
 > **Parent:** `plans/v0.0.10/README.md`
-> **Status:** planned
+> **Status:** implementation landed; full gates and manual browser checks open
 > **Estimated effort:** 5-8 days
 > **Priority:** P1
 > **Gate:** a user-supplied public HTTP(S) URL returns bounded readable page
@@ -176,57 +176,57 @@ open the YouTube link.
 
 ### 11.1 Contract and fixture design
 
-- [ ] Define the mode values, compatibility rules, bounded result metadata,
+- [x] Define the mode values, compatibility rules, bounded result metadata,
       extraction limits, and error categories.
-- [ ] Add a local Medium-like HTML fixture containing headings, paragraphs,
+- [x] Add a local Medium-like HTML fixture containing headings, paragraphs,
       relative and absolute links, a `mailto:` link, and a visible email that
       is not linked. Do not make live Medium access part of automated tests.
-- [ ] Record the browser capability decision and the exact supported executable
+- [x] Record the browser capability decision and the exact supported executable
       discovery rules before implementation begins.
 
 ### 11.2 Static extraction
 
-- [ ] Implement deterministic HTML-to-readable-text and link extraction for
+- [x] Implement deterministic HTML-to-readable-text and link extraction for
       HTTP responses using the standard library or dependencies already in the
       module graph. Do not introduce a new module solely for this phase without
       approval.
-- [ ] Add tests for article/main/body selection, hidden content, relative URL
+- [x] Add tests for article/main/body selection, hidden content, relative URL
       resolution, duplicate links, mailto decoding, visible email detection,
       malformed HTML, output caps, and truncation metadata.
-- [ ] Preserve current webfetch SSRF, redirect, cancellation, and client-copy
+- [x] Preserve current webfetch SSRF, redirect, cancellation, and client-copy
       tests while adding the shared egress seam if needed.
 
 ### 11.3 Browser capability and isolation
 
-- [ ] Implement executable detection and a fake runner for unit tests.
-- [ ] Implement the isolated browser lifecycle, readiness wait, final URL
+- [x] Implement executable detection and a fake runner for unit tests.
+- [~] Implement the isolated browser lifecycle, readiness wait, final URL
       capture, rendered text extraction, and bounded process cleanup.
-- [ ] Prove request interception or validated proxy enforcement before exposing
+- [x] Prove request interception or validated proxy enforcement before exposing
       browser mode through the agent.
-- [ ] Add an optional real-browser integration test that skips with a clear
+- [x] Add an optional real-browser integration test that skips with a clear
       reason when Chrome or Chromium is unavailable. The deterministic gate must
       use local fixtures, not the live internet.
 
 ### 11.4 Agent integration
 
-- [ ] Extend the registry schema, argument decoding, runner options, tool
+- [x] Extend the registry schema, argument decoding, runner options, tool
       metadata, and error lifecycle for the mode and document result.
-- [ ] Add agent tests for auto fallback, explicit HTTP mode, explicit browser
+- [~] Add agent tests for auto fallback, explicit HTTP mode, explicit browser
       mode, absent browser capability, browser timeout, cancellation, and
       metadata truncation.
-- [ ] Confirm that Explore, Plan, and General retain the intended capability
+- [x] Confirm that Explore, Plan, and General retain the intended capability
       and that no child can use browser mode to bypass workspace or egress
       policy.
 
 ### 11.5 Documentation and runtime gates
 
-- [ ] Update `docs/tools.md`, `docs/architecture.md`, and the local tools and
+- [x] Update `docs/tools.md`, `docs/architecture.md`, and the local tools and
       browser knowledge-base pages with the shipped contract only.
-- [ ] Run focused webfetch and agent tests, then `go test ./internal/...`.
-- [ ] Run a real browser fixture with the installed Google Chrome or Chromium
+- [x] Run focused webfetch and agent tests, then `go test ./internal/...`.
+- [~] Run a real browser fixture with the installed Google Chrome or Chromium
       binary and inspect title, body, links, email links, final URL, and timeout
       behavior.
-- [ ] Verify the Medium URL manually when access is available. If it remains
+- [x] Verify the Medium URL manually when access is available. If it remains
       blocked, record the observed status and confirm that the tool reports the
       limitation without fabricating article content.
 - [ ] Run the full repository gate required by the parent plan before checking
@@ -258,3 +258,20 @@ open the YouTube link.
       the process, exposes the email link as data, and sends no email.
 - [ ] Focused tests, `go test ./internal/...`, and the parent plan's full gates
       pass with exit-code evidence. No dependency was added without approval.
+
+## Evidence so far
+
+- `go test ./internal/...` exits 0.
+- `go vet ./internal/...` exits 0.
+- `go test -race ./internal/tools/webfetch ./internal/agent` exits 0.
+- `go build .` exits 0.
+- The opt-in Chrome fixture test renders JavaScript, extracts the title, and
+  extracts its `mailto:` address through the validating proxy.
+- The supplied Medium URL reaches Chrome and returns the actual
+  `Attention Required! | Cloudflare` page. The implementation does not claim
+  that the blocked article body was read.
+- Browser mode currently records the requested URL as `final_url`. Capturing
+  the post-redirect browser target requires a deeper browser protocol seam and
+  remains an open Phase 11 item.
+- `go test ./...` remains blocked by pre-existing duplicate declarations in
+  the standalone `temp` examples. All `internal/...` packages pass.

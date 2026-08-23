@@ -64,13 +64,25 @@ fallback otherwise). Prefer this over reading many files to find symbols.
 
 ## webfetch
 
-- Input: `{"url": "...", "format": "markdown"|"text"}`.
+- Input: `{"url": "...", "format": "markdown"|"text", "mode": "auto"|"http"|"browser"}`.
 - http/https only (file:// and other schemes rejected). 30s timeout, 5 MiB
   body cap, `truncated` + `content_type` in metadata.
 - Local, private, link-local, multicast, and metadata destinations are
   rejected before the request and again at dial time. Redirects use the same
   check. `webfetch` copies a supplied client and never changes its redirect
   callback.
+- Auto mode uses the guarded HTTP path first and falls back to an isolated
+  Google Chrome process, with Chromium as fallback, for blocked or
+  JavaScript-rendered pages. The browser uses a local validating proxy for
+  page requests, redirects, and subresource origins.
+- HTML responses return readable text plus bounded title, final URL, ordinary
+  links, `mailto:` links, visible email addresses, mode, and truncation
+  metadata. Links are reported as data and are not followed automatically.
+- Browser mode records the requested URL as `final_url`; redirect-target
+  capture requires a deeper browser protocol integration and remains open in
+  the phase ledger.
+- Browser mode never reuses the user's profile, cookies, saved credentials,
+  extensions, or downloads. It does not submit forms or send email.
 
 ## Task tools (parent only)
 

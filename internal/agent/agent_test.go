@@ -19,6 +19,7 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/policy"
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/question"
+	"github.com/chinmay-sawant/lazykoder/internal/tools/webfetch"
 )
 
 func agentWebfetchTransport(srv *httptest.Server) *http.Transport {
@@ -393,6 +394,48 @@ func TestSendToolDispatch(t *testing.T) {
 	if !strings.Contains(meta, `"answers"`) || !strings.Contains(meta, `"beta"`) {
 		t.Errorf("question metadata = %q, want answers with beta", meta)
 	}
+}
+
+func TestSendWebfetchBrowserMode(t *testing.T) {
+	args, _ := json.Marshal(map[string]any{
+		"url":  "https://example.com/article",
+		"mode": "browser",
+	})
+	fake := newFakeProvider(t,
+		respBody("", "", "tool-calls", []fakeToolCall{
+			{ID: "c_browser", Name: "webfetch", Args: string(args)},
+		}, testUsage),
+		respBody("done", "", "stop", nil, nil),
+	)
+	reader := &testBrowserReader{result: webfetch.Result{
+		Output:   "browser page text",
+		Metadata: map[string]any{"title": "Example"},
+	}}
+	st, path := newTestEnv(t)
+	a := New(st, newClient(t, fake.srv), t.TempDir(), Options{
+		WebfetchBrowser: reader,
+	})
+
+	if _, err := sendAndCollect(t, a, "read this page"); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if reader.url != "https://example.com/article" {
+		t.Errorf("browser URL = %q", reader.url)
+	}
+	rows := queryToolCalls(t, path)
+	if len(rows) != 1 || rows[0].Status != "completed" || rows[0].Output == nil || *rows[0].Output != "browser page text" {
+		t.Fatalf("browser tool rows = %+v", rows)
+	}
+}
+
+type testBrowserReader struct {
+	result webfetch.Result
+	url    string
+}
+
+func (r *testBrowserReader) Read(_ context.Context, url string) (webfetch.Result, error) {
+	r.url = url
+	return r.result, nil
 }
 
 func TestSendQuestionDeclinedAsk(t *testing.T) {

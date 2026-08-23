@@ -121,19 +121,30 @@ func TestRecallIgnoresEmptyOrUnhelpfulPrompts(t *testing.T) {
 	}
 }
 
-func TestMemoryScanUsesDistinctVisibleActivity(t *testing.T) {
+func TestMemoryScanUsesBrailleLoader(t *testing.T) {
 	m := New(Options{Workdir: t.TempDir()})
 	m.width = 80
 	m.height = 24
 	m.busy = true
 	m.recallScanning = true
 	m.activity = "scanning memory patterns"
+	first := stripANSI(m.memoryScanMark())
+	m.pulse = 1
+	second := stripANSI(m.memoryScanMark())
+	if first != "⠋" || second != "⠙" || first == second {
+		t.Fatalf("Braille loader did not advance: first=%q second=%q", first, second)
+	}
 	text := stripANSI(viewText(m))
 	if !strings.Contains(text, "scanning memory patterns") {
 		t.Fatalf("scan activity missing: %q", text)
 	}
-	if !strings.Contains(text, "⌕") && !strings.Contains(text, "∘") && !strings.Contains(text, "⊙") {
-		t.Fatalf("distinct scan marker missing: %q", text)
+	if !strings.Contains(text, string([]rune(memoryScanFrames)[1])) {
+		t.Fatalf("Braille scan marker missing: %q", text)
+	}
+	for _, marker := range []string{"⌕", "∘", "⊙"} {
+		if strings.Contains(text, marker) {
+			t.Fatalf("legacy scan marker %q still rendered: %q", marker, text)
+		}
 	}
 }
 

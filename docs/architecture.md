@@ -21,7 +21,7 @@ owns the tool loop: it is not a wrapper around the OpenCode CLI or its global
 | `internal/prompts` | embedded `compact.md` via `go:embed` (`prompts.Must`) |
 | `internal/subagent` | Manager + Host + AgentRunner for concurrent children |
 | `internal/policy` | bash classifier returning Allow/Ask/Deny |
-| `internal/tools` | bash, read, grep, write, edit, question, webfetch, task schemas |
+| `internal/tools` | bash, read, grep, write, edit, question, webfetch with HTTP and isolated browser reading, task schemas |
 | `internal/settings` | project settings: slot, model, `agents` caps, `compaction`, `recap`, skills, and API retry policy |
 | `internal/ui/chat` | transcript, prompt, status line, model picker |
 | `internal/ui/confirm` | the y/n confirm view (rm and question flows) |

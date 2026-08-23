@@ -409,13 +409,20 @@ func (a *Agent) execWebfetch(ctx context.Context, events chan<- Event, partID, t
 	var args struct {
 		URL    string `json:"url"`
 		Format string `json:"format"`
+		Mode   string `json:"mode"`
 	}
 	if err := json.Unmarshal([]byte(tc.Arguments), &args); err != nil {
 		msg := "invalid webfetch arguments: " + err.Error()
 		return a.updateTool(ctx, events, partID, title, tc, "error", &msg, errorJSON(msg), nil, nil)
 	}
 	client := a.opts.WebfetchClient
-	res, err := webfetch.Run(ctx, args.URL, args.Format, client)
+	res, err := webfetch.RunWithOptions(ctx, webfetch.Options{
+		URL:     args.URL,
+		Format:  args.Format,
+		Mode:    webfetch.Mode(args.Mode),
+		Client:  client,
+		Browser: a.opts.WebfetchBrowser,
+	})
 	if err != nil {
 		return a.updateTool(ctx, events, partID, title, tc, "error", errOut(err), errorJSON(err.Error()), nil, nil)
 	}

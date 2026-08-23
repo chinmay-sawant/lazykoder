@@ -14,6 +14,7 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 	"github.com/chinmay-sawant/lazykoder/internal/skills"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/question"
+	"github.com/chinmay-sawant/lazykoder/internal/tools/webfetch"
 )
 
 const (
@@ -75,6 +76,9 @@ type Options struct {
 	// WebfetchClient is an explicit egress client, primarily for injected tests.
 	// Production leaves it nil, so webfetch uses its validated default client.
 	WebfetchClient *http.Client
+	// WebfetchBrowser injects a browser reader for tests or an application-owned
+	// browser lifecycle. A nil value uses the default Chrome reader lazily.
+	WebfetchBrowser webfetch.BrowserReader
 	// ContextWindow is the live model's catalog context (0 = unknown).
 	ContextWindow int64
 	// TokensUsed is the last known fill, used as a floor on the estimate.
