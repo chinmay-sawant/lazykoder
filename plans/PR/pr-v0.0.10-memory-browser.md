@@ -73,8 +73,8 @@ No screenshot artifact is included. Terminal rendering tests cover assistant pan
 
 ## PR metadata checklist (author)
 
-- [ ] Self-assigned (`--assignee @me`)
-- [ ] Labels applied
+- [x] Self-assigned (`--assignee @me`)
+- [x] Labels applied
 - [x] Related issues checked; no issue ID is associated with this branch
 - [x] Filled body committed under `plans/PR/pr-v0.0.10-memory-browser.md`
 
