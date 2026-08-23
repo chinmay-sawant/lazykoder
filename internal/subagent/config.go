@@ -41,6 +41,9 @@ type Config struct {
 	Endpoint             string
 	Variant              string
 	ExploreModel         string
+	ExploreClass         string
+	PlanClass            string
+	GeneralClass         string
 	BashConfirm          string // parent|deny
 	AllowParallelWriters bool
 	DefaultRole          string
@@ -89,6 +92,9 @@ func (c Config) Normalize() Config {
 	c.Endpoint = strings.TrimSpace(c.Endpoint)
 	c.Variant = strings.TrimSpace(c.Variant)
 	c.ExploreModel = strings.TrimSpace(c.ExploreModel)
+	c.ExploreClass = strings.TrimSpace(strings.ToLower(c.ExploreClass))
+	c.PlanClass = strings.TrimSpace(strings.ToLower(c.PlanClass))
+	c.GeneralClass = strings.TrimSpace(strings.ToLower(c.GeneralClass))
 	c.BashConfirm = strings.TrimSpace(strings.ToLower(c.BashConfirm))
 	if c.BashConfirm != BashConfirmParent && c.BashConfirm != BashConfirmDeny {
 		c.BashConfirm = BashConfirmParent

@@ -11,6 +11,7 @@ import (
 	"unicode"
 
 	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
+	"github.com/chinmay-sawant/lazykoder/internal/provider"
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/grep"
 )
@@ -25,9 +26,7 @@ const (
 )
 
 // Client is the narrow direct provider seam used by the hidden worker.
-type Client interface {
-	Chat(context.Context, opencode.ChatRequest) (*opencode.ChatResponse, error)
-}
+type Client = provider.ChatClient
 
 // Worker performs one no-tools recap request. It does not create a session,
 // persist provider rows, or emit normal agent events.

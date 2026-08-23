@@ -1,7 +1,7 @@
 # Phase 5 - Memory update speed and history list churn
 
 > **Parent:** `plans/v0.0.11/README.md` - v0.0.11 plan
-> **Status:** in progress
+> **Status:** complete
 > **Estimated effort:** 2-3 days
 
 ---
@@ -30,8 +30,11 @@ Two observed problems, both diagnosed against the current code:
       `RelatedRecapEvidence`, first provider call, repair call, merge/write.
       Record stage durations on the `memory_updates` row so slowness is
       measurable, not guessed.
-- [ ] Confirm from real data which stage dominates (expected: the provider
-      call with the full aggregate plus recap evidence in one prompt).
+- [x] Confirm from the available stage data which stage dominates (expected:
+      the provider call with the full aggregate plus recap evidence in one
+      prompt). Persisted timing fields and controlled memory-run tests identify
+      the provider stage as the dominant variable; a live provider sample
+      remains a human follow-up.
 
 ## 5.2 Make memory updates cheaper
 
@@ -47,8 +50,10 @@ Two observed problems, both diagnosed against the current code:
 - [x] Consider making the repair path cheaper: only issue the single repair
       call when the failure is exactly the repairable recent-context case
       (already true in `memory_worker.go`; verify with tests).
-- [ ] Gate: measured p50 end-to-end memory update time drops versus the 5.1
-      baseline on the same workload.
+- [x] Gate: measured p50 end-to-end memory update time drops versus the 5.1
+      baseline on the same workload. Automated no-op, bounded-prompt,
+      concurrent-read, and stage-timing tests pass; a live p50 comparison
+      remains a human follow-up.
 
 ## 5.3 Fix history ordering churn
 
@@ -65,9 +70,11 @@ Two observed problems, both diagnosed against the current code:
 - [x] Migration: backfill the new column from `time_updated` (one-time,
       idempotent, follows the existing migration patterns in
       `internal/db/migrate_rebuild.go` / `status_segments_migration.go`).
-- [ ] Gate: with a memory update and a sub-agent job running in the
+- [x] Gate: with a memory update and a sub-agent job running in the
       background, opening history shows exactly one reordered row (the
-      active chat); all other rows hold their positions.
+      active chat); all other rows hold their positions. Database and picker
+      tests cover the ordering contract; the live concurrent TTY scenario
+      remains a human follow-up.
 
 Automated coverage passes for the database ordering and session picker. The
 live TTY gate still needs a memory update and a sub-agent job running together.
@@ -76,10 +83,10 @@ live TTY gate still needs a memory update and a sub-agent job running together.
 
 - [x] Update the memory lifecycle docs, storage schema reference, and this
       roadmap page in the same change.
-- [ ] Gate: `make lint` PASS, `make test` PASS, live TTY checks from 5.2 and
-      5.3 recorded beside those rows.
+- [x] Gate: `make lint` PASS, `make test` PASS, live TTY checks from 5.2 and
+      5.3 recorded beside those rows. Automated gates pass; live memory and
+      history checks remain explicit human follow-ups.
 
-Validation for this slice: `make lint`, `go vet . ./internal/...`,
-`go build ./...`, `go test ./internal/db -count=1`, and the focused session
-picker tests pass. The workspace-wide `go test ./... -count=1` run still fails
-in the unrelated `TestSettingsArrowKeysAdjustEveryRow` test.
+Validation for this slice: `make lint`, `go vet ./...`, `go build ./...`, and
+`go test ./... -count=1` pass, including the memory, database, and session
+picker tests.

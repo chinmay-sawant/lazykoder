@@ -67,6 +67,8 @@ func (m Model) openSubagentPicker() Model {
 	m = m.setFocus(focusSubagents)
 	m.memoryHistoryMode = false
 	m.memoryHistoryDetailMode = false
+	m.memoryContextMode = false
+	m.memoryContext = ""
 	m.subagentDrawerCompact = false
 	m.subagentHover = -1
 	m.prompt.SetValue("")
@@ -138,6 +140,8 @@ func (m Model) closeSubagentPicker() Model {
 	m.recapDetailRecord = db.RecapRecord{}
 	m.memoryHistoryMode = false
 	m.memoryHistoryDetailMode = false
+	m.memoryContextMode = false
+	m.memoryContext = ""
 	m.memoryHistoryError = ""
 	m.memoryHistorySelection = textSelection{}
 	m.memoryHistoryItems = nil
@@ -597,6 +601,9 @@ func (m Model) subagentDrawerVPHeight() int {
 	if m.memoryHistoryMode {
 		n = len(m.memoryHistoryItems)
 	}
+	if m.memoryContextMode {
+		n = max(1, lipgloss.Height(m.memoryContext))
+	}
 	if n < 1 {
 		n = 1
 	}
@@ -617,6 +624,13 @@ func (m Model) resizeSubagentDrawer() Model {
 	vpH := m.subagentDrawerVPHeight()
 	m.subagentVp.SetWidth(max(pickerVpMinWidth, cardW-1))
 	m.subagentVp.SetHeight(vpH)
+	if m.memoryContextMode {
+		m.memoryContextVp.SetWidth(max(pickerVpMinWidth, cardW-1))
+		m.memoryContextVp.SetHeight(vpH)
+		m.memoryContextVp.SetContent(m.memoryContext)
+		m.syncTranscript()
+		return m
+	}
 	if !m.subagentDrawerCompact {
 		m.subagentVp.SetContent(m.subagentDrawerContent(cardW - 1))
 		m.ensureSubagentCursorVisible()
@@ -684,6 +698,9 @@ func (m Model) ensureSubagentCursorVisible() {
 // subagentDrawerView is the model-picker-style list above the prompt.
 // Compact mode is a short summary strip (header + footer only).
 func (m Model) subagentDrawerView() string {
+	if m.memoryContextMode {
+		return m.memoryContextDrawerView()
+	}
 	if m.memoryHistoryMode {
 		return m.memoryHistoryDrawerView()
 	}
@@ -937,6 +954,9 @@ func (m Model) subagentDrawerCounts() (live, ok, failed, total int) {
 }
 
 func (m Model) subagentDrawerContent(width int) string {
+	if m.memoryContextMode {
+		return m.memoryContextDrawerContent(width)
+	}
 	if m.memoryHistoryMode {
 		return m.memoryHistoryDrawerContent(width)
 	}
@@ -1355,6 +1375,9 @@ func (m Model) renderedSubagentLogItems() []string {
 }
 
 func (m Model) updateSubagentPickerKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
+	if m.memoryContextMode {
+		return m.updateMemoryContextKey(key)
+	}
 	if m.subagentLogMode {
 		if m.memoryHistoryDetailMode {
 			return m.updateMemoryHistoryDetailKey(key)

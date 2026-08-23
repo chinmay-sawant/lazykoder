@@ -41,6 +41,7 @@ type Spec struct {
 	Description string
 	Role        string
 	Model       string
+	ModelClass  string
 	Variant     string
 	MaxSteps    int
 	Background  bool

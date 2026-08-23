@@ -79,14 +79,16 @@ Child messages set `messages.agent` to the sub-agent name.
 A parent compact turn sets `messages.agent` to `compaction` and writes
 one `parts.type = compaction` row. That is not a schema migration.
 
-Schema version is 14 (`schema_migrations`). Migrations 7-8 rebuild tables
+Schema version is 15 (`schema_migrations`). Migrations 7-8 rebuild tables
 to add FKs SQLite cannot express with `ALTER TABLE`; migration 9 adds the
 session todo table, migration 10 adds the additive footer segment column, and
 migration 11 expands legacy footer visibility into the status drawer fields.
 Migration 12 adds the recap reservation and artifact lifecycle ledger. Migration
 13 adds the project-scoped memory update ledger. Migration 14 adds the JSON
-stage-duration map used to diagnose memory update latency. Durations use
-microseconds and stay in the same row as the update status and error.
+stage-duration map used to diagnose memory update latency. Migration 15 adds
+`sessions.time_active`, backfilled from `time_updated`, for conversation
+ordering. Durations use microseconds and stay in the same row as the update
+status and error.
 
 `recap_records` is keyed by the main session and newest source message. It
 retains source times for audit only. Queued and interrupted running rows are

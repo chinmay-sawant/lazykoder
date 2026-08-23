@@ -71,6 +71,11 @@ func (m Model) mousePress(msg tea.MouseClickMsg) (Model, tea.Cmd) {
 		}
 		return m, nil
 	}
+	if mu.Button == tea.MouseLeft {
+		if y, ok := m.commitPushRowScreenY(); ok && mu.Y == y {
+			return m.activateCommitPush()
+		}
+	}
 	// Sub-agent drawer sits above the composer: handle it before prompt hits
 	// so the compact strip is not stolen by the input box geometry.
 	if mu.Button == tea.MouseLeft && m.subagentPickerMode && !m.subagentLogMode {

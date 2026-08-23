@@ -338,7 +338,10 @@ func rowWithStatus(row db.SubagentJob, status, summary, errText string) db.Subag
 func (m *Manager) buildJob(id, parentSessionID, parentPartID, name, role string, spec Spec, timeout time.Duration, rt Runtime, childSessionID string, resume bool) Job {
 	cfg := m.cfg
 	model := firstNonEmpty(spec.Model, cfg.Model, rt.Model, opencode.DefaultModelID)
-	if role == RoleExplore && cfg.ExploreModel != "" {
+	if spec.Model == "" && spec.ModelClass != "" {
+		model = firstNonEmpty(resolveClass(spec.ModelClass, role, cfg, rt), model)
+	}
+	if role == RoleExplore && cfg.ExploreModel != "" && spec.ModelClass == "" {
 		model = firstNonEmpty(spec.Model, cfg.ExploreModel, model)
 	}
 	profile := rt.profile(model)
@@ -378,6 +381,34 @@ func (m *Manager) buildJob(id, parentSessionID, parentPartID, name, role string,
 		Confirm:         confirm,
 		Ask:             nil, // children never get the question tool
 	}
+}
+
+func resolveClass(class, role string, cfg Config, rt Runtime) string {
+	class = strings.ToLower(strings.TrimSpace(class))
+	if class == "" {
+		return ""
+	}
+	for _, profile := range rt.Profiles {
+		id := strings.ToLower(profile.ID)
+		if strings.Contains(id, class) {
+			return profile.ID
+		}
+	}
+	switch role {
+	case RoleExplore:
+		if cfg.ExploreClass == class {
+			return cfg.ExploreModel
+		}
+	case RolePlan:
+		if cfg.PlanClass == class {
+			return cfg.Model
+		}
+	case RoleGeneral:
+		if cfg.GeneralClass == class {
+			return cfg.Model
+		}
+	}
+	return ""
 }
 
 func (rt Runtime) profile(model string) ModelProfile {

@@ -13,18 +13,19 @@ const (
 	PartDeltaStepFinish PartDeltaKind = "step-finish"
 	PartDeltaTool       PartDeltaKind = "tool"
 	PartDeltaCompaction PartDeltaKind = CompactPartType
+	PartDeltaPlan       PartDeltaKind = "plan"
 	PartDeltaOther      PartDeltaKind = "other"
 )
 
 // PartDelta is one transcript part update for the TUI. It does not embed db.Part.
 type PartDelta struct {
-	Kind        PartDeltaKind
-	ID          string
-	MessageID   string
-	Text        string
-	TimeCreated int64
-	TimeStart   int64
-	TimeEnd     int64
+	Kind         PartDeltaKind
+	ID           string
+	MessageID    string
+	Text         string
+	TimeCreated  int64
+	TimeStart    int64
+	TimeEnd      int64
 	FinishReason string
 
 	TokensTotal      int64
@@ -146,6 +147,8 @@ func partDeltaKind(typ string) PartDeltaKind {
 		return PartDeltaTool
 	case CompactPartType:
 		return PartDeltaCompaction
+	case "plan":
+		return PartDeltaPlan
 	default:
 		return PartDeltaOther
 	}

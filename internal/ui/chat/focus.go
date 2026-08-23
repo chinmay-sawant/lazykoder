@@ -56,6 +56,7 @@ func (m Model) setFocus(k focusKind) Model {
 	if k != focusSubagents && k != focusSubagentLog {
 		m.memoryHistoryMode = false
 		m.memoryHistoryDetailMode = false
+		m.memoryContextMode = false
 	}
 
 	m.slashMode = false
@@ -129,6 +130,7 @@ func (m Model) clearFocus(k focusKind) Model {
 		m.subagentDrawerCompact = false
 		m.memoryHistoryMode = false
 		m.memoryHistoryDetailMode = false
+		m.memoryContextMode = false
 	case focusSlash:
 		m.slashMode = false
 		m.slashCursor = 0

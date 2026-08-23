@@ -4,6 +4,12 @@ The interface is a Bubble Tea v2 program (alt screen). The chat screen stays
 visible under confirm, ask, slash, and help overlays. The model and session
 pickers are centered cards.
 
+The active provider comes from `provider.active` in
+`.lazykoder/settings.json`. OpenCode is the default. `/model` reads the
+selected provider's cached catalog. `/memory` shows the exact bounded context
+for the next parent turn and toggles injection for the current session.
+`/history` shows current-chat memory entries with their update status.
+
 ## Chat view
 
 - Header: `lazykoder`, the session title (or `new session`), and the project
@@ -381,6 +387,11 @@ The persisted `skills` settings group contains `enabled`, `auto_detect`,
 When the step limit is off the agent still has a large safety bound so a
 runaway loop cannot run forever. `/model` and `/variant` still change only
 the **current session**; the settings card is the project default.
+
+When a successful parent turn leaves a dirty worktree, `commit and push`
+appears above the composer for 90 seconds. Click it or press `ctrl+g` to start
+the explicit action. The normal agent and bash confirmation path handles the
+status, diff, commit, and push work, so failures remain visible.
 
 ## Continue
 

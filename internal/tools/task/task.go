@@ -35,6 +35,7 @@ type TaskArgs struct {
 	Description string `json:"description"`
 	Role        string `json:"role"`
 	Model       string `json:"model"`
+	ModelClass  string `json:"model_class"`
 	Variant     string `json:"variant"`
 	MaxSteps    int    `json:"max_steps"`
 	Background  bool   `json:"background"`
@@ -151,6 +152,10 @@ func specTask() opencode.ToolSpec {
 				"model": map[string]any{
 					"type":        "string",
 					"description": "Optional model override",
+				},
+				"model_class": map[string]any{
+					"type":        "string",
+					"description": "Optional strength class from the orchestration plan: flash or pro",
 				},
 				"variant": map[string]any{
 					"type":        "string",

@@ -119,6 +119,20 @@ type Model struct {
 	Variant string `json:"variant"`
 }
 
+// Provider selects the active chat provider for the parent agent.
+type Provider struct {
+	Active string `json:"active"`
+}
+
+// Orchestrator controls hidden decomposition and role model classes.
+type Orchestrator struct {
+	Enabled      bool   `json:"enabled"`
+	Review       bool   `json:"review"`
+	ExploreClass string `json:"explore_class"`
+	PlanClass    string `json:"plan_class"`
+	GeneralClass string `json:"general_class"`
+}
+
 // Appearance holds visual preferences for the TUI.
 type Appearance struct {
 	// Theme is "dark" or "light". Unknown values fall back to dark.
@@ -187,14 +201,16 @@ type Skills struct {
 
 // Settings is the on-disk project config under .lazykoder/settings.json.
 type Settings struct {
-	Appearance Appearance `json:"appearance"`
-	Slot       Slot       `json:"slot"`
-	Model      Model      `json:"model"`
-	Agents     Agents     `json:"agents"`
-	Compaction Compaction `json:"compaction"`
-	Recap      Recap      `json:"recap"`
-	Retry      Retry      `json:"retry"`
-	Skills     Skills     `json:"skills"`
+	Appearance   Appearance   `json:"appearance"`
+	Slot         Slot         `json:"slot"`
+	Model        Model        `json:"model"`
+	Provider     Provider     `json:"provider"`
+	Orchestrator Orchestrator `json:"orchestrator"`
+	Agents       Agents       `json:"agents"`
+	Compaction   Compaction   `json:"compaction"`
+	Recap        Recap        `json:"recap"`
+	Retry        Retry        `json:"retry"`
+	Skills       Skills       `json:"skills"`
 }
 
 // Default returns the built-in defaults.
@@ -208,6 +224,14 @@ func Default() Settings {
 		Model: Model{
 			Default: DefaultModelID,
 			Variant: "",
+		},
+		Provider: Provider{Active: "opencode"},
+		Orchestrator: Orchestrator{
+			Enabled:      true,
+			Review:       true,
+			ExploreClass: "flash",
+			PlanClass:    "pro",
+			GeneralClass: "pro",
 		},
 		Agents: Agents{
 			Enabled:              true,
@@ -291,6 +315,21 @@ func (s Settings) EffectiveModel() string {
 	return s.normalized().Model.Default
 }
 
+// EffectiveProvider returns the supported active provider name.
+func (s Settings) EffectiveProvider() string {
+	switch strings.ToLower(strings.TrimSpace(s.normalized().Provider.Active)) {
+	case "openai":
+		return "openai"
+	default:
+		return "opencode"
+	}
+}
+
+// EffectiveOrchestrator returns normalized orchestration settings.
+func (s Settings) EffectiveOrchestrator() Orchestrator {
+	return s.normalized().Orchestrator
+}
+
 // EffectiveVariant is the default reasoning variant (may be empty).
 func (s Settings) EffectiveVariant() string {
 	return s.normalized().Model.Variant
@@ -353,6 +392,11 @@ func (s Settings) normalized() Settings {
 		s.Model.Default = DefaultModelID
 	}
 	s.Model.Variant = strings.TrimSpace(s.Model.Variant)
+	s.Provider.Active = strings.ToLower(strings.TrimSpace(s.Provider.Active))
+	if s.Provider.Active != "openai" && s.Provider.Active != "opencode" {
+		s.Provider.Active = "opencode"
+	}
+	s.Orchestrator = s.Orchestrator.normalized()
 	s.Agents = s.Agents.normalized()
 	s.Compaction = s.Compaction.normalized()
 	s.Recap = s.Recap.normalized()
@@ -506,6 +550,12 @@ func NormalizeAfterLoad(s Settings, raw []byte) Settings {
 	} else if !jsonHasKey(raw, "agents", "enabled") {
 		s.Agents.Enabled = true
 	}
+	if !jsonHasKey(raw, "provider") {
+		s.Provider = Default().Provider
+	}
+	if !jsonHasKey(raw, "orchestrator") {
+		s.Orchestrator = Default().Orchestrator
+	}
 	if !jsonHasKey(raw, "compaction") {
 		s.Compaction = Default().Compaction
 	} else {
@@ -536,6 +586,22 @@ func NormalizeAfterLoad(s Settings, raw []byte) Settings {
 		s.Skills = Default().Skills
 	}
 	return s.normalized()
+}
+
+func (o Orchestrator) normalized() Orchestrator {
+	o.ExploreClass = strings.TrimSpace(strings.ToLower(o.ExploreClass))
+	o.PlanClass = strings.TrimSpace(strings.ToLower(o.PlanClass))
+	o.GeneralClass = strings.TrimSpace(strings.ToLower(o.GeneralClass))
+	if o.ExploreClass == "" {
+		o.ExploreClass = "flash"
+	}
+	if o.PlanClass == "" {
+		o.PlanClass = "pro"
+	}
+	if o.GeneralClass == "" {
+		o.GeneralClass = "pro"
+	}
+	return o
 }
 
 func jsonHasKey(raw []byte, path ...string) bool {

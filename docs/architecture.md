@@ -2,11 +2,11 @@
 
 ## Overview
 
-lazykoder is a Bubble Tea TUI agent harness for the OpenCode Go API. v0.0.1
-supports one provider (OpenCode Go) and one model family (default
-`deepseek-v4-flash`). The app keeps its own project-local session store and
-owns the tool loop: it is not a wrapper around the OpenCode CLI or its global
-`~/.local/share/opencode/opencode.db`.
+lazykoder is a Bubble Tea TUI agent harness for OpenAI-compatible providers.
+OpenCode Go remains the default provider, and `provider.active=openai` selects
+the OpenAI chat-completions client. The app keeps its own project-local
+session store and owns the tool loop: it is not a wrapper around the OpenCode
+CLI or its global `~/.local/share/opencode/opencode.db`.
 
 ## Package map
 
@@ -16,13 +16,16 @@ owns the tool loop: it is not a wrapper around the OpenCode CLI or its global
 | `internal/workspace` | create `.lazykoder/`, open + migrate the db, ensure `.gitignore` |
 | `internal/db` | numbered migrations + session/message/part/tool/recap/memory store |
 | `internal/provider/opencode` | HTTP client for the OpenCode Go API |
+| `internal/provider` | shared client contract used by the agent and UI |
+| `internal/provider/openai` | OpenAI chat-completions client and model catalog |
 | `internal/agent` | turn loop, `buildHistory`, compact policy and summarizer run |
+| `internal/orchestrator` | bounded no-tools planning and strict plan parsing |
 | `internal/recap` | time-windowed snapshots, hidden no-tools workers, and atomic local artifacts |
 | `internal/prompts` | embedded `compact.md` via `go:embed` (`prompts.Must`) |
 | `internal/subagent` | Manager + Host + AgentRunner for concurrent children |
 | `internal/policy` | bash classifier returning Allow/Ask/Deny |
 | `internal/tools` | bash, read, grep, write, edit, question, webfetch with HTTP and isolated browser reading, task schemas |
-| `internal/settings` | project settings: slot, model, `agents` caps, `compaction`, `recap`, skills, and API retry policy |
+| `internal/settings` | project settings: provider, model, orchestration, slot, `agents` caps, `compaction`, `recap`, skills, and API retry policy |
 | `internal/ui/chat` | transcript, prompt, status line, model picker |
 | `internal/ui/confirm` | the y/n confirm view (rm and question flows) |
 | `internal/envfile` | stdlib-only `.env` loader |
@@ -40,7 +43,8 @@ cwd = process working directory
      open .lazykoder/lazykoder.db  (create if missing)
      migrate schema
      ensure .gitignore lists .lazykoder/ (append only)
-3. read OPENCODE_API_KEY (fallback OPENCODE_ZEN_API_KEY)
+3. load `provider.active`; read `OPENAI_API_KEY` for OpenAI or
+   `OPENCODE_API_KEY` with `OPENCODE_ZEN_API_KEY` fallback for OpenCode
 4. tea.NewProgram(chat.New(...))   # Session is nil: every launch is fresh
                                    # Workdir is the project cwd; env.Dir is .lazykoder for db + models.json
 5. first send creates a session row, a user text part, provider calls,
@@ -54,7 +58,7 @@ Past runs stay in SQLite. Load one explicitly with `/resume` or `ctrl+s`.
 A missing key is not a crash: the TUI starts and shows the error in the
 status line; the prompt stays usable.
 
-## Provider (OpenCode Go only)
+## Providers
 
 | Item | Value |
 | --- | --- |
@@ -83,6 +87,13 @@ The client is OpenAI-compatible:
 `GET /models` is fetched at startup (non-blocking, 10s timeout) to show the
 model count and to feed the interactive picker (`/model` or the footer
 model chip).
+
+OpenAI uses `https://api.openai.com/v1` by default and reads
+`OPENAI_API_KEY`. It uses the same chat, streaming, retry, and model-cache
+seams. OpenAI does not expose the OpenCode usage windows or free-model route,
+so those values are empty for that provider. When the parent is OpenAI, task
+children use a separately supplied OpenCode client when an OpenCode key is
+available.
 
 ## Project instructions (AGENTS.md)
 
@@ -174,6 +185,20 @@ One user turn runs in `internal/agent.Send` with a hard step bound (default
 
 Everything the loop needs for a resumed session lives in the store; there is
 no in-memory tool state for the parent transcript.
+
+12. When sub-agents are enabled and a request is long enough to be safely
+    decomposed, the parent makes one hidden no-tools planning call. A strict
+    JSON plan is stored as an assistant `plan` part. The parent uses the task
+    tool with the plan role and model class, keeps depth at one, and reviews
+    failed or empty child summaries after `task_wait`. Each failed assignment
+    gets at most one retry. Malformed or failed planning falls back to the
+    ordinary turn.
+
+13. After a successful parent turn leaves a dirty worktree, an explicit UI
+    status check can show a `commit and push` row above the composer for 90
+    seconds. Clicking it or pressing `ctrl+g` starts a hidden control prompt
+    in the normal agent loop. The existing bash policy gate confirms status,
+    diff, commit, and push commands, and failures remain visible.
 
 ### First-request recall
 

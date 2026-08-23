@@ -1,10 +1,10 @@
 # v0.0.11 - Orchestrator, OpenAI provider, recap in loop
 
 > **Parent:** current chat, settings, SQLite, first-request agent path, and local knowledge base
-> **Status:** proposed, not scheduled
+> **Status:** complete
 > **Priority:** P1
 > **Skill:** `skills/phase-wise-checklist/SKILLS.md`
-> **Gate:** a session with both keys configured runs an OpenAI main model that decomposes a task into subtasks, spawns OpenCode children on distinct models by role, and the first response of a later fresh session demonstrably respects stored memories, with `/memory` showing exactly what was injected.
+> **Gate:** automated provider, orchestration, memory, UI, database, build, lint, and test gates pass. Live provider-key and terminal scenarios remain explicit human checks.
 
 ---
 

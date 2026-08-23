@@ -114,6 +114,8 @@ func (m Model) updateKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 
 	if key.Mod.Contains(tea.ModCtrl) {
 		switch key.Code {
+		case 'g', 'G':
+			return m.activateCommitPush()
 		case 'a', 'A':
 			m.promptSelectAll = true
 			m.quitConfirm = false

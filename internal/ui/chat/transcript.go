@@ -694,6 +694,16 @@ func (m *Model) applyPart(p db.Part) {
 				part:      p,
 			})
 		}
+	case "plan":
+		if p.Text == nil {
+			return
+		}
+		m.items = append(m.items, transcriptItem{
+			kind: itemNote,
+			text: "orchestration plan\n" + *p.Text,
+			when: itemTime(0, p.TimeCreated),
+			part: p,
+		})
 	case "step-finish":
 		m.collapseLiveReasoning()
 		m.applyUsage(p, m.model)

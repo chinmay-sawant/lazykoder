@@ -8,7 +8,7 @@ status and closure gates, these pages explain the design and usage.
 
 | Doc | Covers |
 | --- | --- |
-| [architecture.md](architecture.md) | package map, launch sequence, provider, agent loop, compaction |
+| [architecture.md](architecture.md) | package map, providers, agent loop, orchestration, compaction |
 | [storage.md](storage.md) | SQLite schema, migrations, store API, ids and timestamps |
 | [safety.md](safety.md) | policy classifier, the confirm view, the executor gate |
 | [tools.md](tools.md) | base tools, task tools, agent loop wiring, part types |
@@ -23,10 +23,12 @@ status and closure gates, these pages explain the design and usage.
 main.go                         init workspace, load key, start tea program
 internal/workspace              mkdir .lazykoder, open db, append gitignore
 internal/db                     migrations + session/message/part/tool store
+internal/provider               shared provider contract
 internal/provider/opencode      HTTP client for OpenCode Go
+internal/provider/openai        OpenAI chat-completions client
 internal/agent                  turn loop, history, compact checkpoint
 internal/prompts                go:embed compact.md summarizer prompt
-internal/settings               project defaults: slot, model, agents, compaction, retries
+internal/settings               project defaults: provider, model, agents, orchestration, compaction, retries
 internal/policy                 bash classifier + Decision (allow/deny/ask)
 internal/tools                  bash, read, grep, write, edit, question, webfetch, task
 internal/ui/chat                transcript, prompt, status, model picker

@@ -8,7 +8,7 @@ import (
 
 	"github.com/chinmay-sawant/lazykoder/internal/agent"
 	"github.com/chinmay-sawant/lazykoder/internal/db"
-	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
+	"github.com/chinmay-sawant/lazykoder/internal/provider"
 	"github.com/chinmay-sawant/lazykoder/internal/skills"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/question"
 )
@@ -19,7 +19,7 @@ const maxTitleRunes = 60
 // AgentRunner runs a child job via agent.Agent on a dedicated child session.
 type AgentRunner struct {
 	Store  *db.Store
-	Client *opencode.Client
+	Client provider.Client
 }
 
 // Run creates (or resumes) a child session, runs one agent turn, and returns a summary.

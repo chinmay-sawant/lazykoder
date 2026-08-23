@@ -36,6 +36,7 @@ type layoutKey struct {
 	settingsCursor              int
 	todosExpanded               bool
 	busy                        bool
+	pushPrompt                  bool
 }
 
 func (m Model) layoutKey() layoutKey {
@@ -56,6 +57,7 @@ func (m Model) layoutKey() layoutKey {
 		settingsCursor: m.settingsCursor,
 		todosExpanded:  m.todosExpanded,
 		busy:           m.busy,
+		pushPrompt:     m.commitPushVisible(),
 	}
 }
 

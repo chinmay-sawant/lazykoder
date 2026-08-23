@@ -18,6 +18,7 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/agent"
 	"github.com/chinmay-sawant/lazykoder/internal/db"
 	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
+	"github.com/chinmay-sawant/lazykoder/internal/provider"
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 	"github.com/chinmay-sawant/lazykoder/internal/recap"
 	"github.com/chinmay-sawant/lazykoder/internal/settings"
@@ -150,21 +151,24 @@ func configureThemeStyles() {
 
 // Options configures the chat model.
 type Options struct {
-	Store        *db.Store
-	Client       *opencode.Client
-	Workdir      string
-	Session      *db.Session
-	MaxSteps     int // ignored when Settings is set; kept for tests
-	InitialErr   string
-	CachePath    string // optional models cache file; empty disables caching
-	SettingsPath string // .lazykoder/settings.json; empty skips persistence
-	Settings     *settings.Settings
+	Store         *db.Store
+	Client        provider.Client
+	ChildClient   provider.Client
+	Workdir       string
+	Session       *db.Session
+	MaxSteps      int // ignored when Settings is set; kept for tests
+	InitialErr    string
+	CachePath     string // optional models cache file; empty disables caching
+	SettingsPath  string // .lazykoder/settings.json; empty skips persistence
+	Settings      *settings.Settings
+	WorktreeDirty worktreeDirtyChecker
 }
 
 // Model is the chat screen: title, transcript, prompt, status and confirm flow.
 type Model struct {
 	store               *db.Store
-	client              *opencode.Client
+	client              provider.Client
+	childClient         provider.Client
 	workdir             string
 	session             *db.Session
 	maxSteps            int
@@ -191,6 +195,7 @@ type Model struct {
 	err                 string
 	pendingUser         string
 	turnHasNewUser      bool
+	turnToolErrors      int
 	lastTool            int
 
 	model                string // current model; "" = provider default
@@ -331,6 +336,13 @@ type Model struct {
 	memoryHistoryError      string
 	memoryHistorySelection  textSelection
 
+	// memoryContextMode shows the exact bounded memory block used by the next
+	// parent turn. The toggle is intentionally session-local.
+	memoryContextMode      bool
+	memoryInjectionEnabled bool
+	memoryContext          string
+	memoryContextVp        viewport.Model
+
 	slashMode                 bool
 	slashCursor               int
 	slashItems                []slashCmd
@@ -359,6 +371,10 @@ type Model struct {
 
 	// subMgr owns in-process sub-agent jobs for this chat model.
 	subMgr *subagent.Manager
+
+	worktreeDirty   worktreeDirtyChecker
+	pushPromptUntil time.Time
+	pushPromptBusy  bool
 }
 
 // slashCmd is one entry of the slash command menu. aliases are extra
@@ -407,6 +423,7 @@ var slashCommands = []slashCmd{
 	{name: "/variant", description: "switch live reasoning effort (low / medium / high / max)"},
 	{name: "/agents", description: "open the sub-agent drawer and logs", aliases: []string{"subs", "subagents"}},
 	{name: "/history", description: "open memory history for the current chat"},
+	{name: "/memory", description: "show next-turn memory context and toggle injection"},
 	{name: "/spawn", description: "spawn a new sub-agent via interactive form", aliases: []string{"agent"}},
 	{name: "/refresh", description: "reload the model list into models.json"},
 	{name: "/usage", description: "show OpenCode Go plan usage (rolling, weekly, monthly)"},
@@ -460,6 +477,9 @@ func New(opts Options) Model {
 		cfg.Slot.MaxSteps = opts.MaxSteps
 		cfg.Slot.LimitEnabled = true
 	}
+	if opts.Client != nil && cfg.EffectiveProvider() == "openai" && cfg.Model.Default == settings.DefaultModelID {
+		cfg.Model.Default = opts.Client.Model()
+	}
 	theme.SetMode(cfg.EffectiveTheme())
 	configureThemeStyles()
 	if opts.Client != nil && opts.Settings != nil {
@@ -472,31 +492,35 @@ func New(opts Options) Model {
 	// Effective* helpers normalize clamps and empty model ids.
 	eff := cfg.EffectiveMaxSteps()
 	m := Model{
-		store:               opts.Store,
-		client:              opts.Client,
-		workdir:             opts.Workdir,
-		session:             opts.Session,
-		maxSteps:            eff,
-		settingsPath:        opts.SettingsPath,
-		projectSettings:     cfg,
-		err:                 opts.InitialErr,
-		width:               defaultWidth,
-		height:              defaultHeight,
-		confirmCh:           make(chan confirmRequest, confirmQueueSize),
-		askCh:               make(chan askRequest, confirmQueueSize),
-		doneCh:              make(chan struct{}),
-		lastTool:            -1,
-		selectedItem:        -1,
-		historyCursor:       -1,
-		pendingHistoryIndex: -1,
-		settingsHover:       -1,
-		userNavHover:        -1,
-		userNavTip:          -1,
-		cachePath:           opts.CachePath,
-		transcript:          viewport.New(viewport.WithWidth(defaultWidth-1), viewport.WithHeight(defaultHeight-chromeLines)),
-		todoVp:              viewport.New(viewport.WithWidth(defaultWidth-1), viewport.WithHeight(maxTodoPanelRows)),
-		prompt:              newPromptArea(defaultWidth),
-		renderCache:         &renderCache{},
+		store:                  opts.Store,
+		client:                 opts.Client,
+		childClient:            opts.ChildClient,
+		workdir:                opts.Workdir,
+		session:                opts.Session,
+		maxSteps:               eff,
+		settingsPath:           opts.SettingsPath,
+		projectSettings:        cfg,
+		err:                    opts.InitialErr,
+		width:                  defaultWidth,
+		height:                 defaultHeight,
+		confirmCh:              make(chan confirmRequest, confirmQueueSize),
+		askCh:                  make(chan askRequest, confirmQueueSize),
+		doneCh:                 make(chan struct{}),
+		lastTool:               -1,
+		selectedItem:           -1,
+		historyCursor:          -1,
+		pendingHistoryIndex:    -1,
+		settingsHover:          -1,
+		userNavHover:           -1,
+		userNavTip:             -1,
+		cachePath:              opts.CachePath,
+		worktreeDirty:          opts.WorktreeDirty,
+		transcript:             viewport.New(viewport.WithWidth(defaultWidth-1), viewport.WithHeight(defaultHeight-chromeLines)),
+		todoVp:                 viewport.New(viewport.WithWidth(defaultWidth-1), viewport.WithHeight(maxTodoPanelRows)),
+		prompt:                 newPromptArea(defaultWidth),
+		memoryInjectionEnabled: true,
+		memoryContextVp:        viewport.New(viewport.WithWidth(defaultWidth-1), viewport.WithHeight(1)),
+		renderCache:            &renderCache{},
 	}
 	// Manager boot + recover; model/confirm refreshed per turn via wireSubMgrRuntime.
 	m = m.attachSubMgr(cfg, opts.Store != nil)
@@ -638,6 +662,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.seq != m.turnSeq {
 			return m, nil
 		}
+		changeEligible := m.parentTurnEligible(msg.err) && m.turnToolErrors == 0
 		successfulTurn := m.successfulTurnEligible(msg.err)
 		memoryEligible := m.memoryEligible(msg.err)
 		recapEligible := m.recapEligible(msg.err)
@@ -661,11 +686,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if recapEligible {
 			recapCmd = m.scheduleRecap()
 		}
+		worktreeCmd := tea.Cmd(nil)
+		if changeEligible {
+			worktreeCmd = m.checkWorktree()
+		}
 		// Continue baton status motion while background sub-agents are live.
 		if m.hasLiveSubagents() || m.hasInFlightTools() || m.memoryScanJobs > 0 {
-			return m, tea.Batch(memoryCmd, recapCmd, pulseTick())
+			return m, tea.Batch(worktreeCmd, memoryCmd, recapCmd, pulseTick())
 		}
-		return m, tea.Batch(memoryCmd, recapCmd)
+		return m, tea.Batch(worktreeCmd, memoryCmd, recapCmd)
 	case pulseMsg:
 		// Keep throbbing for live sub-agents even after the parent turn ends.
 		if !m.busy && !m.hasInFlightTools() && !m.hasLiveSubagents() && !m.recallScanning && !m.skillsScanning && m.memoryScanJobs == 0 {
@@ -692,6 +721,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.err != nil && !errors.Is(msg.err, recap.ErrInsufficientMessages) {
 			m.err = appendChatError(m.err, "memory update failed: "+msg.err.Error())
+		}
+		return m, nil
+	case worktreeStatusMsg:
+		if msg.err != nil {
+			m.err = appendChatError(m.err, msg.err.Error())
+			return m, nil
+		}
+		if msg.dirty {
+			m.pushPromptUntil = time.Now().Add(commitActionLifetime)
+			m.layout = layoutSnap{}
+			return m, m.scheduleCommitPushExpiry()
+		}
+		m.pushPromptUntil = time.Time{}
+		m.layout = layoutSnap{}
+		return m, nil
+	case commitActionExpiredMsg:
+		if !m.pushPromptUntil.IsZero() && !time.Now().Before(m.pushPromptUntil) {
+			m.pushPromptUntil = time.Time{}
+			m.layout = layoutSnap{}
 		}
 		return m, nil
 	case tipsTickMsg:
@@ -1058,6 +1106,9 @@ func (m Model) applyEvent(ev agent.Event) Model {
 		m = m.noteActivityFromPart(ev.Part)
 	case agent.EventTool:
 		m.applyTool(ev)
+		if ev.Tool.Status == "error" || ev.Tool.Status == "denied" {
+			m.turnToolErrors++
+		}
 		m.activity = toolActivity(ev.Tool)
 		// On task tool events: open drawer only when a new job appears.
 		if ev.Tool.Name == "task" || strings.HasPrefix(ev.Tool.Name, "task_") {
@@ -1173,6 +1224,8 @@ func (m Model) finishTurn(err error) Model {
 	m.compacting = false
 	m.pendingUser = ""
 	m.turnHasNewUser = false
+	m.turnToolErrors = 0
+	m.pushPromptBusy = false
 	m.pending = nil
 	m.pendingAsk = nil
 	m.activeSkills = nil

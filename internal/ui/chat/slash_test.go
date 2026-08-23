@@ -119,11 +119,11 @@ func TestSlashMenuFilterAndRunNew(t *testing.T) {
 	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
 	m = typeRune(m, '/')
 	m = typeRune(m, 'm')
-	if len(m.slashItems) != 1 || m.slashItems[0].name != "/model" {
-		t.Fatalf("filtered items = %+v, want only /model", m.slashItems)
+	if len(m.slashItems) != 2 || m.slashItems[0].name != "/model" || m.slashItems[1].name != "/memory" {
+		t.Fatalf("filtered items = %+v, want /model and /memory", m.slashItems)
 	}
-	if v := stripANSI(m.slashView()); strings.Contains(v, "Session") || strings.Contains(v, "Project") || strings.Contains(v, "Help") {
-		t.Errorf("filtered slash view still shows empty groups: %q", v)
+	if v := stripANSI(m.slashView()); strings.Contains(v, "Session") || strings.Contains(v, "Help") || !strings.Contains(v, "Project") {
+		t.Errorf("filtered slash view has incorrect groups: %q", v)
 	}
 	m = upd(m, tea.KeyPressMsg{Code: tea.KeyEscape})
 	if m.slashMode {
@@ -134,8 +134,8 @@ func TestSlashMenuFilterAndRunNew(t *testing.T) {
 	}
 
 	m = typeRune(m, 'm')
-	if !m.slashMode || len(m.slashItems) != 1 || m.slashItems[0].name != "/model" {
-		t.Fatalf("menu not reopened with /model filter: %+v", m.slashItems)
+	if !m.slashMode || len(m.slashItems) != 2 || m.slashItems[0].name != "/model" || m.slashItems[1].name != "/memory" {
+		t.Fatalf("menu not reopened with /model and /memory filter: %+v", m.slashItems)
 	}
 	m = upd(m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	if m.slashMode {

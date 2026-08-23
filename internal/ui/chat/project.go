@@ -86,6 +86,14 @@ func projectSession(store *db.Store, sessionID string, opts projectOpts) (projec
 					kind: itemReasoning, text: *p.Text, collapsed: opts.CollapseReasoning,
 					when: itemTime(msg.TimeCreated, p.TimeCreated), part: p,
 				})
+			case "plan":
+				if p.Text == nil {
+					continue
+				}
+				out.items = append(out.items, transcriptItem{
+					kind: itemNote, text: "orchestration plan\n" + *p.Text,
+					when: itemTime(msg.TimeCreated, p.TimeCreated), part: p,
+				})
 			case "tool":
 				tool := db.ToolCall{PartID: p.ID}
 				if stored, ok := graph.ToolCallsByPart[p.ID]; ok {

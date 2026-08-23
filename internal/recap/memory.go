@@ -33,6 +33,7 @@ const (
 	memorySectionRecent             = "recent_context"
 	memorySectionSkills             = "skills"
 	memoryMaxSkillEntries           = 64
+	memoryContextMaxRunes           = 16_000
 )
 
 // MemoryEntry is one source-backed fact in the project aggregate.
@@ -1027,6 +1028,34 @@ func ReadMemoryDocument(workdir string) (MemoryDocument, error) {
 		return MemoryDocument{}, fmt.Errorf("memory: read document: %w", err)
 	}
 	return ParseMemoryDocument(body)
+}
+
+// LoadMemoryContext reads and bounds the safe aggregate block used in a
+// parent request. Missing memories produce an empty string. The rendered
+// block intentionally omits durable source IDs because only the current
+// request snapshot may be used for new citations.
+func LoadMemoryContext(workdir string) (string, error) {
+	document, err := ReadMemoryDocument(workdir)
+	if err != nil {
+		return "", err
+	}
+	raw, err := renderMemoryPromptDocument(document)
+	if err != nil {
+		return "", err
+	}
+	context := strings.TrimSpace(string(raw))
+	if context == "" || context == "---" {
+		return "", nil
+	}
+	return truncateMemoryContext(context), nil
+}
+
+func truncateMemoryContext(value string) string {
+	runes := []rune(value)
+	if len(runes) <= memoryContextMaxRunes {
+		return value
+	}
+	return string(runes[:memoryContextMaxRunes]) + "\n[aggregate truncated]"
 }
 
 // WriteMemoryDocument atomically replaces the project aggregate.

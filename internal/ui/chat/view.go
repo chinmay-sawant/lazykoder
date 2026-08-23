@@ -408,6 +408,9 @@ func (m Model) composerBlock() string {
 	if m.showLiveStatus() && !m.liveStatusInSubagentDrawer() {
 		parts = append(parts, m.liveStatusView())
 	}
+	if button := m.commitPushRow(); button != "" {
+		parts = append(parts, button)
+	}
 	parts = append(parts, m.promptLine())
 	if len(parts) == 1 {
 		return parts[0]

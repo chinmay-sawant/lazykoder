@@ -19,6 +19,13 @@ func TestDefault(t *testing.T) {
 	if s.Model.Default != DefaultModelID {
 		t.Fatalf("Default model = %q, want %q", s.Model.Default, DefaultModelID)
 	}
+	if s.EffectiveProvider() != "opencode" {
+		t.Fatalf("provider = %q, want opencode", s.EffectiveProvider())
+	}
+	orch := s.EffectiveOrchestrator()
+	if !orch.Enabled || !orch.Review || orch.ExploreClass != "flash" || orch.PlanClass != "pro" || orch.GeneralClass != "pro" {
+		t.Fatalf("orchestrator defaults = %+v", orch)
+	}
 	if s.Appearance.Theme != DefaultTheme {
 		t.Fatalf("Theme = %q, want %q", s.Appearance.Theme, DefaultTheme)
 	}
@@ -64,6 +71,25 @@ func TestDefault(t *testing.T) {
 	}
 	if s.Skills.MaxAutoMatches != DefaultSkillMaxAutoMatches {
 		t.Fatalf("skill match default = %d", s.Skills.MaxAutoMatches)
+	}
+}
+
+func TestProviderAndOrchestratorNormalize(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	data := `{"provider":{"active":" OPENAI "},"orchestrator":{"enabled":false,"review":false,"explore_class":" ","plan_class":"PRO","general_class":" pro "}}`
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.EffectiveProvider() != "openai" {
+		t.Fatalf("provider = %q, want openai", s.EffectiveProvider())
+	}
+	orch := s.EffectiveOrchestrator()
+	if orch.Enabled || orch.Review || orch.ExploreClass != "flash" || orch.PlanClass != "pro" || orch.GeneralClass != "pro" {
+		t.Fatalf("normalized orchestrator = %+v", orch)
 	}
 }
 

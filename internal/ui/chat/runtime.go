@@ -16,6 +16,7 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/agent"
 	"github.com/chinmay-sawant/lazykoder/internal/db"
 	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
+	"github.com/chinmay-sawant/lazykoder/internal/orchestrator"
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 	"github.com/chinmay-sawant/lazykoder/internal/recap"
 	"github.com/chinmay-sawant/lazykoder/internal/settings"
@@ -52,7 +53,11 @@ func (m Model) runtimeAsk(prompt string, options []string) (int, error) {
 
 // attachSubMgr boots Manager with store/runner/runtime and optionally recovers jobs.
 func (m Model) attachSubMgr(cfg settings.Settings, recoverJobs bool) Model {
-	runner := subagent.AgentRunner{Store: m.store, Client: m.client}
+	childClient := m.childClient
+	if childClient == nil {
+		childClient = m.client
+	}
+	runner := subagent.AgentRunner{Store: m.store, Client: childClient}
 	m.subMgr = subagent.NewManager(subagent.ConfigFromSettings(cfg), runner)
 	rt := subagent.Runtime{
 		Workdir:  m.workdir,
@@ -106,9 +111,22 @@ func (m Model) agentOptions() agent.Options {
 		CompactPercent:       cfg.Percent,
 		KeepTokens:           cfg.KeepTokens,
 		CompactReason:        m.pendingCompactReason,
+		Orchestrator: orchestrator.Config{
+			Enabled:      m.projectSettings.EffectiveAgents().Enabled && m.projectSettings.EffectiveOrchestrator().Enabled,
+			Review:       m.projectSettings.EffectiveOrchestrator().Review,
+			Model:        m.modelLabel(),
+			Endpoint:     m.modelEndpoint(),
+			MaxSubtasks:  orchestrator.MaxSubtasks,
+			ExploreClass: m.projectSettings.EffectiveOrchestrator().ExploreClass,
+			PlanClass:    m.projectSettings.EffectiveOrchestrator().PlanClass,
+			GeneralClass: m.projectSettings.EffectiveOrchestrator().GeneralClass,
+		},
 	}
 	if m.projectSettings.EffectiveRecap().Enabled {
 		opts.Recall = m.recall
+	}
+	if m.memoryInjectionEnabled {
+		opts.Memory = m.memoryProvider
 	}
 	if m.projectSettings.EffectiveSkills().Enabled {
 		opts.Skills = m.skillProvider
@@ -228,7 +246,7 @@ func (m Model) recall(ctx context.Context, _ string, userText string) (string, e
 		{label: "MEMORY", path: "knowledge-base/memories.md", cap: maxMemoryRecall, valid: true},
 		{label: "RECAP", path: "knowledge-base/recaps", cap: maxRecallOutput},
 	}
-	for index, source := range sources {
+	for _, source := range sources {
 		if source.valid {
 			if _, err := recap.ReadMemoryDocument(m.workdir); err != nil {
 				continue
@@ -245,7 +263,7 @@ func (m Model) recall(ctx context.Context, _ string, userText string) (string, e
 			continue
 		}
 		parts = append(parts, source.label+"\n"+truncateRecall(result.Output, source.cap))
-		if index == 0 {
+		if source.label == "MEMORY" {
 			return truncateRecall(strings.Join(parts, "\n\n"), maxRecallOutput), nil
 		}
 	}
@@ -259,6 +277,19 @@ func (m Model) recall(ctx context.Context, _ string, userText string) (string, e
 		}, nil)
 		if err == nil && strings.TrimSpace(result.Output) != "" && strings.TrimSpace(result.Output) != "no matches" {
 			parts = append(parts, "KNOWLEDGE-BASE\n"+truncateRecall(result.Output, maxRecallOutput))
+		}
+	}
+	if len(parts) == 0 && m.client != nil {
+		selected, selectErr := recap.SelectRecapContext(
+			searchCtx,
+			m.client,
+			m.projectSettings.EffectiveRecap().Model,
+			m.recapModelInfo(m.projectSettings.EffectiveRecap().Model),
+			userText,
+			m.workdir,
+		)
+		if selectErr == nil && strings.TrimSpace(selected) != "" {
+			parts = append(parts, "RECAP\n"+selected)
 		}
 	}
 	return truncateRecall(strings.Join(parts, "\n\n"), maxRecallOutput), nil
@@ -335,7 +366,11 @@ func (m Model) wireSubMgrRuntime() {
 	if m.subMgr == nil {
 		return
 	}
-	m.subMgr.SetRunner(subagent.AgentRunner{Store: m.store, Client: m.client})
+	childClient := m.childClient
+	if childClient == nil {
+		childClient = m.client
+	}
+	m.subMgr.SetRunner(subagent.AgentRunner{Store: m.store, Client: childClient})
 	m.subMgr.SetStore(m.store)
 	m.subMgr.SetRuntime(subagent.Runtime{
 		Workdir:  m.workdir,
