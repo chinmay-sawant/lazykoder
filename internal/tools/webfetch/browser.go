@@ -22,6 +22,15 @@ const (
 	browserVirtualTime  = 5 * time.Second
 	maxBrowserDOMBytes  = 8 * 1024 * 1024
 	maxBrowserBodyBytes = 5 * 1024 * 1024
+
+	// maxBrowserStderrBytes caps captured stderr from the browser process.
+	maxBrowserStderrBytes = 256 * 1024
+	// maxBrowserErrorMessageRunes caps how much stderr text is embedded in an error.
+	maxBrowserErrorMessageRunes = 500
+	// browserHeaderTimeout bounds how long the local proxy waits for request headers.
+	browserHeaderTimeout = 5 * time.Second
+	// tunnelConns is the number of directions a CONNECT tunnel copies between.
+	tunnelConns = 2
 )
 
 // ChromeBrowser renders a page with an isolated system Chrome or Chromium
@@ -86,7 +95,7 @@ func (b *ChromeBrowser) Read(ctx context.Context, urlStr string) (Result, error)
 	cmd := exec.CommandContext(readCtx, command, args...)
 	configureBrowserCommand(cmd)
 	stdout := &limitedBuffer{limit: maxBrowserDOMBytes}
-	stderr := &limitedBuffer{limit: 256 * 1024}
+	stderr := &limitedBuffer{limit: maxBrowserStderrBytes}
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	if err := cmd.Run(); err != nil {
@@ -96,7 +105,7 @@ func (b *ChromeBrowser) Read(ctx context.Context, urlStr string) (Result, error)
 		if stdout.Len() == 0 {
 			message := strings.TrimSpace(stderr.String())
 			if message != "" {
-				return Result{}, fmt.Errorf("webfetch browser: %w: %s", err, truncateRunes(message, 500))
+				return Result{}, fmt.Errorf("webfetch browser: %w: %s", err, truncateRunes(message, maxBrowserErrorMessageRunes))
 			}
 			return Result{}, fmt.Errorf("webfetch browser: %w", err)
 		}
@@ -212,7 +221,7 @@ func newBrowserProxy(network networkDeps) (*browserProxy, error) {
 	proxy := &browserProxy{listener: listener, network: network}
 	proxy.server = &http.Server{
 		Handler:           http.HandlerFunc(proxy.handle),
-		ReadHeaderTimeout: 5 * time.Second,
+		ReadHeaderTimeout: browserHeaderTimeout,
 	}
 	go func() {
 		_ = proxy.server.Serve(listener)
@@ -305,7 +314,7 @@ func (p *browserProxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 func tunnel(left, right net.Conn) {
 	defer left.Close()
 	defer right.Close()
-	done := make(chan struct{}, 2)
+	done := make(chan struct{}, tunnelConns)
 	copyConn := func(dst, src net.Conn) {
 		_, _ = io.Copy(dst, src)
 		done <- struct{}{}
