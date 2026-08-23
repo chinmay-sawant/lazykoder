@@ -51,6 +51,9 @@ func NewWorker(client Client, model string, info modelscache.Info, variant strin
 
 // Generate calls the configured model and validates its strict JSON envelope.
 func (w Worker) Generate(ctx context.Context, snapshot Snapshot, relatedAvoid string) (Envelope, error) {
+	if err := requireContext(ctx); err != nil {
+		return Envelope{}, err
+	}
 	if w.Client == nil {
 		return Envelope{}, errors.New("recap: worker client is required")
 	}
@@ -59,9 +62,6 @@ func (w Worker) Generate(ctx context.Context, snapshot Snapshot, relatedAvoid st
 	}
 	if len(snapshot.Messages) < minimumMessageCount {
 		return Envelope{}, ErrInsufficientMessages
-	}
-	if ctx == nil {
-		ctx = context.Background()
 	}
 	prompt, err := buildPrompt(snapshot, relatedAvoid)
 	if err != nil {
@@ -140,12 +140,12 @@ func buildPrompt(snapshot Snapshot, relatedAvoid string) (string, error) {
 // are intentionally ignored because this lookup must never delay the parent
 // turn or prevent a recap from being generated.
 func RelatedAvoid(ctx context.Context, workdir string, snapshot Snapshot, runner *grep.Runner) (string, error) {
+	if err := requireContext(ctx); err != nil {
+		return "", err
+	}
 	pattern := relatedPattern(snapshot)
 	if pattern == "" {
 		return "", nil
-	}
-	if ctx == nil {
-		ctx = context.Background()
 	}
 	searchCtx, cancel := context.WithTimeout(ctx, relatedAvoidTimeout)
 	defer cancel()

@@ -32,8 +32,8 @@ type MemoryRunInput struct {
 // RunMemoryUpdate claims, generates, merges, and atomically writes one memory
 // update. Any failure is recorded without affecting the parent turn.
 func RunMemoryUpdate(ctx context.Context, input MemoryRunInput) (runErr error) {
-	if ctx == nil {
-		ctx = context.Background()
+	if err := requireContext(ctx); err != nil {
+		return err
 	}
 	if err := validateMemoryRunInput(input); err != nil {
 		return err
@@ -213,12 +213,12 @@ type memoryDocumentResult struct {
 }
 
 func RelatedRecapEvidence(ctx context.Context, workdir string, snapshot Snapshot, runner *grep.Runner) (string, error) {
+	if err := requireContext(ctx); err != nil {
+		return "", err
+	}
 	pattern := relatedPattern(snapshot)
 	if pattern == "" {
 		return "", nil
-	}
-	if ctx == nil {
-		ctx = context.Background()
 	}
 	searchCtx, cancel := context.WithTimeout(ctx, relatedAvoidTimeout)
 	defer cancel()

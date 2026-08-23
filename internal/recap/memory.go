@@ -1060,8 +1060,8 @@ func truncateMemoryContext(value string) string {
 
 // WriteMemoryDocument atomically replaces the project aggregate.
 func WriteMemoryDocument(ctx context.Context, workdir string, document MemoryDocument) (string, error) {
-	if ctx == nil {
-		ctx = context.Background()
+	if err := requireContext(ctx); err != nil {
+		return "", err
 	}
 	body, err := RenderMemoryDocument(document)
 	if err != nil {

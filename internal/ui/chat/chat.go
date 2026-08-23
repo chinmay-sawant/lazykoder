@@ -658,6 +658,7 @@ func (m Model) refreshModels() tea.Msg {
 			variant: clientDefaultVariant(client),
 		}
 		catalog := toCacheInfos(infos)
+		catalog = modelscache.PreserveSpecializedEndpoints(catalog, modelInfosForProvider(previous, providerID))
 		if providerID == provider.IDOpenCode {
 			if extras, xerr := client.FreeModelInfos(ctx); xerr == nil && len(extras) > 0 {
 				catalog = modelscache.MergeByID(catalog, toCacheInfos(extras))
@@ -1700,7 +1701,7 @@ func (m Model) modelEndpoint() string {
 	if m.client == nil {
 		return ""
 	}
-	return opencode.ChatURLForModel(m.client.BaseURL(), id)
+	return fallbackModelEndpoint(m.client.BaseURL(), id)
 }
 
 func (m Model) modelEndpointFor(id string) string {
@@ -1716,19 +1717,26 @@ func (m Model) modelEndpointFor(id string) string {
 		id = m.client.Model()
 	}
 	if id != "" {
-		return opencode.ChatURLForModel(m.client.BaseURL(), id)
+		return fallbackModelEndpoint(m.client.BaseURL(), id)
 	}
 	return ""
 }
 
 func canonicalModelEndpoint(client provider.Client, info modelscache.Info) string {
-	if info.Endpoint == "" && client == nil {
+	if info.Endpoint != "" {
+		return info.Endpoint
+	}
+	if client == nil {
 		return ""
 	}
-	if client != nil && providerIDForModelInfo(info) == provider.IDOpenCode && info.Provider != modelscache.ProviderOpenCodeZen {
-		return opencode.RouteForModel(client.BaseURL(), info.ID).Endpoint
+	return fallbackModelEndpoint(client.BaseURL(), info.ID)
+}
+
+func fallbackModelEndpoint(base, id string) string {
+	if modelscache.IsFree(modelscache.Info{ID: id}) {
+		return opencode.RouteForModel(base, id).Endpoint
 	}
-	return info.Endpoint
+	return opencode.ChatURL(base)
 }
 
 func (m Model) modelChipLabel() string {

@@ -229,6 +229,7 @@ func toolTitle(tc ChatToolCall) string {
 }
 
 func (a *Agent) executeTool(ctx context.Context, events chan<- Event, partID, title string, tc ChatToolCall) (string, error) {
+	requireBaseToolRegistry()
 	if isTaskToolName(tc.Name) {
 		return a.execTaskTool(ctx, events, partID, title, tc)
 	}

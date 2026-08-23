@@ -19,6 +19,12 @@ func TestParseModelsDevReadsPricesAndVariants(t *testing.T) {
         "limit": {"context": 200000},
         "cost": {"input": 0, "output": 0, "cache_read": 0},
         "reasoning_options": [{"type": "effort", "values": ["low", "high", "max"]}]
+      },
+      "future-zen-responses-model": {
+        "id": "future-zen-responses-model",
+        "api_format": "responses",
+        "limit": {"context": 100000},
+        "cost": {"input": 1, "output": 2}
       }
     }
   },
@@ -35,6 +41,12 @@ func TestParseModelsDevReadsPricesAndVariants(t *testing.T) {
         "limit": {"context": 1050000},
         "cost": {"input": 0.2, "output": 1.2, "cache_read": 0.02, "cache_write": 0.25},
         "reasoning_options": [{"type": "effort", "values": ["none", "low", "medium", "high", "xhigh", "max"]}]
+      },
+      "future-responses-model": {
+        "id": "future-responses-model",
+        "api_format": "responses",
+        "limit": {"context": 100000},
+        "cost": {"input": 1, "output": 2}
       }
     }
   }
@@ -70,6 +82,14 @@ func TestParseModelsDevReadsPricesAndVariants(t *testing.T) {
 	if free.Provider != ProviderOpenCodeZen || glm.Provider != ProviderOpenCodeGo {
 		t.Fatalf("providers = %q / %q", free.Provider, glm.Provider)
 	}
+	future := got["future-responses-model"]
+	if future.Endpoint != opencode.ResponsesURL(opencode.DefaultBaseURL) {
+		t.Fatalf("future endpoint = %q", future.Endpoint)
+	}
+	zenFuture := got["future-zen-responses-model"]
+	if zenFuture.Endpoint != "https://opencode.ai/zen/v1/responses" || zenFuture.Provider != ProviderOpenCodeZen {
+		t.Fatalf("zen future = %+v", zenFuture)
+	}
 }
 
 func TestMergeLiveFillsMissingOnly(t *testing.T) {
@@ -96,6 +116,24 @@ func TestMergeLiveFillsMissingEndpoint(t *testing.T) {
 	kept := MergeLive(Info{ID: "deepseek-v4-flash-free", Endpoint: "https://custom.example/v1/chat/completions"}, live)
 	if kept.Endpoint != "https://custom.example/v1/chat/completions" {
 		t.Fatalf("overwrote endpoint: %q", kept.Endpoint)
+	}
+}
+
+func TestPreserveSpecializedEndpoints(t *testing.T) {
+	got := PreserveSpecializedEndpoints(
+		[]Info{{ID: "future-model", Provider: ProviderOpenCodeGo, Endpoint: "https://example.test/chat/completions"}},
+		[]Info{{ID: "future-model", Provider: ProviderOpenCodeGo, Endpoint: "https://example.test/responses"}},
+	)
+	if got[0].Endpoint != "https://example.test/responses" {
+		t.Fatalf("endpoint = %q, want preserved responses route", got[0].Endpoint)
+	}
+
+	explicit := PreserveSpecializedEndpoints(
+		[]Info{{ID: "future-model", Provider: ProviderOpenCodeGo, Endpoint: "https://example.test/responses"}},
+		[]Info{{ID: "future-model", Provider: ProviderOpenCodeGo, Endpoint: "https://example.test/chat/completions"}},
+	)
+	if explicit[0].Endpoint != "https://example.test/responses" {
+		t.Fatalf("explicit endpoint = %q", explicit[0].Endpoint)
 	}
 }
 

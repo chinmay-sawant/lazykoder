@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 )
@@ -51,6 +52,10 @@ type liveProvider struct {
 
 type liveModel struct {
 	ID               string             `json:"id"`
+	Endpoint         string             `json:"endpoint"`
+	APIFormat        string             `json:"api_format"`
+	Protocol         string             `json:"protocol"`
+	API              string             `json:"api"`
 	Limit            liveLimit          `json:"limit"`
 	Cost             *liveCost          `json:"cost"`
 	ReasoningOptions []liveReasonOption `json:"reasoning_options"`
@@ -100,7 +105,7 @@ func ParseModelsDev(raw []byte) (map[string]Info, error) {
 
 func liveInfo(id string, m liveModel, provider string) Info {
 	info := Info{ID: id, Context: m.Limit.Context, Variants: effortVariants(m.ReasoningOptions)}
-	if route, ok := opencode.RouteForCatalogModel(opencode.DefaultBaseURL, provider, id); ok {
+	if route, ok := liveRoute(m, provider, id); ok {
 		info.Endpoint = route.Endpoint
 		info.Provider = route.Provider
 	}
@@ -117,6 +122,40 @@ func liveInfo(id string, m liveModel, provider string) Info {
 		info.Free = true
 	}
 	return info
+}
+
+func liveRoute(model liveModel, provider, id string) (opencode.Route, bool) {
+	if model.Endpoint != "" || model.APIFormat != "" || model.Protocol != "" || model.API != "" {
+		base := opencode.DefaultBaseURL
+		defaultRoute, ok := opencode.RouteForCatalogModel(base, provider, id)
+		if !ok {
+			return opencode.Route{}, false
+		}
+		if provider == "opencode" {
+			base, ok = opencode.ZenBaseURL(base)
+			if !ok {
+				return opencode.Route{}, false
+			}
+		}
+		route := opencode.RouteForModelMetadata(
+			base,
+			id,
+			model.Endpoint,
+			firstNonEmpty(model.APIFormat, model.Protocol, model.API),
+		)
+		route.Provider = defaultRoute.Provider
+		return route, true
+	}
+	return opencode.RouteForCatalogModel(opencode.DefaultBaseURL, provider, id)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func effortVariants(opts []liveReasonOption) []string {
@@ -190,4 +229,37 @@ func ApplyLive(infos []Info, live map[string]Info) []Info {
 		out[i] = MergeLive(info, live)
 	}
 	return out
+}
+
+// PreserveSpecializedEndpoints keeps a previously discovered protocol route
+// when a refreshed catalog only returns the generic chat route. Provider
+// metadata remains authoritative when it supplies a specialized route.
+func PreserveSpecializedEndpoints(infos, fallback []Info) []Info {
+	previous := make(map[string]Info, len(fallback))
+	for _, info := range fallback {
+		previous[mergeKey(info)] = info
+	}
+	out := make([]Info, len(infos))
+	copy(out, infos)
+	for index, info := range out {
+		old, ok := previous[mergeKey(info)]
+		if !ok {
+			continue
+		}
+		if info.Endpoint == "" || isGenericChatEndpoint(info.Endpoint) && isResponsesEndpoint(old.Endpoint) {
+			out[index].Endpoint = old.Endpoint
+		}
+		if out[index].Provider == "" {
+			out[index].Provider = old.Provider
+		}
+	}
+	return out
+}
+
+func isGenericChatEndpoint(endpoint string) bool {
+	return strings.HasSuffix(strings.TrimSuffix(endpoint, "/"), "/chat/completions")
+}
+
+func isResponsesEndpoint(endpoint string) bool {
+	return strings.HasSuffix(strings.TrimSuffix(endpoint, "/"), "/responses")
 }

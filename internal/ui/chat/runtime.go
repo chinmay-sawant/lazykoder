@@ -18,7 +18,6 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
 	"github.com/chinmay-sawant/lazykoder/internal/orchestrator"
 	"github.com/chinmay-sawant/lazykoder/internal/provider"
-	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 	"github.com/chinmay-sawant/lazykoder/internal/recap"
 	"github.com/chinmay-sawant/lazykoder/internal/settings"
 	"github.com/chinmay-sawant/lazykoder/internal/skills"
@@ -468,7 +467,7 @@ func (m Model) childModelEndpoint(cfg settings.Settings) string {
 	if m.childClient == nil {
 		return ""
 	}
-	return opencode.ChatURLForModel(m.childClient.BaseURL(), model)
+	return fallbackModelEndpoint(m.childClient.BaseURL(), model)
 }
 
 // startTurn arms channels, builds the Agent, and returns watch/pulse cmds.
@@ -811,7 +810,7 @@ func (m Model) recapModelInfo(model string) modelscache.Info {
 	}
 	info := modelscache.Info{ID: model}
 	if m.client != nil {
-		info.Endpoint = opencode.RouteForModel(m.client.BaseURL(), model).Endpoint
+		info.Endpoint = fallbackModelEndpoint(m.client.BaseURL(), model)
 	}
 	return info
 }

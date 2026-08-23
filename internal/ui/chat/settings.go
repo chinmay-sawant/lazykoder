@@ -94,39 +94,45 @@ const (
 	settingsLineRow
 )
 
-// settingsNavigationOrder mirrors the order in which controls are painted.
-// Section headers are intentionally absent because they are not selectable.
-var settingsNavigationOrder = [...]int{
-	settingsRowTheme,
-	settingsRowModel,
-	settingsRowVariant,
-	settingsRowChildModel,
-	settingsRowExploreModel,
-	settingsRowRecapEnabled,
-	settingsRowRecapModel,
-	settingsRowRecapAfterChats,
-	settingsRowSkillsEnabled,
-	settingsRowSkillsAutoDetect,
-	settingsRowSkillsLocal,
-	settingsRowSkillsGlobal,
-	settingsRowSkillsRemember,
-	settingsRowSkillsMaxMatches,
-	settingsRowLimit,
-	settingsRowSteps,
-	settingsRowCompactAuto,
-	settingsRowCompactPercent,
-	settingsRowAgentsEnabled,
-	settingsRowAgentsRole,
-	settingsRowAgentsConcurrent,
-	settingsRowAgentsQueued,
-	settingsRowAgentsChildSteps,
-	settingsRowAgentsTimeout,
-	settingsRowAgentsWriters,
-	settingsRowBashConfirm,
-	settingsRowAllowlistEnabled,
-	settingsRowAllowlist,
-	settingsRowRetryMaxRetries,
-	settingsRowRetryDelay,
+type settingsRowDefinition struct {
+	id    int
+	label string
+}
+
+// settingsRowDefinitions owns the identity and label of every selectable row.
+// Navigation is derived from painted rows so conditional skill controls cannot
+// drift from the visible order.
+var settingsRowDefinitions = [...]settingsRowDefinition{
+	{id: settingsRowTheme, label: "theme"},
+	{id: settingsRowModel, label: "new-session model"},
+	{id: settingsRowVariant, label: "new-session variant"},
+	{id: settingsRowChildModel, label: "child model override"},
+	{id: settingsRowExploreModel, label: "explore model"},
+	{id: settingsRowRecapEnabled, label: "recaps enabled"},
+	{id: settingsRowRecapModel, label: "recap model"},
+	{id: settingsRowRecapAfterChats, label: "recap after chats"},
+	{id: settingsRowRetryMaxRetries, label: "api retries"},
+	{id: settingsRowRetryDelay, label: "retry delay"},
+	{id: settingsRowSkillsEnabled, label: "skills enabled"},
+	{id: settingsRowSkillsAutoDetect, label: "skills auto-detect"},
+	{id: settingsRowSkillsLocal, label: "skills local source"},
+	{id: settingsRowSkillsGlobal, label: "skills global source"},
+	{id: settingsRowSkillsRemember, label: "remember skill references"},
+	{id: settingsRowSkillsMaxMatches, label: "skill auto matches"},
+	{id: settingsRowLimit, label: "step limit"},
+	{id: settingsRowSteps, label: "parent max steps"},
+	{id: settingsRowCompactAuto, label: "auto-compact"},
+	{id: settingsRowCompactPercent, label: "compact at"},
+	{id: settingsRowAgentsEnabled, label: "sub-agents"},
+	{id: settingsRowAgentsRole, label: "default role"},
+	{id: settingsRowAgentsConcurrent, label: "max concurrent"},
+	{id: settingsRowAgentsQueued, label: "max queued"},
+	{id: settingsRowAgentsChildSteps, label: "child max steps"},
+	{id: settingsRowAgentsTimeout, label: "child timeout"},
+	{id: settingsRowAgentsWriters, label: "parallel writers"},
+	{id: settingsRowBashConfirm, label: "child bash confirms"},
+	{id: settingsRowAllowlistEnabled, label: "parent bash allowlist"},
+	{id: settingsRowAllowlist, label: "allowed executables"},
 }
 
 // openSettings opens the full-screen settings card (same layout family as
@@ -237,17 +243,14 @@ func (m Model) settingsInnerWidth() int {
 // compact card intentionally hides detailed skill rows, so they must not be
 // reachable by keyboard until the card has room to show them.
 func (m Model) settingsNavigationRows() []int {
-	visible := make(map[int]bool)
+	seen := make(map[int]bool)
+	rows := make([]int, 0, len(settingsRowDefinitions))
 	for _, line := range m.settingsPaintLines(m.settingsInnerWidth()) {
-		if line.kind == settingsLineRow && line.row >= 0 {
-			visible[line.row] = true
+		if line.kind != settingsLineRow || line.row < 0 || seen[line.row] {
+			continue
 		}
-	}
-	rows := make([]int, 0, len(settingsNavigationOrder))
-	for _, row := range settingsNavigationOrder {
-		if visible[row] {
-			rows = append(rows, row)
-		}
+		seen[line.row] = true
+		rows = append(rows, line.row)
 	}
 	return rows
 }
@@ -504,70 +507,10 @@ func (m Model) settingsPaintRow(row int, value string, innerW int, dim bool) set
 }
 
 func settingsRowLabel(row int) string {
-	switch row {
-	case settingsRowTheme:
-		return "theme"
-	case settingsRowModel:
-		return "new-session model"
-	case settingsRowVariant:
-		return "new-session variant"
-	case settingsRowChildModel:
-		return "child model override"
-	case settingsRowExploreModel:
-		return "explore model"
-	case settingsRowRecapEnabled:
-		return "recaps enabled"
-	case settingsRowRecapModel:
-		return "recap model"
-	case settingsRowRecapAfterChats:
-		return "recap after chats"
-	case settingsRowRetryMaxRetries:
-		return "api retries"
-	case settingsRowRetryDelay:
-		return "retry delay"
-	case settingsRowSkillsEnabled:
-		return "skills enabled"
-	case settingsRowSkillsAutoDetect:
-		return "skills auto-detect"
-	case settingsRowSkillsLocal:
-		return "skills local source"
-	case settingsRowSkillsGlobal:
-		return "skills global source"
-	case settingsRowSkillsRemember:
-		return "remember skill references"
-	case settingsRowSkillsMaxMatches:
-		return "skill auto matches"
-	case settingsRowLimit:
-		return "step limit"
-	case settingsRowSteps:
-		return "parent max steps"
-	case settingsRowCompactAuto:
-		return "auto-compact"
-	case settingsRowCompactPercent:
-		return "compact at"
-	case settingsRowAgentsEnabled:
-		return "sub-agents"
-	case settingsRowAgentsRole:
-		return "default role"
-	case settingsRowAgentsConcurrent:
-		return "max concurrent"
-	case settingsRowAgentsQueued:
-		return "max queued"
-	case settingsRowAgentsChildSteps:
-		return "child max steps"
-	case settingsRowAgentsTimeout:
-		return "child timeout"
-	case settingsRowAgentsWriters:
-		return "parallel writers"
-	case settingsRowBashConfirm:
-		return "child bash confirms"
-	case settingsRowAllowlistEnabled:
-		return "parent bash allowlist"
-	case settingsRowAllowlist:
-		return "allowed executables"
-	default:
+	if row < 0 || row >= len(settingsRowDefinitions) {
 		return ""
 	}
+	return settingsRowDefinitions[row].label
 }
 
 func formatSettingsTimeout(sec int) string {
@@ -736,10 +679,16 @@ func (m Model) activateSettingsRow() (Model, tea.Cmd) {
 	case settingsRowCompactAuto:
 		return m.setCompactAuto(!m.projectSettings.Compaction.Auto), nil
 	case settingsRowCompactPercent:
-		return m.openSettingInputForm("Compaction Context %", "Percentage of context window (10-90)", strconv.Itoa(m.projectSettings.EffectiveCompaction().Percent), validatePercentSetting, func(mod Model, val string) (Model, tea.Cmd) {
-			v, _ := strconv.Atoi(val)
-			return mod.setCompactPercent(v), nil
-		})
+		return m.openSettingInputForm(
+			"Compaction Context %",
+			fmt.Sprintf("Percentage of context window (%d-%d)", settings.MinCompactPercent, settings.MaxCompactPercent),
+			strconv.Itoa(m.projectSettings.EffectiveCompaction().Percent),
+			validatePercentSetting,
+			func(mod Model, val string) (Model, tea.Cmd) {
+				v, _ := strconv.Atoi(val)
+				return mod.setCompactPercent(v), nil
+			},
+		)
 	case settingsRowAgentsEnabled:
 		return m.setAgentsEnabled(!m.projectSettings.Agents.Enabled), nil
 	case settingsRowAgentsRole:
@@ -760,7 +709,7 @@ func (m Model) activateSettingsRow() (Model, tea.Cmd) {
 			return mod.setAgentsChildSteps(v), nil
 		})
 	case settingsRowAgentsTimeout:
-		return m.openSettingInputForm("Agent Timeout (sec)", "Child agent execution timeout in seconds", strconv.Itoa(m.projectSettings.Agents.DefaultTimeoutSec), validateIntSetting, func(mod Model, val string) (Model, tea.Cmd) {
+		return m.openSettingInputForm("Agent Timeout (sec)", "Child agent execution timeout in seconds; 0 disables it", strconv.Itoa(m.projectSettings.Agents.DefaultTimeoutSec), validateAgentTimeoutSetting, func(mod Model, val string) (Model, tea.Cmd) {
 			v, _ := strconv.Atoi(val)
 			return mod.setAgentsTimeout(v), nil
 		})
@@ -795,8 +744,16 @@ func validateIntSetting(s string) error {
 
 func validatePercentSetting(s string) error {
 	v, err := strconv.Atoi(strings.TrimSpace(s))
-	if err != nil || v < 10 || v > 90 {
-		return fmt.Errorf("must be between 10 and 90")
+	if err != nil || v < settings.MinCompactPercent || v > settings.MaxCompactPercent {
+		return fmt.Errorf("must be between %d and %d", settings.MinCompactPercent, settings.MaxCompactPercent)
+	}
+	return nil
+}
+
+func validateAgentTimeoutSetting(s string) error {
+	v, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil || v < 0 {
+		return fmt.Errorf("must be zero or a positive integer")
 	}
 	return nil
 }

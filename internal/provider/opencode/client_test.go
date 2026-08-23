@@ -436,6 +436,21 @@ func TestModelInfosStampsGoEndpoint(t *testing.T) {
 	}
 }
 
+func TestModelInfosUsesAdvertisedProtocolEndpoint(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"data":[{"id":"future-responses-model","api_format":"responses"}]}`)
+	}))
+	defer srv.Close()
+	c := NewClient("k", WithBaseURL(srv.URL+"/v1"))
+	infos, err := c.ModelInfos(context.Background())
+	if err != nil {
+		t.Fatalf("ModelInfos: %v", err)
+	}
+	if len(infos) != 1 || infos[0].Endpoint != srv.URL+"/v1/responses" {
+		t.Fatalf("infos = %+v", infos)
+	}
+}
+
 func TestFreeModelInfosStampsZenEndpointAndAuth(t *testing.T) {
 	var zenAuth, zenPath, goPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -540,7 +555,7 @@ func TestRouteForModel(t *testing.T) {
 		provider string
 	}{
 		{name: "go", id: "deepseek-v4-flash", endpoint: goBase + "/chat/completions", provider: ProviderGo},
-		{name: "go responses", id: "gpt-5.6-luna", endpoint: goBase + "/responses", provider: ProviderGo},
+		{name: "go default", id: "gpt-5.6-luna", endpoint: goBase + "/chat/completions", provider: ProviderGo},
 		{name: "zen free", id: "deepseek-v4-flash-free", endpoint: "https://opencode.ai/zen/v1/chat/completions", provider: ProviderZen},
 		{name: "big pickle", id: "big-pickle", endpoint: "https://opencode.ai/zen/v1/chat/completions", provider: ProviderZen},
 	}
@@ -549,6 +564,18 @@ func TestRouteForModel(t *testing.T) {
 			route := RouteForModel(goBase, tt.id)
 			if route.Endpoint != tt.endpoint || route.Provider != tt.provider {
 				t.Fatalf("RouteForModel(%q) = %+v", tt.id, route)
+			}
+		})
+	}
+}
+
+func TestRouteForModelMetadata(t *testing.T) {
+	goBase := "https://opencode.ai/zen/go/v1"
+	for _, format := range []string{"responses", "openai-responses"} {
+		t.Run(format, func(t *testing.T) {
+			route := RouteForModelMetadata(goBase, "future-model", "", format)
+			if route.Endpoint != goBase+"/responses" || route.Provider != ProviderGo {
+				t.Fatalf("route = %+v", route)
 			}
 		})
 	}

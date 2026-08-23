@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"fmt"
+
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/task"
 )
@@ -175,9 +177,30 @@ var allBaseToolSpecs = map[string]opencode.ToolSpec{
 	},
 }
 
+func validateBaseToolRegistry() error {
+	for name := range allBaseToolSpecs {
+		if _, ok := baseToolRunners[name]; !ok {
+			return fmt.Errorf("agent: tool %q has a spec but no runner", name)
+		}
+	}
+	for name := range baseToolRunners {
+		if _, ok := allBaseToolSpecs[name]; !ok {
+			return fmt.Errorf("agent: tool %q has a runner but no spec", name)
+		}
+	}
+	return nil
+}
+
+func requireBaseToolRegistry() {
+	if err := validateBaseToolRegistry(); err != nil {
+		panic(err)
+	}
+}
+
 // toolSpecsFor returns provider ToolSpecs for the given allowlist names.
 // Unknown names are skipped. When names is empty, DefaultParentTools is used.
 func toolSpecsFor(names []string, host SubagentHost) []opencode.ToolSpec {
+	requireBaseToolRegistry()
 	if len(names) == 0 {
 		names = DefaultParentTools
 	}
@@ -189,6 +212,9 @@ func toolSpecsFor(names []string, host SubagentHost) []opencode.ToolSpec {
 		}
 		if isTaskToolName(n) {
 			continue // task tools come only from Host
+		}
+		if _, ok := baseToolRunners[n]; !ok {
+			continue
 		}
 		spec, ok := allBaseToolSpecs[n]
 		if !ok {

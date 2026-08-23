@@ -29,7 +29,7 @@ const (
 )
 
 // Info is one cached model: context window, USD per million tokens,
-// selectable reasoning variants, and the chat-completions endpoint to call.
+// selectable reasoning variants, and the provider endpoint to call.
 type Info struct {
 	ID             string   `json:"id"`
 	Provider       string   `json:"provider,omitempty"`
@@ -81,7 +81,7 @@ func ContextOf(infos []Info, id string) int {
 	return 0
 }
 
-// EndpointOf returns the stored chat-completions URL for id, or an empty value.
+// EndpointOf returns the stored provider endpoint for id, or an empty value.
 func EndpointOf(infos []Info, id string) string {
 	if info, ok := InfoOf(infos, id); ok {
 		return info.Endpoint

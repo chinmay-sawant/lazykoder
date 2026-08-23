@@ -74,18 +74,54 @@ func ChatURLForModel(base, id string) string {
 	return RouteForModel(base, id).Endpoint
 }
 
-// RouteForModel chooses a chat route for an OpenCode model id. Free models use
-// the Zen sibling when the base is an OpenCode Go route.
+// RouteForModel chooses the default route for an OpenCode model id. Free
+// models use the Zen sibling when the base is an OpenCode Go route. Model
+// metadata should use RouteForModelMetadata when it advertises a protocol.
 func RouteForModel(base, id string) Route {
 	if isFreeModelID(id) {
 		if endpoint, ok := ZenChatURL(base); ok {
 			return Route{Endpoint: endpoint, Provider: ProviderZen}
 		}
 	}
-	if isResponsesModel(id) {
-		return Route{Endpoint: ResponsesURL(base), Provider: ProviderGo}
-	}
 	return Route{Endpoint: ChatURL(base), Provider: ProviderGo}
+}
+
+// RouteForModelMetadata applies provider-advertised route metadata to the
+// default model route. The model id is used only for the free-model sibling;
+// protocol selection is owned by the metadata, not a model-name table.
+func RouteForModelMetadata(base, id, endpoint, apiFormat string) Route {
+	route := RouteForModel(base, id)
+	if endpoint != "" {
+		if resolved, ok := resolveRouteEndpoint(base, endpoint); ok {
+			route.Endpoint = resolved
+			return route
+		}
+	}
+	switch strings.ToLower(strings.TrimSpace(apiFormat)) {
+	case "responses", "openai-responses":
+		route.Endpoint = ResponsesURL(base)
+	case "chat", "chat-completions", "openai", "openai-compatible":
+		route.Endpoint = ChatURL(base)
+	}
+	return route
+}
+
+func resolveRouteEndpoint(base, endpoint string) (string, bool) {
+	endpoint = strings.TrimSpace(endpoint)
+	if endpoint == "" {
+		return "", false
+	}
+	if strings.HasPrefix(endpoint, "http://") || strings.HasPrefix(endpoint, "https://") {
+		return strings.TrimSuffix(endpoint, "/"), true
+	}
+	switch strings.Trim(endpoint, "/") {
+	case "responses", "openai/responses":
+		return ResponsesURL(base), true
+	case "chat/completions", "openai/chat/completions":
+		return ChatURL(base), true
+	default:
+		return "", false
+	}
 }
 
 // RouteForCatalogProvider turns a models.dev provider key into the matching
@@ -95,8 +131,9 @@ func RouteForCatalogProvider(base, provider string) (Route, bool) {
 }
 
 // RouteForCatalogModel turns a models.dev provider and model id into the
-// matching OpenCode route. The model id is used only for protocol capabilities
-// that differ within the same provider.
+// matching default OpenCode route. models.dev does not currently advertise
+// the request protocol, so callers should prefer provider model metadata when
+// it is available.
 func RouteForCatalogModel(base, provider, id string) (Route, bool) {
 	switch provider {
 	case "opencode-go":
@@ -114,18 +151,6 @@ func RouteForCatalogModel(base, provider, id string) (Route, bool) {
 
 func isFreeModelID(id string) bool {
 	return strings.HasSuffix(id, "-free") || id == "big-pickle"
-}
-
-// OpenCode's Go gateway exposes Responses for this model family while the
-// remaining Go catalog continues to use chat completions. Keep this protocol
-// capability in one route table so callers do not grow model-specific checks.
-var responsesModels = map[string]struct{}{
-	"gpt-5.6-luna": {},
-}
-
-func isResponsesModel(id string) bool {
-	_, ok := responsesModels[strings.TrimSpace(id)]
-	return ok
 }
 
 // ErrMissingAPIKey is returned when no API key is available from the environment.
@@ -309,9 +334,9 @@ type ToolSpec struct {
 type ChatRequest struct {
 	// Model overrides the client default model id when non-empty.
 	Model string
-	// Endpoint is the full chat-completions URL. Empty uses the client base.
-	// Stored per model in models.json so Go, Zen, and later OpenAI-style
-	// providers can share this client.
+	// Endpoint is the full provider endpoint. Empty uses the client chat base.
+	// Stored per model in models.json so chat and Responses routes can share
+	// this client.
 	Endpoint string
 	// ReasoningEffort is the selected model variant (low, medium, high).
 	// Empty omits the field so the provider default applies.
@@ -632,7 +657,7 @@ func (c *Client) chatURL(req ChatRequest) string {
 type ModelInfo struct {
 	ID             string
 	Provider       string
-	Endpoint       string // full chat-completions URL for this model
+	Endpoint       string // full provider endpoint for this model
 	Context        int
 	InputPerM      float64
 	OutputPerM     float64
@@ -683,7 +708,7 @@ func (c *Client) ModelInfos(ctx context.Context) ([]ModelInfo, error) {
 			continue
 		}
 		info := m.info()
-		route := RouteForModel(c.baseURL, m.ID)
+		route := m.route(c.baseURL)
 		info.Endpoint = route.Endpoint
 		info.Provider = route.Provider
 		out = append(out, info)
@@ -724,7 +749,12 @@ func (c *Client) FreeModelInfos(ctx context.Context) ([]ModelInfo, error) {
 			continue
 		}
 		info := m.info()
-		info.Endpoint = endpoint
+		route := m.route(c.baseURL)
+		if route.Provider != ProviderZen {
+			route.Endpoint = endpoint
+			route.Provider = ProviderZen
+		}
+		info.Endpoint = route.Endpoint
 		info.Provider = ProviderZen
 		out = append(out, info)
 	}
@@ -820,6 +850,10 @@ func billingWindowFromWire(w *wireBillingWindow) BillingWindow {
 
 type wireModel struct {
 	ID             string          `json:"id"`
+	Endpoint       string          `json:"endpoint"`
+	APIFormat      string          `json:"api_format"`
+	Protocol       string          `json:"protocol"`
+	API            string          `json:"api"`
 	ContextWindow  int             `json:"context_window"`
 	ContextLength  int             `json:"context_length"`
 	MaxContext     int             `json:"max_context"`
@@ -850,6 +884,10 @@ type wireModel struct {
 		CacheRead  float64 `json:"cache_read"`
 		CacheWrite float64 `json:"cache_write"`
 	} `json:"cost"`
+}
+
+func (m wireModel) route(base string) Route {
+	return RouteForModelMetadata(base, m.ID, m.Endpoint, firstNonEmpty(m.APIFormat, m.Protocol, m.API))
 }
 
 func (m wireModel) info() ModelInfo {

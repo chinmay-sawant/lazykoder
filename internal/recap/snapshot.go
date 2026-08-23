@@ -85,14 +85,14 @@ type ToolFact struct {
 // the identity tie-breaker; timestamps only determine the one-to-two-hour
 // windows and are preserved as source metadata.
 func BuildSnapshot(ctx context.Context, store *db.Store, sessionID string, opts SnapshotOptions) (Snapshot, error) {
+	if err := requireContext(ctx); err != nil {
+		return Snapshot{}, err
+	}
 	if store == nil {
 		return Snapshot{}, errors.New("recap: store is required")
 	}
 	if strings.TrimSpace(sessionID) == "" {
 		return Snapshot{}, errors.New("recap: session id is required")
-	}
-	if ctx == nil {
-		ctx = context.Background()
 	}
 	sess, err := store.GetSession(ctx, sessionID)
 	if err != nil {
@@ -168,14 +168,14 @@ func BuildSnapshot(ctx context.Context, store *db.Store, sessionID string, opts 
 // durable failed memory attempt so insufficient context is observable and can
 // be retried after the next successful turn.
 func BuildAnchorSnapshot(ctx context.Context, store *db.Store, sessionID string) (Snapshot, error) {
+	if err := requireContext(ctx); err != nil {
+		return Snapshot{}, err
+	}
 	if store == nil {
 		return Snapshot{}, errors.New("recap: store is required")
 	}
 	if strings.TrimSpace(sessionID) == "" {
 		return Snapshot{}, errors.New("recap: session id is required")
-	}
-	if ctx == nil {
-		ctx = context.Background()
 	}
 	sess, err := store.GetSession(ctx, sessionID)
 	if err != nil {

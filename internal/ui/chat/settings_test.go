@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -47,6 +48,41 @@ func TestSettingsSlashOpensCard(t *testing.T) {
 	// a dedicated screen so the prompt should not be the focus frame.
 	if !strings.Contains(v, "SETTINGS") {
 		t.Fatal("missing SETTINGS title")
+	}
+}
+
+func TestSettingsRowDefinitionsCoverSelectableRows(t *testing.T) {
+	if len(settingsRowDefinitions) != settingsRowCount {
+		t.Fatalf("settings definitions = %d, want %d", len(settingsRowDefinitions), settingsRowCount)
+	}
+	seen := make(map[int]bool, len(settingsRowDefinitions))
+	for _, definition := range settingsRowDefinitions {
+		if definition.id < 0 || definition.id >= settingsRowCount {
+			t.Fatalf("invalid settings row definition = %+v", definition)
+		}
+		if definition.label == "" {
+			t.Fatalf("empty label for row %d", definition.id)
+		}
+		if seen[definition.id] {
+			t.Fatalf("duplicate settings row definition %d", definition.id)
+		}
+		seen[definition.id] = true
+	}
+	for row := 0; row < settingsRowCount; row++ {
+		if !seen[row] {
+			t.Fatalf("missing settings row definition %d", row)
+		}
+	}
+}
+
+func TestSettingsFormValidationUsesSettingsBounds(t *testing.T) {
+	for _, value := range []int{settings.MinCompactPercent, settings.MaxCompactPercent} {
+		if err := validatePercentSetting(strconv.Itoa(value)); err != nil {
+			t.Fatalf("compact percent %d rejected: %v", value, err)
+		}
+	}
+	if err := validateAgentTimeoutSetting("0"); err != nil {
+		t.Fatalf("zero timeout rejected: %v", err)
 	}
 }
 

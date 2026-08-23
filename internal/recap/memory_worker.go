@@ -49,6 +49,9 @@ func (w MemoryWorker) GenerateWithTimings(ctx context.Context, snapshot Snapshot
 }
 
 func (w MemoryWorker) generate(ctx context.Context, snapshot Snapshot, document MemoryDocument, relatedRecaps string, timings map[string]int64) (MemoryEnvelope, error) {
+	if err := requireContext(ctx); err != nil {
+		return MemoryEnvelope{}, err
+	}
 	if w.Client == nil {
 		return MemoryEnvelope{}, errors.New("memory: worker client is required")
 	}
@@ -57,9 +60,6 @@ func (w MemoryWorker) generate(ctx context.Context, snapshot Snapshot, document 
 	}
 	if len(snapshot.Messages) < memoryMinimumMessageCount {
 		return MemoryEnvelope{}, ErrInsufficientMessages
-	}
-	if ctx == nil {
-		ctx = context.Background()
 	}
 	prompt, err := BuildMemoryPrompt(snapshot, document, relatedRecaps)
 	if err != nil {

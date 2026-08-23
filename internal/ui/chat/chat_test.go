@@ -1641,15 +1641,15 @@ func TestModelEndpointPrefersCacheThenFreeFallback(t *testing.T) {
 	}
 }
 
-func TestModelEndpointRefreshesStaleResponsesRoute(t *testing.T) {
+func TestModelEndpointPreservesAdvertisedRoute(t *testing.T) {
 	m := New(Options{Store: newTestStore(t), Client: opencode.NewClient("k", opencode.WithBaseURL("https://opencode.ai/zen/go/v1")), Workdir: t.TempDir()})
 	m.model = "gpt-5.6-luna"
 	m.modelInfos = []modelscache.Info{{
 		ID: "gpt-5.6-luna", Provider: modelscache.ProviderOpenCodeGo,
 		Endpoint: "https://opencode.ai/zen/go/v1/chat/completions",
 	}}
-	if got := m.modelEndpoint(); got != "https://opencode.ai/zen/go/v1/responses" {
-		t.Fatalf("stale cached endpoint = %q", got)
+	if got := m.modelEndpoint(); got != "https://opencode.ai/zen/go/v1/chat/completions" {
+		t.Fatalf("cached endpoint = %q", got)
 	}
 }
 

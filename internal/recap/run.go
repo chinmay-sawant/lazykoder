@@ -29,8 +29,8 @@ type RunInput struct {
 // Run claims, generates, materializes, and completes one reserved recap. Any
 // post-claim failure is recorded in the ledger and returned to the caller.
 func Run(ctx context.Context, input RunInput) (ArtifactManifest, error) {
-	if ctx == nil {
-		ctx = context.Background()
+	if err := requireContext(ctx); err != nil {
+		return ArtifactManifest{}, err
 	}
 	if err := validateRunInput(input); err != nil {
 		return ArtifactManifest{}, err

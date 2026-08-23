@@ -90,9 +90,10 @@ The client is OpenAI-compatible:
 The OpenCode client selects the wire protocol from the stored route. Chat
 routes send `messages`; Responses routes translate the same transcript into
 `input`, function tools, function calls, and function-call outputs, then parse
-Responses SSE events back into lazykoder deltas. Cached OpenCode routes are
-re-derived when a turn starts so an older `/chat/completions` entry cannot
-override a current Responses route.
+Responses SSE events back into lazykoder deltas. `GET /models` may advertise an
+endpoint or API format, and that metadata owns the route without a model-ID
+table. When a refresh returns only the generic chat route, an already cached
+specialized route is retained until the provider supplies a replacement.
 
 `GET /models` is fetched at startup (non-blocking, 10s timeout) to show the
 model count and to feed the interactive picker (`/model` or the footer
@@ -272,7 +273,10 @@ shrink-on-next-send, and the overflow retry still run.
 "compaction": { "auto": true, "percent": 80, "keep_tokens": 15000 }
 ```
 
-`/settings` exposes **auto-compact** and **compact at** (5% steps).
+`/settings` exposes **auto-compact** and **compact at** (5% steps). The form
+uses the same 5-99 bounds as the settings package, and a child timeout of `0`
+means no timeout. Keyboard navigation follows the rows that are actually
+painted, including the compact and full skill layouts.
 `keep_tokens` is JSON-only (default 15,000). `0` or omitted is treated
 as 15,000. There is no `buffer` key; an old `buffer` field is ignored.
 
@@ -309,6 +313,16 @@ orchestrated tasks, the settings card owns model selection: the explore model
 overrides the common child model for explore jobs, and either configured model
 overrides the planner's `model_class`. The planner class is only a fallback
 when the relevant setting is empty.
+
+**Tool registry.** Base tool specifications and runners must have matching
+names. The agent validates that registry before advertising or executing base
+tools, so a partial registration cannot expose a model-visible tool that will
+always return `unknown tool`.
+
+**Recap cancellation.** Context-aware recap, memory, artifact, and evidence
+entry points reject a nil context with `recap.ErrNilContext`. Deliberate root
+callers create `context.Background()` or a timeout before entering the recap
+package, so cancellation ownership is not silently discarded at a boundary.
 
 ## Sub-agents
 
