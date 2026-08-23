@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	sessionColumns       = `id, title, directory, provider, model, variant, time_created, time_updated, status, parent_session_id, kind, status_segments`
+	sessionColumns       = `id, title, directory, provider, model, variant, time_created, time_updated, time_active, status, parent_session_id, kind, status_segments`
 	messageColumns       = `id, session_id, role, agent, provider_id, model_id, variant, time_created, seq, visible`
 	messageInsertColumns = `id, session_id, role, agent, provider_id, model_id, variant, time_created, seq`
 	partColumns          = `id, message_id, type, time_created, seq, text, time_start, time_end, finish_reason, ` +
@@ -49,9 +49,12 @@ func (s *Store) CreateSession(ctx context.Context, sess Session) (Session, error
 	if sess.TimeUpdated == 0 {
 		sess.TimeUpdated = sess.TimeCreated
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO sessions (`+sessionColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	if sess.TimeActive == 0 {
+		sess.TimeActive = sess.TimeUpdated
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO sessions (`+sessionColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		sess.ID, sess.Title, sess.Directory, sess.Provider, sess.Model, sess.Variant,
-		sess.TimeCreated, sess.TimeUpdated, sess.Status, sess.ParentSessionID, sess.Kind, string(segmentsJSON))
+		sess.TimeCreated, sess.TimeUpdated, sess.TimeActive, sess.Status, sess.ParentSessionID, sess.Kind, string(segmentsJSON))
 	if err != nil {
 		return Session{}, fmt.Errorf("db: create session: %w", err)
 	}
@@ -82,7 +85,7 @@ func (s *Store) InsertMessage(ctx context.Context, m Message) (Message, error) {
 	if err != nil {
 		return Message{}, fmt.Errorf("db: insert message: %w", err)
 	}
-	if err := touchSessionTx(ctx, tx, m.SessionID, m.TimeCreated); err != nil {
+	if err := touchConversationTx(ctx, tx, m.SessionID, m.TimeCreated); err != nil {
 		return Message{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -114,6 +117,9 @@ func (s *Store) InsertPart(ctx context.Context, p Part) (Part, error) {
 		p.Cost, p.ToolName, p.ToolCallID, p.ToolStatus)
 	if err != nil {
 		return Part{}, fmt.Errorf("db: insert part: %w", err)
+	}
+	if err := touchConversationForMessageTx(ctx, tx, p.MessageID, p.TimeCreated); err != nil {
+		return Part{}, err
 	}
 	if err := tx.Commit(); err != nil {
 		return Part{}, fmt.Errorf("db: commit part insert: %w", err)
@@ -216,7 +222,7 @@ func (s *Store) SetMessageVisibility(ctx context.Context, messageID string, visi
 }
 
 // TouchSession sets sessions.time_updated to now (or when > 0).
-// Used when activity happens without a new message row.
+// It records general activity without changing conversation ordering.
 func (s *Store) TouchSession(ctx context.Context, sessionID string) error {
 	if sessionID == "" {
 		return fmt.Errorf("db: touch session: empty id")
@@ -240,6 +246,26 @@ func touchSession(ctx context.Context, db execContext, sessionID string, when in
 
 func touchSessionTx(ctx context.Context, tx *sql.Tx, sessionID string, when int64) error {
 	return touchSession(ctx, tx, sessionID, when)
+}
+
+func touchConversationTx(ctx context.Context, tx *sql.Tx, sessionID string, when int64) error {
+	if when <= 0 {
+		when = time.Now().UnixMilli()
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE sessions SET time_updated = ?, time_active = ? WHERE id = ?`, when, when, sessionID); err != nil {
+		return fmt.Errorf("db: touch conversation: %w", err)
+	}
+	return nil
+}
+
+func touchConversationForMessageTx(ctx context.Context, tx *sql.Tx, messageID string, when int64) error {
+	if when <= 0 {
+		when = time.Now().UnixMilli()
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE sessions SET time_active = ? WHERE id = (SELECT session_id FROM messages WHERE id = ?)`, when, messageID); err != nil {
+		return fmt.Errorf("db: touch conversation for message: %w", err)
+	}
+	return nil
 }
 
 // ListParts returns the parts of a message ordered by seq.
@@ -361,7 +387,7 @@ func (s *Store) GetSession(ctx context.Context, id string) (Session, error) {
 	var statusSegments string
 	err := s.db.QueryRowContext(ctx, `SELECT `+sessionColumns+` FROM sessions WHERE id = ?`, id).
 		Scan(&sess.ID, &sess.Title, &sess.Directory, &sess.Provider, &sess.Model,
-			&sess.Variant, &sess.TimeCreated, &sess.TimeUpdated, &sess.Status,
+			&sess.Variant, &sess.TimeCreated, &sess.TimeUpdated, &sess.TimeActive, &sess.Status,
 			&sess.ParentSessionID, &sess.Kind, &statusSegments)
 	if err != nil {
 		return Session{}, fmt.Errorf("db: get session: %w", err)
@@ -388,7 +414,7 @@ ORDER BY time_updated DESC, time_created DESC`, parentID)
 		var sess Session
 		var statusSegments string
 		if err := rows.Scan(&sess.ID, &sess.Title, &sess.Directory, &sess.Provider, &sess.Model,
-			&sess.Variant, &sess.TimeCreated, &sess.TimeUpdated, &sess.Status,
+			&sess.Variant, &sess.TimeCreated, &sess.TimeUpdated, &sess.TimeActive, &sess.Status,
 			&sess.ParentSessionID, &sess.Kind, &statusSegments); err != nil {
 			return nil, fmt.Errorf("db: scan child session: %w", err)
 		}
@@ -402,12 +428,12 @@ ORDER BY time_updated DESC, time_created DESC`, parentID)
 }
 
 // ListSessionsByDir returns main sessions of a directory ordered by
-// time_updated DESC (stable ties via time_created, id). Sub-agent child
+// conversation activity (stable ties via time_created, id). Sub-agent child
 // sessions are omitted from resume lists.
 func (s *Store) ListSessionsByDir(ctx context.Context, directory string) ([]Session, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT `+sessionColumns+` FROM sessions
 WHERE directory = ? AND (kind = 'main' OR kind = '' OR kind IS NULL)
-ORDER BY time_updated DESC, time_created DESC, id DESC`, directory)
+ORDER BY time_active DESC, time_created DESC, id DESC`, directory)
 	if err != nil {
 		return nil, fmt.Errorf("db: list sessions: %w", err)
 	}
@@ -417,7 +443,7 @@ ORDER BY time_updated DESC, time_created DESC, id DESC`, directory)
 		var sess Session
 		var statusSegments string
 		if err := rows.Scan(&sess.ID, &sess.Title, &sess.Directory, &sess.Provider, &sess.Model,
-			&sess.Variant, &sess.TimeCreated, &sess.TimeUpdated, &sess.Status,
+			&sess.Variant, &sess.TimeCreated, &sess.TimeUpdated, &sess.TimeActive, &sess.Status,
 			&sess.ParentSessionID, &sess.Kind, &statusSegments); err != nil {
 			return nil, fmt.Errorf("db: scan session: %w", err)
 		}

@@ -2,6 +2,7 @@ package recap
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -61,12 +62,68 @@ func TestRunMemoryUpdateWritesAggregateAndCompletesLedger(t *testing.T) {
 	if got.Status != db.MemoryUpdateStatusCompleted || len(got.SHA256) != 64 {
 		t.Fatalf("memory update = %+v", got)
 	}
+	for _, stage := range []string{"claim", "aggregate_read", "related_recap_evidence", "provider_call", "merge_write", "total"} {
+		if got.StageDurations[stage] <= 0 {
+			t.Fatalf("stage %q duration = %d, want positive duration map=%+v", stage, got.StageDurations[stage], got.StageDurations)
+		}
+	}
 	body, err := os.ReadFile(filepath.Join(workdir, "knowledge-base", "memories.md"))
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
 	if !strings.Contains(string(body), "Keep plans focused") || !strings.Contains(string(body), "## User preferences") {
 		t.Fatalf("memory body = %q", body)
+	}
+}
+
+func TestRunMemoryUpdateSkipsNoOpBeforeProvider(t *testing.T) {
+	store := openRecapStore(t)
+	workdir := t.TempDir()
+	snapshot := memoryTestSnapshot()
+	document := NewMemoryDocument()
+	document.UpdatedAtUTC = "2026-08-22T12:00:00Z"
+	document.LastSessionID = snapshot.SessionID
+	document.LastMessageID = snapshot.Messages[1].ID
+	document.LastMessageSeq = snapshot.Messages[1].Seq
+	if _, err := WriteMemoryDocument(context.Background(), workdir, document); err != nil {
+		t.Fatalf("WriteMemoryDocument: %v", err)
+	}
+	record, created, err := store.ReserveMemoryUpdate(context.Background(), db.MemoryUpdate{
+		Workdir:            workdir,
+		SourceSessionID:    snapshot.SessionID,
+		SourceEndSeq:       snapshot.SourceEndSeq,
+		SourceEndMessageID: snapshot.SourceEndMessageID,
+		Model:              "deepseek-v4-flash",
+	})
+	if err != nil || !created {
+		t.Fatalf("ReserveMemoryUpdate: record=%+v created=%v err=%v", record, created, err)
+	}
+	called := false
+	worker := MemoryWorker{
+		Client: recapClientFunc(func(context.Context, opencode.ChatRequest) (*opencode.ChatResponse, error) {
+			called = true
+			return nil, errors.New("provider should not be called")
+		}),
+		Model: "deepseek-v4-flash",
+	}
+	if err := RunMemoryUpdate(context.Background(), MemoryRunInput{
+		Store:    store,
+		Record:   record,
+		Snapshot: snapshot,
+		Workdir:  workdir,
+		Worker:   worker,
+	}); err != nil {
+		t.Fatalf("RunMemoryUpdate: %v", err)
+	}
+	if called {
+		t.Fatal("provider was called for a no-op memory update")
+	}
+	got, err := store.GetMemoryUpdate(context.Background(), record.ID)
+	if err != nil {
+		t.Fatalf("GetMemoryUpdate: %v", err)
+	}
+	if got.Status != db.MemoryUpdateStatusCompleted {
+		t.Fatalf("memory update = %+v, want completed", got)
 	}
 }
 

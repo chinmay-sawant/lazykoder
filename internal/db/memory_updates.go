@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -34,11 +35,12 @@ type MemoryUpdate struct {
 	TimeCreated        int64
 	TimeStarted        *int64
 	TimeFinished       *int64
+	StageDurations     map[string]int64
 }
 
 const memoryUpdateColumns = `id, workdir, source_session_id, source_end_seq,
 source_end_message_id, model, status, attempts, sha256, error, time_created,
-time_started, time_finished`
+time_started, time_finished, stage_durations_json`
 
 func (u MemoryUpdate) validate() error {
 	if strings.TrimSpace(u.Workdir) == "" {
@@ -89,12 +91,16 @@ func (s *Store) ReserveMemoryUpdate(ctx context.Context, update MemoryUpdate) (M
 	if update.TimeCreated == 0 {
 		update.TimeCreated = time.Now().UnixMilli()
 	}
+	durations, err := marshalMemoryStageDurations(update.StageDurations)
+	if err != nil {
+		return MemoryUpdate{}, false, err
+	}
 	result, err := s.db.ExecContext(ctx, `INSERT INTO memory_updates (`+memoryUpdateColumns+`)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(workdir, source_session_id, source_end_message_id) DO NOTHING`,
 		update.ID, update.Workdir, update.SourceSessionID, update.SourceEndSeq,
 		update.SourceEndMessageID, update.Model, update.Status, update.Attempts, nil,
-		nil, update.TimeCreated, nil, nil)
+		nil, update.TimeCreated, nil, nil, durations)
 	if err != nil {
 		return MemoryUpdate{}, false, fmt.Errorf("db: reserve memory update: %w", err)
 	}
@@ -133,7 +139,7 @@ func (s *Store) ClaimMemoryUpdate(ctx context.Context, id string) error {
 	now := time.Now().UnixMilli()
 	result, err := s.db.ExecContext(ctx, `UPDATE memory_updates
 SET status = ?, attempts = attempts + 1, time_started = ?, time_finished = NULL,
-sha256 = NULL, error = NULL
+sha256 = NULL, error = NULL, stage_durations_json = '{}'
 WHERE id = ? AND status = ?`, MemoryUpdateStatusRunning, now, id, MemoryUpdateStatusQueued)
 	if err != nil {
 		return fmt.Errorf("db: claim memory update: %w", err)
@@ -150,7 +156,8 @@ func (s *Store) RequeueMemoryUpdate(ctx context.Context, id string) error {
 		return fmt.Errorf("db: requeue memory update: empty id")
 	}
 	result, err := s.db.ExecContext(ctx, `UPDATE memory_updates
-SET status = ?, time_started = NULL, time_finished = NULL, sha256 = NULL, error = NULL
+SET status = ?, time_started = NULL, time_finished = NULL, sha256 = NULL, error = NULL,
+stage_durations_json = '{}'
 WHERE id = ? AND status IN (?, ?, ?)`, MemoryUpdateStatusQueued, id,
 		MemoryUpdateStatusQueued, MemoryUpdateStatusRunning, MemoryUpdateStatusFailed)
 	if err != nil {
@@ -180,6 +187,29 @@ WHERE id = ? AND status = ?`, MemoryUpdateStatusCompleted, digest,
 	}
 	if n, _ := result.RowsAffected(); n != 1 {
 		return fmt.Errorf("db: complete memory update: record %q is not running", id)
+	}
+	return nil
+}
+
+// RecordMemoryStageDurations stores the measured memory update stages in the
+// same durable ledger as the status and error.
+func (s *Store) RecordMemoryStageDurations(ctx context.Context, id string, durations map[string]int64) error {
+	if strings.TrimSpace(id) == "" {
+		return fmt.Errorf("db: record memory stage durations: empty id")
+	}
+	encoded, err := marshalMemoryStageDurations(durations)
+	if err != nil {
+		return err
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE memory_updates
+SET stage_durations_json = ?
+WHERE id = ? AND status IN (?, ?, ?)`, encoded, id,
+		MemoryUpdateStatusRunning, MemoryUpdateStatusCompleted, MemoryUpdateStatusFailed)
+	if err != nil {
+		return fmt.Errorf("db: record memory stage durations: %w", err)
+	}
+	if n, _ := result.RowsAffected(); n != 1 {
+		return fmt.Errorf("db: record memory stage durations: record %q is not open or complete", id)
 	}
 	return nil
 }
@@ -266,10 +296,12 @@ type memoryUpdateScannable interface {
 func scanMemoryUpdate(row memoryUpdateScannable) (MemoryUpdate, error) {
 	var update MemoryUpdate
 	var sha, errText sql.NullString
+	var durations string
 	var started, finished sql.NullInt64
 	if err := row.Scan(&update.ID, &update.Workdir, &update.SourceSessionID,
 		&update.SourceEndSeq, &update.SourceEndMessageID, &update.Model, &update.Status,
-		&update.Attempts, &sha, &errText, &update.TimeCreated, &started, &finished); err != nil {
+		&update.Attempts, &sha, &errText, &update.TimeCreated, &started, &finished,
+		&durations); err != nil {
 		return MemoryUpdate{}, err
 	}
 	update.SHA256 = sha.String
@@ -280,7 +312,47 @@ func scanMemoryUpdate(row memoryUpdateScannable) (MemoryUpdate, error) {
 	if finished.Valid {
 		update.TimeFinished = &finished.Int64
 	}
+	stageDurations, err := unmarshalMemoryStageDurations(durations)
+	if err != nil {
+		return MemoryUpdate{}, err
+	}
+	update.StageDurations = stageDurations
 	return update, nil
+}
+
+func marshalMemoryStageDurations(durations map[string]int64) (string, error) {
+	if len(durations) == 0 {
+		return "{}", nil
+	}
+	for name, duration := range durations {
+		if strings.TrimSpace(name) == "" || duration < 0 {
+			return "", fmt.Errorf("db: invalid memory stage duration %q", name)
+		}
+	}
+	encoded, err := json.Marshal(durations)
+	if err != nil {
+		return "", fmt.Errorf("db: marshal memory stage durations: %w", err)
+	}
+	return string(encoded), nil
+}
+
+func unmarshalMemoryStageDurations(encoded string) (map[string]int64, error) {
+	if strings.TrimSpace(encoded) == "" {
+		return map[string]int64{}, nil
+	}
+	var durations map[string]int64
+	if err := json.Unmarshal([]byte(encoded), &durations); err != nil {
+		return nil, fmt.Errorf("db: unmarshal memory stage durations: %w", err)
+	}
+	if durations == nil {
+		return map[string]int64{}, nil
+	}
+	for name, duration := range durations {
+		if strings.TrimSpace(name) == "" || duration < 0 {
+			return nil, fmt.Errorf("db: invalid memory stage duration %q", name)
+		}
+	}
+	return durations, nil
 }
 
 func scanMemoryUpdates(rows *sql.Rows) ([]MemoryUpdate, error) {

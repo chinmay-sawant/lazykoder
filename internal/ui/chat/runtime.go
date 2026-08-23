@@ -543,6 +543,7 @@ func (m Model) scheduleMemoryUpdate() tea.Cmd {
 	store := m.store
 	client := m.client
 	info := m.recapModelInfo(model)
+	snapshotStarted := time.Now()
 	snapshot, snapshotErr := recap.BuildSnapshot(context.Background(), store, sessionID, recap.SnapshotOptions{
 		MinimumMessageCount: recap.MemoryMinimumMessageCount,
 	})
@@ -555,6 +556,7 @@ func (m Model) scheduleMemoryUpdate() tea.Cmd {
 			snapshotErr = nil
 		}
 	}
+	snapshotDuration := time.Since(snapshotStarted)
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), recapTimeout)
 		defer cancel()
@@ -599,13 +601,14 @@ func (m Model) scheduleMemoryUpdate() tea.Cmd {
 		}
 		worker := recap.NewMemoryWorker(client, workerModel, workerInfo, "")
 		runErr := recap.RunMemoryUpdate(ctx, recap.MemoryRunInput{
-			Store:           store,
-			Record:          record,
-			Snapshot:        snapshot,
-			Workdir:         workdir,
-			Worker:          worker,
-			SkillReferences: append([]recap.MemorySkillReference{}, m.pendingSkillRefs...),
-			Enabled:         func() bool { return memoryEnabledAtPath(settingsPath) },
+			Store:            store,
+			Record:           record,
+			Snapshot:         snapshot,
+			Workdir:          workdir,
+			Worker:           worker,
+			SkillReferences:  append([]recap.MemorySkillReference{}, m.pendingSkillRefs...),
+			Enabled:          func() bool { return memoryEnabledAtPath(settingsPath) },
+			SnapshotDuration: snapshotDuration,
 		})
 		return memoryDoneMsg{err: runErr}
 	}
@@ -700,22 +703,25 @@ func (m Model) recoverMemoryUpdates() tea.Msg {
 			}
 			update.Status = db.MemoryUpdateStatusQueued
 		}
+		snapshotStarted := time.Now()
 		snapshot, err := recap.BuildSnapshot(ctx, m.store, update.SourceSessionID, recap.SnapshotOptions{
 			AnchorMessageID:     update.SourceEndMessageID,
 			MinimumMessageCount: recap.MemoryMinimumMessageCount,
 		})
+		snapshotDuration := time.Since(snapshotStarted)
 		if err != nil {
 			_ = m.store.FailMemoryUpdate(ctx, update.ID, "source snapshot unavailable: "+err.Error())
 			continue
 		}
 		worker := recap.NewMemoryWorker(m.client, update.Model, m.recapModelInfo(update.Model), "")
 		_ = recap.RunMemoryUpdate(ctx, recap.MemoryRunInput{
-			Store:    m.store,
-			Record:   update,
-			Snapshot: snapshot,
-			Workdir:  workdir,
-			Worker:   worker,
-			Enabled:  func() bool { return memoryEnabledAtPath(m.settingsPath) },
+			Store:            m.store,
+			Record:           update,
+			Snapshot:         snapshot,
+			Workdir:          workdir,
+			Worker:           worker,
+			Enabled:          func() bool { return memoryEnabledAtPath(m.settingsPath) },
+			SnapshotDuration: snapshotDuration,
 		})
 	}
 	return nil

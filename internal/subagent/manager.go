@@ -515,7 +515,8 @@ func (m *Manager) finish(h *handle, res Result) {
 	h.snap.FinishedAt = now
 	h.mu.Unlock()
 	_ = m.persistHandle(h)
-	// Bump parent session so resume lists show activity.
+	// Keep parent activity fresh for age labels and the child drawer. History
+	// ordering uses the conversation timestamp and does not move the parent.
 	m.mu.Lock()
 	store := m.store
 	parentID := h.snapshot().ParentSessionID

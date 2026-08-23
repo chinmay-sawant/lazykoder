@@ -2,6 +2,7 @@ package recap
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -228,6 +229,101 @@ func TestRenderMemoryDocumentPrunesOldEntriesToBound(t *testing.T) {
 	totalEntries := len(parsed.Preferences) + len(parsed.Decisions) + len(parsed.ThingsToAvoid) + len(parsed.Questions) + len(parsed.RecentContext)
 	if totalEntries >= memoryMaxEntriesPerPart*5 {
 		t.Fatalf("entries were not pruned: %d entries", totalEntries)
+	}
+}
+
+func TestBuildMemoryPromptRespectsCombinedPromptLimit(t *testing.T) {
+	document := NewMemoryDocument()
+	for index := 0; index < memoryMaxEntriesPerPart; index++ {
+		document.Preferences = append(document.Preferences, MemoryEntry{
+			ID:               fmt.Sprintf("mem_prompt_%d", index),
+			State:            "active",
+			Text:             fmt.Sprintf("memory detail %d %s", index, strings.Repeat("detail ", 55)),
+			Evidence:         strings.Repeat("memory evidence ", 25),
+			SourceMessageIDs: []string{"msg_1"},
+			FirstSeenUTC:     "2026-08-22T12:00:00Z",
+			LastSeenUTC:      "2026-08-22T12:00:00Z",
+		})
+	}
+	snapshot := memoryTestSnapshot()
+	for index := range snapshot.Messages {
+		snapshot.Messages[index].Text = strings.Repeat("current context ", 250)
+	}
+
+	prompt, err := BuildMemoryPrompt(snapshot, document, strings.Repeat("related evidence ", 900))
+	if err != nil {
+		t.Fatalf("BuildMemoryPrompt: %v", err)
+	}
+	if got := len([]rune(prompt)); got > maxPromptText {
+		t.Fatalf("prompt length = %d, want <= %d", got, maxPromptText)
+	}
+}
+
+func TestBuildMemoryPromptCompactsToCurrentSourceEntries(t *testing.T) {
+	document := NewMemoryDocument()
+	for index := 0; index < memoryMaxEntriesPerPart-1; index++ {
+		document.Preferences = append(document.Preferences, MemoryEntry{
+			ID:               fmt.Sprintf("mem_old_%d", index),
+			State:            "active",
+			Text:             fmt.Sprintf("old memory entry %d %s", index, strings.Repeat("old detail ", 35)),
+			Evidence:         "Historical evidence.",
+			SourceMessageIDs: []string{"msg_old"},
+			FirstSeenUTC:     "2026-08-22T12:00:00Z",
+			LastSeenUTC:      "2026-08-22T12:00:00Z",
+		})
+	}
+	document.Preferences = append(document.Preferences, MemoryEntry{
+		ID:               "mem_current",
+		State:            "active",
+		Text:             "current memory entry",
+		Evidence:         "Current evidence.",
+		SourceMessageIDs: []string{"msg_1"},
+		FirstSeenUTC:     "2026-08-22T12:00:00Z",
+		LastSeenUTC:      "2026-08-22T12:00:00Z",
+	})
+
+	prompt, err := BuildMemoryPrompt(memoryTestSnapshot(), document, "")
+	if err != nil {
+		t.Fatalf("BuildMemoryPrompt: %v", err)
+	}
+	if !strings.Contains(prompt, "current memory entry") {
+		t.Fatalf("current entry missing from prompt: %q", prompt)
+	}
+	if strings.Contains(prompt, "old memory entry") {
+		t.Fatalf("historical entries were not compacted: %q", prompt)
+	}
+}
+
+func TestBuildMemoryPromptLeavesRepairCapacity(t *testing.T) {
+	prompt, err := BuildMemoryPrompt(memoryTestSnapshot(), NewMemoryDocument(), "related evidence")
+	if err != nil {
+		t.Fatalf("BuildMemoryPrompt: %v", err)
+	}
+	if got := len([]rune(prompt)) + len([]rune(memoryRepairInstruction)); got > maxPromptText {
+		t.Fatalf("prompt plus repair instruction = %d, want <= %d", got, maxPromptText)
+	}
+}
+
+func TestBuildMemoryPromptCountsUnicodeByRune(t *testing.T) {
+	document := NewMemoryDocument()
+	for index := 0; index < memoryMaxEntriesPerPart; index++ {
+		document.Preferences = append(document.Preferences, MemoryEntry{
+			ID:               fmt.Sprintf("mem_unicode_%d", index),
+			State:            "active",
+			Text:             fmt.Sprintf("记忆 %d %s", index, strings.Repeat("细节 ", 45)),
+			Evidence:         strings.Repeat("证据 ", 25),
+			SourceMessageIDs: []string{"msg_1"},
+			FirstSeenUTC:     "2026-08-22T12:00:00Z",
+			LastSeenUTC:      "2026-08-22T12:00:00Z",
+		})
+	}
+
+	prompt, err := BuildMemoryPrompt(memoryTestSnapshot(), document, strings.Repeat("相关证据 ", 900))
+	if err != nil {
+		t.Fatalf("BuildMemoryPrompt: %v", err)
+	}
+	if got := len([]rune(prompt)) + len([]rune(memoryRepairInstruction)); got > maxPromptText {
+		t.Fatalf("unicode prompt plus repair instruction = %d, want <= %d", got, maxPromptText)
 	}
 }
 

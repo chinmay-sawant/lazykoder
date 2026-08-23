@@ -89,3 +89,34 @@ func TestMemoryUpdateFailureCanBeRequeued(t *testing.T) {
 		t.Fatalf("retryable = %+v", retryable)
 	}
 }
+
+func TestMemoryUpdateStageDurationsPersist(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	record, _, err := store.ReserveMemoryUpdate(ctx, MemoryUpdate{
+		Workdir:            "/work/project",
+		SourceSessionID:    "ses_timing",
+		SourceEndSeq:       6,
+		SourceEndMessageID: "msg_6",
+		Model:              "deepseek-v4-flash",
+	})
+	if err != nil {
+		t.Fatalf("reserve: %v", err)
+	}
+	if err := store.ClaimMemoryUpdate(ctx, record.ID); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if err := store.RecordMemoryStageDurations(ctx, record.ID, map[string]int64{
+		"aggregate_read": 12,
+		"provider_call":  345,
+	}); err != nil {
+		t.Fatalf("record durations: %v", err)
+	}
+	got, err := store.GetMemoryUpdate(ctx, record.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.StageDurations["aggregate_read"] != 12 || got.StageDurations["provider_call"] != 345 {
+		t.Fatalf("stage durations = %+v", got.StageDurations)
+	}
+}

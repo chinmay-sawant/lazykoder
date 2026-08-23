@@ -21,6 +21,7 @@ type Session struct {
 	Variant         *string
 	TimeCreated     int64
 	TimeUpdated     int64
+	TimeActive      int64
 	Status          string
 	ParentSessionID *string // set for kind=subagent
 	Kind            string  // main | subagent; empty treated as main

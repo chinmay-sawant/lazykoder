@@ -150,9 +150,13 @@ One user turn runs in `internal/agent.Send` with a hard step bound (default
    a supersession, which keeps the old fact marked `superseded` instead of
    deleting it. If only short-lived `recent_context` citations are missing,
    the worker makes one repair call and drops that context if it remains
-   untraceable. Durable sections remain strict. A SQLite `memory_updates` row
-   records the source anchor, model, attempts, digest, and any failure so
-   restarts can retry safely.
+    untraceable. Durable sections remain strict. A SQLite `memory_updates` row
+    records the source anchor, model, attempts, digest, stage durations, and
+    any failure so restarts can retry safely. The worker keeps one final prompt
+    budget, trims related evidence before current memory content, and compacts
+    large memory documents to entries sourced by the current window. It skips
+    a no-op update when the stored aggregate already covers the new user-only
+    context. Aggregate reading and related-evidence search run concurrently.
 11. `/history` reuses the sub-agent drawer shell to show only memory entries
     sourced from the active chat. Entries are ordered by `last_seen_utc`, show
     twenty per page, and open in the same scrollable detail card. A real

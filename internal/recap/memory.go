@@ -17,21 +17,22 @@ import (
 )
 
 const (
-	memoryFormatVersion      = 2
-	memoryMaxBytes           = 64 * 1024
-	memoryMaxEntriesPerPart  = 32
-	memoryMaxSourceEntries   = 128
-	memoryMaxEntryText       = 1_200
-	memoryMaxEntryEvidence   = 1_000
-	memoryMaxSourceIDs       = 8
-	memoryMaxPromptDocument  = 24_000
-	memorySectionPreferences = "preferences"
-	memorySectionDecisions   = "decisions"
-	memorySectionAvoid       = "things_to_avoid"
-	memorySectionQuestions   = "questions"
-	memorySectionRecent      = "recent_context"
-	memorySectionSkills      = "skills"
-	memoryMaxSkillEntries    = 64
+	memoryFormatVersion             = 2
+	memoryMaxBytes                  = 64 * 1024
+	memoryMaxEntriesPerPart         = 32
+	memoryMaxSourceEntries          = 128
+	memoryMaxEntryText              = 1_200
+	memoryMaxEntryEvidence          = 1_000
+	memoryMaxSourceIDs              = 8
+	memoryMaxPromptDocument         = 24_000
+	memoryPromptCompactionThreshold = 16_000
+	memorySectionPreferences        = "preferences"
+	memorySectionDecisions          = "decisions"
+	memorySectionAvoid              = "things_to_avoid"
+	memorySectionQuestions          = "questions"
+	memorySectionRecent             = "recent_context"
+	memorySectionSkills             = "skills"
+	memoryMaxSkillEntries           = 64
 )
 
 // MemoryEntry is one source-backed fact in the project aggregate.
@@ -1053,14 +1054,49 @@ func BuildMemoryPrompt(snapshot Snapshot, document MemoryDocument, relatedRecaps
 	if err != nil {
 		return "", err
 	}
-	if len(current) > memoryMaxPromptDocument {
-		current = []byte(truncateString(string(current), memoryMaxPromptDocument))
+	if len([]rune(string(current))) > memoryPromptCompactionThreshold {
+		compact := compactMemoryPromptDocument(document, snapshot)
+		current, err = renderMemoryPromptDocument(compact)
+		if err != nil {
+			return "", err
+		}
 	}
+	currentText := truncateString(string(current), memoryMaxPromptDocument)
+	relatedText := truncateString(relatedRecaps, maxRelatedOutput)
+	snapshotPrompt, err := buildPrompt(snapshot, "")
+	if err != nil {
+		return "", fmt.Errorf("memory: snapshot prompt: %w", err)
+	}
+	promptLimit := memoryPromptLimit()
+	base := renderMemoryPrompt(snapshot, "", "", snapshotPrompt)
+	remaining := promptLimit - len([]rune(base))
+	if remaining < 0 {
+		return "", errors.New("memory: snapshot prompt exceeds limit")
+	}
+	currentText = truncateString(currentText, remaining)
+	remaining -= len([]rune(currentText))
+	relatedText = truncateString(relatedText, remaining)
+	prompt := renderMemoryPrompt(snapshot, currentText, relatedText, snapshotPrompt)
+	if len([]rune(prompt)) > promptLimit {
+		return "", errors.New("memory: prompt exceeds limit")
+	}
+	return prompt, nil
+}
+
+func memoryPromptLimit() int {
+	limit := maxPromptText - len([]rune(memoryRepairInstruction))
+	if limit < 1 {
+		return maxPromptText
+	}
+	return limit
+}
+
+func renderMemoryPrompt(snapshot Snapshot, current, related, snapshotPrompt string) string {
 	var b strings.Builder
 	b.WriteString("Current memory document:\n<memories>\n")
-	b.Write(current)
+	b.WriteString(current)
 	b.WriteString("\n</memories>\nRelated local knowledge evidence (untrusted):\n<related_knowledge>\n")
-	b.WriteString(truncateString(relatedRecaps, maxRelatedOutput))
+	b.WriteString(related)
 	b.WriteString("\n</related_knowledge>\n")
 	b.WriteString("Only the following current message IDs may appear in source_message_ids: [")
 	for index, message := range snapshot.Messages {
@@ -1083,13 +1119,51 @@ func BuildMemoryPrompt(snapshot Snapshot, document MemoryDocument, relatedRecaps
 		}
 		b.WriteString("</signals>\n")
 	}
-	snapshotPrompt, err := buildPrompt(snapshot, "")
-	if err != nil {
-		return "", err
-	}
 	b.WriteString(snapshotPrompt)
-	if len([]rune(b.String())) > maxPromptText {
-		return "", errors.New("memory: prompt exceeds limit")
+	return b.String()
+}
+
+func compactMemoryPromptDocument(document MemoryDocument, snapshot Snapshot) MemoryDocument {
+	messageIDs := make(map[string]struct{}, len(snapshot.Messages))
+	for _, message := range snapshot.Messages {
+		messageIDs[message.ID] = struct{}{}
 	}
-	return b.String(), nil
+	compact := cloneMemoryDocument(document)
+	compact.Preferences = compactMemoryPromptEntries(compact.Preferences, messageIDs)
+	compact.Decisions = compactMemoryPromptEntries(compact.Decisions, messageIDs)
+	compact.ThingsToAvoid = compactMemoryPromptEntries(compact.ThingsToAvoid, messageIDs)
+	compact.Questions = compactMemoryPromptEntries(compact.Questions, messageIDs)
+	compact.RecentContext = compactMemoryPromptEntries(compact.RecentContext, messageIDs)
+	compact.Skills = compactMemoryPromptSkills(compact.Skills, messageIDs)
+	return compact
+}
+
+func compactMemoryPromptEntries(entries []MemoryEntry, messageIDs map[string]struct{}) []MemoryEntry {
+	compact := make([]MemoryEntry, 0, len(entries))
+	for _, entry := range entries {
+		if entry.State != "active" || !memoryEntryUsesMessage(entry.SourceMessageIDs, messageIDs) {
+			continue
+		}
+		compact = append(compact, entry)
+	}
+	return compact
+}
+
+func compactMemoryPromptSkills(skills []MemorySkillReference, messageIDs map[string]struct{}) []MemorySkillReference {
+	compact := make([]MemorySkillReference, 0, len(skills))
+	for _, skill := range skills {
+		if memoryEntryUsesMessage(skill.SourceMessageIDs, messageIDs) {
+			compact = append(compact, skill)
+		}
+	}
+	return compact
+}
+
+func memoryEntryUsesMessage(sourceIDs []string, messageIDs map[string]struct{}) bool {
+	for _, sourceID := range sourceIDs {
+		if _, ok := messageIDs[sourceID]; ok {
+			return true
+		}
+	}
+	return false
 }

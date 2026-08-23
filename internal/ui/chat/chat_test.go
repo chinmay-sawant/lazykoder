@@ -1050,8 +1050,8 @@ func TestConfirmEscDoesNotCancelTurn(t *testing.T) {
 func TestSessionPickerSelectsOlderSession(t *testing.T) {
 	dir := t.TempDir()
 	st := newTestStore(t)
-	// InsertMessage bumps sessions.time_updated; build older first, then
-	// newer, so the resume list (time_updated DESC) keeps newer on top.
+	// InsertMessage bumps the conversation timestamp; build older first, then
+	// newer, so the resume list keeps newer on top.
 	older, err := st.CreateSession(context.Background(), db.Session{
 		Title: "older-session", Directory: dir, TimeCreated: 1000, TimeUpdated: 1000,
 	})
