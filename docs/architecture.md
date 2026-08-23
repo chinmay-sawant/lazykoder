@@ -304,7 +304,11 @@ hit/miss reset to 0 at compact, then grow again. Cost uses
 **Children.** The chat model boundary passes the selected child model's ID,
 endpoint, supported variants, and known context window to `subagent.Job`.
 When the cache has a window, child auto-compaction can use it. Unknown windows
-still skip percent preflight. Overflow retry remains available.
+still skip percent preflight. Overflow retry remains available. For
+orchestrated tasks, the settings card owns model selection: the explore model
+overrides the common child model for explore jobs, and either configured model
+overrides the planner's `model_class`. The planner class is only a fallback
+when the relevant setting is empty.
 
 ## Sub-agents
 

@@ -137,9 +137,12 @@ The parent and sub-agent paths are independent:
 
 This lets a parent use a Codex model while children use an OpenCode or Grok
 model. The hidden orchestrator plan call stays on the parent client. Child
-task calls use the child client and child model settings. When providers expose
-the same model ID, child model profiles are filtered by the configured child
-provider before a job starts.
+task calls use the child client and child model settings. The common child
+model override wins over a planner-provided `model_class`; the explore model
+also wins for explore-role tasks. A planner class is used only when the
+settings leave the relevant model unset. When providers expose the same model
+ID, child model profiles are filtered by the configured child provider before a
+job starts.
 
 `/provider` changes the parent provider. The child provider can be set in
 `.lazykoder/settings.json`:

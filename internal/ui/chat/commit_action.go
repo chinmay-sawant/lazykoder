@@ -61,7 +61,7 @@ func (m Model) commitPushRow() string {
 		return ""
 	}
 	label := "[ commit and push ]"
-	return lipgloss.NewStyle().Foreground(theme.ColorText()).Bold(true).Background(theme.ColorBorder()).Padding(0, 1).Width(max(minPaneWidth, m.width)).Render(label)
+	return lipgloss.NewStyle().Foreground(theme.ColorText()).Bold(true).Background(theme.ColorBorder()).Padding(0, 1).Render(label)
 }
 
 func (m Model) commitPushRowScreenY() (int, bool) {

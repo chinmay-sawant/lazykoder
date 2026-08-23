@@ -603,6 +603,129 @@ func TestSettingsHitAllRows(t *testing.T) {
 	}
 }
 
+func TestSettingsKeyboardNavigationFollowsPaintedOrder(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		height int
+		want   []int
+	}{
+		{
+			name:   "full card",
+			height: 48,
+			want: []int{
+				settingsRowTheme,
+				settingsRowModel,
+				settingsRowVariant,
+				settingsRowChildModel,
+				settingsRowExploreModel,
+				settingsRowRecapEnabled,
+				settingsRowRecapModel,
+				settingsRowRecapAfterChats,
+				settingsRowSkillsEnabled,
+				settingsRowSkillsAutoDetect,
+				settingsRowSkillsLocal,
+				settingsRowSkillsGlobal,
+				settingsRowSkillsRemember,
+				settingsRowSkillsMaxMatches,
+				settingsRowLimit,
+				settingsRowSteps,
+				settingsRowCompactAuto,
+				settingsRowCompactPercent,
+				settingsRowAgentsEnabled,
+				settingsRowAgentsRole,
+				settingsRowAgentsConcurrent,
+				settingsRowAgentsQueued,
+				settingsRowAgentsChildSteps,
+				settingsRowAgentsTimeout,
+				settingsRowAgentsWriters,
+				settingsRowBashConfirm,
+				settingsRowAllowlistEnabled,
+				settingsRowAllowlist,
+				settingsRowRetryMaxRetries,
+				settingsRowRetryDelay,
+			},
+		},
+		{
+			name:   "compact card",
+			height: 24,
+			want: []int{
+				settingsRowTheme,
+				settingsRowModel,
+				settingsRowVariant,
+				settingsRowChildModel,
+				settingsRowExploreModel,
+				settingsRowRecapEnabled,
+				settingsRowRecapModel,
+				settingsRowRecapAfterChats,
+				settingsRowSkillsEnabled,
+				settingsRowLimit,
+				settingsRowSteps,
+				settingsRowCompactAuto,
+				settingsRowCompactPercent,
+				settingsRowAgentsEnabled,
+				settingsRowAgentsRole,
+				settingsRowAgentsConcurrent,
+				settingsRowAgentsQueued,
+				settingsRowAgentsChildSteps,
+				settingsRowAgentsTimeout,
+				settingsRowAgentsWriters,
+				settingsRowBashConfirm,
+				settingsRowAllowlistEnabled,
+				settingsRowAllowlist,
+				settingsRowRetryMaxRetries,
+				settingsRowRetryDelay,
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+			mm, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: tc.height})
+			m = mm.(Model).openSettings()
+			for index, want := range tc.want {
+				if m.settingsCursor != want {
+					t.Fatalf("cursor at step %d = %d, want painted row %d", index, m.settingsCursor, want)
+				}
+				if index == len(tc.want)-1 {
+					break
+				}
+				m = upd(m, tea.KeyPressMsg{Code: tea.KeyDown})
+			}
+		})
+	}
+}
+
+func TestSettingsChildModelMouseChevronsWorkThroughUpdate(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 48})
+	m = mm.(Model)
+	m.models = []string{"child-one", "child-two", "child-three"}
+	m = m.openSettings()
+	m.settingsCursor = settingsRowChildModel
+	line := settingsPaintedRow(m, "child model override")
+	y := settingsPaintedRowY(m, "child model override")
+	dec0, dec1, ok := displaySpan(line, "◂")
+	if !ok {
+		t.Fatalf("child model row has no decrease control: %q", line)
+	}
+	mm, _ = m.Update(tea.MouseClickMsg(tea.Mouse{X: (dec0 + dec1) / 2, Y: y, Button: tea.MouseLeft}))
+	m = mm.(Model)
+	if m.projectSettings.Agents.ModelOverride != "child-three" {
+		t.Fatalf("left child-model click = %q, want child-three", m.projectSettings.Agents.ModelOverride)
+	}
+
+	line = settingsPaintedRow(m, "child model override")
+	y = settingsPaintedRowY(m, "child model override")
+	inc0, inc1, ok := displaySpanLast(line, "▸")
+	if !ok {
+		t.Fatalf("child model row has no increase control: %q", line)
+	}
+	mm, _ = m.Update(tea.MouseClickMsg(tea.Mouse{X: (inc0 + inc1) / 2, Y: y, Button: tea.MouseLeft}))
+	m = mm.(Model)
+	if m.projectSettings.Agents.ModelOverride != "" {
+		t.Fatalf("right child-model click = %q, want inherit", m.projectSettings.Agents.ModelOverride)
+	}
+}
+
 func TestSettingsCardFitsCompactTerminal(t *testing.T) {
 	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
 	mm, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})

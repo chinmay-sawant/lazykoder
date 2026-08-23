@@ -94,6 +94,41 @@ const (
 	settingsLineRow
 )
 
+// settingsNavigationOrder mirrors the order in which controls are painted.
+// Section headers are intentionally absent because they are not selectable.
+var settingsNavigationOrder = [...]int{
+	settingsRowTheme,
+	settingsRowModel,
+	settingsRowVariant,
+	settingsRowChildModel,
+	settingsRowExploreModel,
+	settingsRowRecapEnabled,
+	settingsRowRecapModel,
+	settingsRowRecapAfterChats,
+	settingsRowSkillsEnabled,
+	settingsRowSkillsAutoDetect,
+	settingsRowSkillsLocal,
+	settingsRowSkillsGlobal,
+	settingsRowSkillsRemember,
+	settingsRowSkillsMaxMatches,
+	settingsRowLimit,
+	settingsRowSteps,
+	settingsRowCompactAuto,
+	settingsRowCompactPercent,
+	settingsRowAgentsEnabled,
+	settingsRowAgentsRole,
+	settingsRowAgentsConcurrent,
+	settingsRowAgentsQueued,
+	settingsRowAgentsChildSteps,
+	settingsRowAgentsTimeout,
+	settingsRowAgentsWriters,
+	settingsRowBashConfirm,
+	settingsRowAllowlistEnabled,
+	settingsRowAllowlist,
+	settingsRowRetryMaxRetries,
+	settingsRowRetryDelay,
+}
+
 // openSettings opens the full-screen settings card (same layout family as
 // /resume and /help: centered bordered card over the chat). It marks usage as
 // loading when the plan usage has not been loaded yet; the caller kicks off
@@ -128,8 +163,8 @@ func (m Model) settingsScreen() string {
 
 // settingsCardView is the bordered settings card (resume / help style).
 func (m Model) settingsCardView() string {
+	innerW := m.settingsInnerWidth()
 	cardW := m.overlayWidth()
-	innerW := max(minPaneWidth, cardW-cardBorder-2*settingsCardHorzPad)
 
 	title := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorAccent()).Render("SETTINGS")
 	closeBtn := m.settingsCloseLabel()
@@ -191,6 +226,66 @@ func (m Model) settingsCardView() string {
 		Padding(settingsCardVertPad, settingsCardHorzPad).
 		Width(cardW).
 		Render(content)
+}
+
+func (m Model) settingsInnerWidth() int {
+	cardW := m.overlayWidth()
+	return max(minPaneWidth, cardW-cardBorder-2*settingsCardHorzPad)
+}
+
+// settingsNavigationRows returns only the controls currently painted. The
+// compact card intentionally hides detailed skill rows, so they must not be
+// reachable by keyboard until the card has room to show them.
+func (m Model) settingsNavigationRows() []int {
+	visible := make(map[int]bool)
+	for _, line := range m.settingsPaintLines(m.settingsInnerWidth()) {
+		if line.kind == settingsLineRow && line.row >= 0 {
+			visible[line.row] = true
+		}
+	}
+	rows := make([]int, 0, len(settingsNavigationOrder))
+	for _, row := range settingsNavigationOrder {
+		if visible[row] {
+			rows = append(rows, row)
+		}
+	}
+	return rows
+}
+
+func (m Model) moveSettingsCursor(delta int) Model {
+	if delta == 0 {
+		return m
+	}
+	rows := m.settingsNavigationRows()
+	if len(rows) == 0 {
+		return m
+	}
+	index := indexOfInt(rows, m.settingsCursor)
+	if index < 0 {
+		index = 0
+		if delta < 0 {
+			index = len(rows) - 1
+		}
+	} else {
+		index += delta
+		if index < 0 {
+			index = 0
+		}
+		if index >= len(rows) {
+			index = len(rows) - 1
+		}
+	}
+	m.settingsCursor = rows[index]
+	return m
+}
+
+func indexOfInt(list []int, want int) int {
+	for index, value := range list {
+		if value == want {
+			return index
+		}
+	}
+	return -1
 }
 
 func (m Model) settingsCardMinInnerHeight() int {
@@ -557,15 +652,9 @@ func (m Model) updateSettingsKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 	case tea.KeyEscape, 'q', 'Q', 'x', 'X':
 		return m.closeSettings(), nil
 	case 'j', tea.KeyDown:
-		if m.settingsCursor < settingsRowCount-1 {
-			m.settingsCursor++
-		}
-		return m, nil
+		return m.moveSettingsCursor(1), nil
 	case 'k', tea.KeyUp:
-		if m.settingsCursor > 0 {
-			m.settingsCursor--
-		}
-		return m, nil
+		return m.moveSettingsCursor(-1), nil
 	case tea.KeyLeft, 'h', 'H':
 		return m.adjustSettings(-1), nil
 	case tea.KeyRight, 'l', 'L':

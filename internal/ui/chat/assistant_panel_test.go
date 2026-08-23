@@ -46,6 +46,70 @@ func TestAssistantMetadataBandFillsTheTimestampGap(t *testing.T) {
 	}
 }
 
+func TestUserMetadataAndPromptUseTheUserPanelSurface(t *testing.T) {
+	t.Cleanup(func() { theme.SetMode(string(theme.ModeDark)) })
+	theme.SetMode(string(theme.ModeDark))
+	configureThemeStyles()
+
+	m := New(Options{Store: newTestStore(t), Workdir: t.TempDir()})
+	m.width = 80
+	want := ansiBackground(theme.ColorUserPanel())
+	line := m.metaBand(roleYou, time.Date(2026, 8, 23, 10, 0, 0, 0, time.UTC).UnixMilli())
+	for column, background := range ansiCellBackgrounds(line) {
+		if background != want {
+			t.Fatalf("user metadata background ended at column %d: got %q want %q in %q", column, background, want, line)
+		}
+	}
+
+	rendered := m.renderItem(transcriptItem{
+		kind: itemUser,
+		text: "run the search",
+		when: time.Date(2026, 8, 23, 10, 0, 0, 0, time.UTC).UnixMilli(),
+	}, false, false)
+	for _, row := range strings.Split(rendered, "\n") {
+		if !strings.Contains(row, "run the search") {
+			continue
+		}
+		backgrounds := ansiCellBackgrounds(row)
+		started := false
+		for column, background := range backgrounds {
+			if background == want {
+				started = true
+			}
+			if started && background != want {
+				t.Fatalf("user prompt background ended at column %d: %q", column, row)
+			}
+		}
+		if !started {
+			t.Fatalf("user prompt row did not use the user panel background: %q", row)
+		}
+		return
+	}
+	t.Fatalf("user prompt row missing from rendered item: %q", rendered)
+}
+
+func TestOrchestrationPlanUsesASeparateSurface(t *testing.T) {
+	t.Cleanup(func() { theme.SetMode(string(theme.ModeDark)) })
+	for _, mode := range []theme.Mode{theme.ModeDark, theme.ModeLight} {
+		t.Run(string(mode), func(t *testing.T) {
+			theme.SetMode(string(mode))
+			configureThemeStyles()
+
+			m := New(Options{Store: newTestStore(t), Workdir: t.TempDir()})
+			m.width = 80
+			plan := transcriptItem{
+				kind: itemNote,
+				text: "orchestration plan\n{\"goal\":\"audit\"}",
+				part: db.Part{Type: "plan"},
+			}
+			rendered := m.renderItem(plan, false, false)
+			if !strings.Contains(rendered, ansiBackground(theme.ColorPlanPanel())) {
+				t.Fatalf("orchestration plan is missing its dedicated background: %q", rendered)
+			}
+		})
+	}
+}
+
 func TestRunningToolCardKeepsAnOpaqueCanvasBackground(t *testing.T) {
 	t.Cleanup(func() { theme.SetMode(string(theme.ModeDark)) })
 	theme.SetMode(string(theme.ModeDark))

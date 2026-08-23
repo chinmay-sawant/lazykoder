@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/lipgloss/v2"
+
 	"github.com/chinmay-sawant/lazykoder/internal/db"
 )
 
@@ -19,6 +21,11 @@ func TestCommitPushButtonUsesInjectedWorktreeStatus(t *testing.T) {
 	}
 	if !strings.Contains(stripANSI(m.commitPushRow()), "commit and push") {
 		t.Fatal("commit action row missing label")
+	}
+	rowWidth := lipgloss.Width(m.commitPushRow())
+	wantWidth := lipgloss.Width("[ commit and push ]") + 2
+	if rowWidth != wantWidth {
+		t.Fatalf("commit action width = %d, want compact content width %d", rowWidth, wantWidth)
 	}
 
 	m.worktreeDirty = func(context.Context, string) (bool, error) { return true, nil }

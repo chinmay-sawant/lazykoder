@@ -337,13 +337,18 @@ func rowWithStatus(row db.SubagentJob, status, summary, errText string) db.Subag
 
 func (m *Manager) buildJob(id, parentSessionID, parentPartID, name, role string, spec Spec, timeout time.Duration, rt Runtime, childSessionID string, resume bool) Job {
 	cfg := m.cfg
-	model := firstNonEmpty(spec.Model, cfg.Model, rt.Model, opencode.DefaultModelID)
-	if spec.Model == "" && spec.ModelClass != "" {
-		model = firstNonEmpty(resolveClass(spec.ModelClass, role, cfg, rt), model)
+	model := strings.TrimSpace(spec.Model)
+	if model == "" {
+		switch {
+		case role == RoleExplore && cfg.ExploreModel != "":
+			model = cfg.ExploreModel
+		case cfg.Model != "":
+			model = cfg.Model
+		case spec.ModelClass != "":
+			model = resolveClass(spec.ModelClass, role, cfg, rt)
+		}
 	}
-	if role == RoleExplore && cfg.ExploreModel != "" && spec.ModelClass == "" {
-		model = firstNonEmpty(spec.Model, cfg.ExploreModel, model)
-	}
+	model = firstNonEmpty(model, rt.Model, opencode.DefaultModelID)
 	profile := rt.profile(model)
 	maxSteps := spec.MaxSteps
 	if maxSteps < 1 {

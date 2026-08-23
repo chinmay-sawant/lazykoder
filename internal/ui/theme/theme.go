@@ -30,8 +30,10 @@ type Palette struct {
 	Composer        string
 	UserPanel       string
 	AssistantPanel  string
+	PlanPanel       string
 	UserBorder      string
 	AssistantBorder string
+	PlanBorder      string
 	Text            string
 	Mute            string
 	Accent          string
@@ -53,8 +55,10 @@ const (
 	Composer        = "#101010"
 	UserPanel       = "#121412"
 	AssistantPanel  = "#102832"
+	PlanPanel       = "#2b2416"
 	UserBorder      = "#758576"
 	AssistantBorder = "#7aaec2"
+	PlanBorder      = "#c79b4b"
 	Text            = "#e9e7e2"
 	Mute            = "#a6a29a"
 	Accent          = "#a3b18a"
@@ -74,8 +78,10 @@ var darkPalette = Palette{
 	Composer:        Composer,
 	UserPanel:       UserPanel,
 	AssistantPanel:  AssistantPanel,
+	PlanPanel:       PlanPanel,
 	UserBorder:      UserBorder,
 	AssistantBorder: AssistantBorder,
+	PlanBorder:      PlanBorder,
 	Text:            Text,
 	Mute:            Mute,
 	Accent:          Accent,
@@ -95,8 +101,10 @@ var lightPalette = Palette{
 	Composer:        "#ffffff",
 	UserPanel:       "#f5e8ff",
 	AssistantPanel:  "#e4f7fb",
+	PlanPanel:       "#fff4d6",
 	UserBorder:      "#a855f7",
 	AssistantBorder: "#0891b2",
+	PlanBorder:      "#a66a00",
 	Text:            "#152033",
 	Mute:            "#52637a",
 	Accent:          "#7c3aed",
@@ -154,8 +162,10 @@ func ColorDialog() color.Color          { return lipgloss.Color(Current().Dialog
 func ColorComposer() color.Color        { return lipgloss.Color(Current().Composer) }
 func ColorUserPanel() color.Color       { return lipgloss.Color(Current().UserPanel) }
 func ColorAssistantPanel() color.Color  { return lipgloss.Color(Current().AssistantPanel) }
+func ColorPlanPanel() color.Color       { return lipgloss.Color(Current().PlanPanel) }
 func ColorUserBorder() color.Color      { return lipgloss.Color(Current().UserBorder) }
 func ColorAssistantBorder() color.Color { return lipgloss.Color(Current().AssistantBorder) }
+func ColorPlanBorder() color.Color      { return lipgloss.Color(Current().PlanBorder) }
 func ColorText() color.Color            { return lipgloss.Color(Current().Text) }
 func ColorMute() color.Color            { return lipgloss.Color(Current().Mute) }
 func ColorAccent() color.Color          { return lipgloss.Color(Current().Accent) }

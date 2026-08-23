@@ -595,35 +595,25 @@ func itemTime(messageMS int64, partMS int64) int64 {
 	return time.Now().UnixMilli()
 }
 
-func (m Model) roleLine(label string, when int64) string {
-	style := roleStyle
-	switch label {
-	case roleYou:
-		style = userRoleStyle
-	case roleAssistant:
-		style = assistantRoleStyle
-	}
-	return m.alignMeta(style.Render(label), formatClock(when))
-}
-
-// metaBand renders the role/timestamp line for assistant turns as a
-// full-pane-wide strip painted with the assistant panel color, so the blue
-// surface runs edge to edge instead of stopping at the text column.
+// metaBand renders the role/timestamp line as a full-pane-wide strip painted
+// with the speaker's panel color, so the surface runs edge to edge.
 func (m Model) metaBand(label string, when int64) string {
 	style := roleStyle
+	background := theme.ColorAssistantPanel()
 	switch label {
 	case roleYou:
 		style = userRoleStyle
+		background = theme.ColorUserPanel()
 	case roleAssistant:
 		style = assistantRoleStyle
 	}
-	left := style.Background(theme.ColorAssistantPanel()).Render(label)
-	stamp := hintStyle.Background(theme.ColorAssistantPanel()).Render(formatClock(when))
+	left := style.Background(background).Render(label)
+	stamp := hintStyle.Background(background).Render(formatClock(when))
 	width := m.metaWidth()
 	rw := lipgloss.Width(stamp)
 	lw := lipgloss.Width(left)
 	gap := width - lw - rw
-	gapStyle := lipgloss.NewStyle().Background(theme.ColorAssistantPanel())
+	gapStyle := lipgloss.NewStyle().Background(background)
 	if gap < 1 {
 		return left + gapStyle.Render(" ") + stamp
 	}
@@ -902,12 +892,11 @@ func (m Model) renderItem(it transcriptItem, selected bool, streaming bool) stri
 func (m Model) renderItemWithToolMode(it transcriptItem, selected bool, streaming, fullToolOutput bool) string {
 	switch it.kind {
 	case itemUser:
-		// The user frame already provides a clear boundary. Add a subtle wash
-		// without wrapping it in a second border, which keeps selection and
-		// copy coordinates stable.
-		body := lipgloss.NewStyle().Background(theme.ColorUserPanel()).Render(
-			userStyle.Render(frameUserPrompt(it.text, m.contentWidth(it.when))))
-		return m.roleLine(roleYou, it.when) + "\n" + body
+		panelWidth := max(1, m.metaWidth())
+		body := userStyle.Render(frameUserPrompt(it.text, panelWidth-transcriptLinearPad))
+		body = keepBackground(body, theme.ColorUserPanel())
+		body = lipgloss.NewStyle().Background(theme.ColorUserPanel()).Width(panelWidth).Render(body)
+		return m.metaBand(roleYou, it.when) + "\n" + body
 	case itemAssistant:
 		// The panel and its role band span the full pane width. The clock
 		// lives on the band above the panel, so message text never shares a
@@ -934,6 +923,12 @@ func (m Model) renderItemWithToolMode(it transcriptItem, selected bool, streamin
 	case itemTool:
 		return m.renderToolMode(it.tool, it.part, it.collapsed, it.when, fullToolOutput)
 	case itemNote:
+		if it.part.Type == "plan" {
+			panelWidth := max(1, m.metaWidth())
+			innerWidth := max(1, panelWidth-cardHorzPad)
+			rendered := markdown.Render(it.text, innerWidth)
+			return transcriptPanel(rendered, panelWidth, theme.ColorPlanPanel(), theme.ColorPlanBorder())
+		}
 		return hintStyle.Render(it.text)
 	}
 	if selected {

@@ -316,8 +316,8 @@ and keyboard hint rows keep the card's opaque neutral-charcoal background.
 | theme | `dark` or `light` application palette. Switching it redraws the current chat and keeps the card open. Dark is the default. |
 | new-session model | model for new sessions (default `deepseek-v4-flash`) |
 | new-session variant | default reasoning effort (`default` / low / medium / high / max) |
-| child model override | model every child inherits (empty = inherit parent) |
-| explore model | model for explore-role children (empty = inherit) |
+| child model override | model every child inherits; overrides planner model classes (empty = inherit parent) |
+| explore model | model for explore-role children; overrides the common child model (empty = inherit) |
 | step limit | on/off for the per-turn tool-step budget |
 | parent max steps | tool-calling rounds per user turn when the limit is on (1-1000, default 16) |
 | auto-compact | on/off for same-model percent preflight (default on) |
@@ -346,7 +346,9 @@ shorter terminal, use `/usage` for the same information. Opening `/settings`
 loads usage when it has not already been fetched; `/usage` can refresh it.
 
 At 24 rows, the settings card keeps its header, footer, and focused row on
-screen. Use `j` and `k` to move through the remaining rows.
+screen. Use `j` and `k` or the arrow keys to move through controls in their
+painted section order. Hidden detailed skill rows are skipped until the card
+has enough height to display them.
 
 When sub-agents are running, the footer may show `subs:N/M` (active / max
 concurrent). Cancelling the parent turn also cancels child jobs.
@@ -404,10 +406,11 @@ session. Selecting a model from another provider group also saves that parent
 provider and model as the project default. The settings card can change the
 defaults directly.
 
-When a successful parent turn leaves a dirty worktree, `commit and push`
-appears above the composer for 90 seconds. Click it or press `ctrl+g` to start
-the explicit action. The normal agent and bash confirmation path handles the
-status, diff, commit, and push work, so failures remain visible.
+When a successful parent turn leaves a dirty worktree, a compact `commit and
+push` control appears above the composer for 90 seconds. Click it or press
+`ctrl+g` to start the explicit action. The normal agent and bash confirmation
+path handles the status, diff, commit, and push work, so failures remain
+visible.
 
 ## Continue
 
