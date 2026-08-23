@@ -920,9 +920,9 @@ func (m Model) renderToolMode(tool db.ToolCall, part db.Part, collapsed bool, wh
 		return m.renderEditTool(header, tool, collapsed, bodyWidth)
 	}
 
-	card := toolCardStyle.Width(bodyWidth).Background(theme.ColorSurface())
+	card := toolCardStyle.Width(bodyWidth).Background(theme.ColorBg())
 	if collapsed {
-		return card.Render(header)
+		return card.Render(keepBackground(header, theme.ColorBg()))
 	}
 	body := []string{header}
 	switch tool.Tool {
@@ -948,7 +948,7 @@ func (m Model) renderToolMode(tool db.ToolCall, part db.Part, collapsed bool, wh
 			body = append(body, "", outputLabel, outputBox)
 		}
 	}
-	return card.Render(strings.Join(body, "\n"))
+	return card.Render(keepBackground(strings.Join(body, "\n"), theme.ColorBg()))
 }
 
 // toolInFlight reports whether a tool-run status means the call has not

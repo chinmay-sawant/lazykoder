@@ -134,7 +134,7 @@ func configureThemeStyles() {
 	assistantRoleStyle = lipgloss.NewStyle().Foreground(theme.ColorAssistantBorder()).Bold(true)
 	roleStyle = lipgloss.NewStyle().Foreground(theme.ColorText()).Bold(true)
 	reasoningStyle = lipgloss.NewStyle().Foreground(theme.ColorMute())
-	toolCardStyle = lipgloss.NewStyle().Background(theme.ColorSurface()).Foreground(theme.ColorText())
+	toolCardStyle = lipgloss.NewStyle().Background(theme.ColorBg()).Foreground(theme.ColorText())
 	toolOutputStyle = lipgloss.NewStyle().Background(theme.ColorDialog()).Foreground(theme.ColorMute())
 	editCardStyle = lipgloss.NewStyle().Background(theme.ColorEditPanel()).Foreground(theme.ColorText())
 	selectionStyle = lipgloss.NewStyle().Background(theme.ColorAccent()).Foreground(theme.ColorBg())

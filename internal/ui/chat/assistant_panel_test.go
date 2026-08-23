@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/chinmay-sawant/lazykoder/internal/db"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
 
@@ -26,6 +27,39 @@ func TestAssistantPanelsDoNotPaintTheCanvasOverMarkdown(t *testing.T) {
 
 	m.subagentLogItems = []transcriptItem{item}
 	assertAssistantPanelBackground(t, "subagent log", m.renderSubagentLogContent())
+}
+
+func TestRunningToolCardKeepsAnOpaqueCanvasBackground(t *testing.T) {
+	t.Cleanup(func() { theme.SetMode(string(theme.ModeDark)) })
+	theme.SetMode(string(theme.ModeDark))
+	configureThemeStyles()
+
+	m := New(Options{
+		Store:   newTestStore(t),
+		Client:  deadClient(),
+		Workdir: t.TempDir(),
+	})
+	m.width = 80
+	title := "grep -R pattern ."
+	m.items = []transcriptItem{
+		{kind: itemUser, text: "run the search", when: 1},
+		{kind: itemTool, collapsed: true, when: 1, tool: db.ToolCall{
+			Tool: "bash", Status: "running", Title: &title,
+		}},
+	}
+	m.syncTranscript()
+
+	wantBackground := ansiBackground(theme.ColorBg())
+	for _, line := range strings.Split(m.transcriptContent(), "\n") {
+		if !strings.Contains(line, "grep -R pattern") {
+			continue
+		}
+		if !strings.Contains(line, wantBackground) {
+			t.Fatalf("running tool row is missing the canvas background %s: %q", wantBackground, line)
+		}
+		return
+	}
+	t.Fatal("running tool row missing")
 }
 
 func assertAssistantPanelBackground(t *testing.T, location, rendered string) {

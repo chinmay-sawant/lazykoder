@@ -15,7 +15,9 @@ pickers are centered cards.
   reply, a tool card, or the end of the turn arrives. The same clock
   sits on the far right. Tool runs are
   full-width cards that start collapsed (`|  ▸  bash  title` on the left,
-  `15:32:05` on the far right). The baton mark spins in green while the
+  `15:32:05` on the far right). Their command rows use the same solid black
+  canvas as the rest of the transcript, including behind the status mark and
+  clock. The baton mark spins in green while the
   command is pending or running, stays static and green on success, and stays
   static and red on error or deny. `ctrl+e`
   expands all tools when they are all closed, or collapses all tools otherwise.
