@@ -25,7 +25,9 @@ func clockColumn(lines []string) int {
 	return -1
 }
 
-func TestAssistantTextStaysOutOfClockZone(t *testing.T) {
+// The clock now sits on its own meta band above the panel, so assistant
+// text may use the full pane width. Assert it never spills past the pane.
+func TestAssistantTextStaysWithinPane(t *testing.T) {
 	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
 	m.width = 80
 	m.items = []transcriptItem{
@@ -34,8 +36,7 @@ func TestAssistantTextStaysOutOfClockZone(t *testing.T) {
 	}
 	m.syncTranscript()
 	lines := bodyLines(m)
-	clockAt := clockColumn(lines)
-	if clockAt < 0 {
+	if clockColumn(lines) < 0 {
 		t.Fatalf("clock stamp missing from role line: %q", lines)
 	}
 	for _, line := range lines {
@@ -43,8 +44,8 @@ func TestAssistantTextStaysOutOfClockZone(t *testing.T) {
 		if !strings.Contains(trimmed, "wordy") {
 			continue
 		}
-		if w := lipgloss.Width(trimmed); w >= clockAt {
-			t.Errorf("assistant text reaches the clock zone: width=%d clock at %d: %q", w, clockAt, trimmed)
+		if w := lipgloss.Width(trimmed); w > m.width {
+			t.Errorf("assistant text spills past the pane: width=%d pane=%d: %q", w, m.width, trimmed)
 		}
 	}
 }
@@ -132,8 +133,8 @@ func TestLiveStreamedTextStaysOutOfClockZone(t *testing.T) {
 		if !strings.Contains(trimmed, "streaming") {
 			continue
 		}
-		if w := lipgloss.Width(trimmed); w >= clockAt {
-			t.Errorf("streamed text reaches the clock zone: width=%d clock at %d: %q", w, clockAt, trimmed)
+		if w := lipgloss.Width(trimmed); w > m.width {
+			t.Errorf("streamed text spills past the pane: width=%d pane=%d: %q", w, m.width, trimmed)
 		}
 	}
 }

@@ -4,14 +4,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/chinmay-sawant/lazykoder/internal/db"
 	"github.com/chinmay-sawant/lazykoder/internal/recap"
+	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
 
 func TestMemoryHistoryFiltersSortsAndPaginatesCurrentSession(t *testing.T) {
@@ -123,6 +127,15 @@ func TestMemoryHistoryMouseOpensAndClosesDetail(t *testing.T) {
 	if !strings.Contains(stripANSI(m.memoryHistoryDetailScreen()), "keep the history drawer useful") {
 		t.Fatal("memory detail screen is missing the selected memory")
 	}
+	ansiDetail := m.memoryHistoryDetailScreen()
+	for _, background := range []string{
+		ansiBackground(theme.ColorEditPanel()),
+		ansiBackground(theme.ColorAssistantPanel()),
+	} {
+		if !strings.Contains(ansiDetail, background) {
+			t.Fatalf("memory detail missing panel background %q: %q", background, ansiDetail)
+		}
+	}
 
 	next, _ = m.Update(tea.MouseClickMsg(tea.Mouse{X: m.width - 2, Y: 0, Button: tea.MouseLeft}))
 	m = next.(Model)
@@ -133,6 +146,228 @@ func TestMemoryHistoryMouseOpensAndClosesDetail(t *testing.T) {
 	m, _ = m.updateMemoryHistoryPickerKey(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if m.memoryHistoryMode {
 		t.Fatal("escape did not close memory history")
+	}
+}
+
+func TestMemoryHistoryDetailCtrlACopiesEvidence(t *testing.T) {
+	m := newMemoryHistoryDetailFixture(t)
+
+	next, cmd := m.Update(tea.KeyPressMsg{Code: 'a', Mod: tea.ModCtrl})
+	m = next.(Model)
+	if cmd != nil {
+		t.Fatalf("ctrl+a returned command %v", cmd)
+	}
+
+	next, cmd = m.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	m = next.(Model)
+	if m.quitConfirm {
+		t.Fatal("ctrl+c in memory history detail triggered quit confirmation")
+	}
+	if !copyCmdIncludes(cmd, "keep the history drawer useful") {
+		t.Fatal("ctrl+c after ctrl+a did not copy memory history detail")
+	}
+}
+
+func TestMemoryHistoryDetailDragCopiesEvidence(t *testing.T) {
+	m := newMemoryHistoryDetailFixture(t)
+	bodyTop := subagentLogHeaderRows
+	next, _ := m.Update(tea.MouseClickMsg(tea.Mouse{X: 0, Y: bodyTop + 1, Button: tea.MouseLeft}))
+	m = next.(Model)
+	next, _ = m.Update(tea.MouseMotionMsg(tea.Mouse{X: 40, Y: bodyTop + 14, Button: tea.MouseLeft}))
+	m = next.(Model)
+	next, cmd := m.Update(tea.MouseReleaseMsg(tea.Mouse{X: 40, Y: bodyTop + 14, Button: tea.MouseLeft}))
+	m = next.(Model)
+	if !copyCmdIncludes(cmd, "keep the history drawer useful") {
+		t.Fatal("drag selection did not copy memory history detail")
+	}
+}
+
+func TestMemoryHistoryShowsDocumentErrorInHistoryView(t *testing.T) {
+	store := newTestStore(t)
+	workdir := t.TempDir()
+	session, err := store.CreateSession(context.Background(), db.Session{Directory: workdir})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(workdir, "knowledge-base"), 0o755); err != nil {
+		t.Fatalf("create knowledge base: %v", err)
+	}
+	malformed := `---
+format_version: 2
+updated_at_utc: "2026-08-23T10:00:00Z"
+last_session_id: ""
+last_message_id: ""
+last_message_seq: 0
+---
+# Project memory
+## User preferences
+
+- id: "bad-memory"
+  state: "active"
+  text: "invalid source anchor"
+  evidence: "test"
+  source_message_ids: []
+  first_seen_utc: "2026-08-23T10:00:00Z"
+  last_seen_utc: "2026-08-23T10:00:00Z"
+`
+	if err := os.WriteFile(filepath.Join(workdir, "knowledge-base", "memories.md"), []byte(malformed), 0o644); err != nil {
+		t.Fatalf("write malformed memory document: %v", err)
+	}
+
+	m := New(Options{Store: store, Workdir: workdir, Session: &session})
+	m.width, m.height = 100, 30
+	m = m.openMemoryHistory()
+	if !strings.Contains(stripANSI(m.memoryHistoryDrawerView()), "needs one to 8 source message IDs") {
+		t.Fatalf("memory history view does not show the document error: %q", stripANSI(m.memoryHistoryDrawerView()))
+	}
+}
+
+func newMemoryHistoryDetailFixture(t *testing.T) Model {
+	t.Helper()
+	store := newTestStore(t)
+	workdir := t.TempDir()
+	session, err := store.CreateSession(context.Background(), db.Session{Directory: workdir})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	message, err := store.InsertMessage(context.Background(), db.Message{SessionID: session.ID, Role: "user"})
+	if err != nil {
+		t.Fatalf("insert message: %v", err)
+	}
+	document := recap.NewMemoryDocument()
+	document.Preferences = append(document.Preferences, recap.MemoryEntry{
+		ID:               "memory-detail-copy",
+		State:            "active",
+		Text:             "keep the history drawer useful",
+		Evidence:         "the current chat requested a history view",
+		SourceMessageIDs: []string{message.ID},
+		FirstSeenUTC:     "2026-08-23T10:00:00Z",
+		LastSeenUTC:      "2026-08-23T10:05:00Z",
+	})
+	if _, err := recap.WriteMemoryDocument(context.Background(), workdir, document); err != nil {
+		t.Fatalf("write memory document: %v", err)
+	}
+
+	m := New(Options{Store: store, Workdir: workdir, Session: &session})
+	m.width, m.height = 100, 30
+	m = m.openMemoryHistory()
+	next, _ := m.openSelectedMemoryHistoryDetail()
+	return next
+}
+
+func copyCmdIncludes(cmd tea.Cmd, want string) bool {
+	if cmd == nil {
+		return false
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, sub := range batch {
+			if strings.Contains(fmt.Sprint(sub()), want) {
+				return true
+			}
+		}
+		return false
+	}
+	return strings.Contains(fmt.Sprint(msg), want)
+}
+
+func TestMemoryHistoryShowsMemoryUpdateOutcomes(t *testing.T) {
+	store := newTestStore(t)
+	workdir := t.TempDir()
+	session, err := store.CreateSession(context.Background(), db.Session{Directory: workdir})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	first, err := store.InsertMessage(context.Background(), db.Message{SessionID: session.ID, Role: "user"})
+	if err != nil {
+		t.Fatalf("insert first message: %v", err)
+	}
+	second, err := store.InsertMessage(context.Background(), db.Message{SessionID: session.ID, Role: "assistant"})
+	if err != nil {
+		t.Fatalf("insert second message: %v", err)
+	}
+	document := recap.NewMemoryDocument()
+	document.Decisions = append(document.Decisions, recap.MemoryEntry{
+		ID:               "completed-memory",
+		State:            "active",
+		Text:             "the completed memory",
+		Evidence:         "evidence",
+		SourceMessageIDs: []string{first.ID},
+		FirstSeenUTC:     "2026-08-23T10:00:00Z",
+		LastSeenUTC:      "2026-08-23T10:00:00Z",
+	})
+	if _, err := recap.WriteMemoryDocument(context.Background(), workdir, document); err != nil {
+		t.Fatalf("write memory document: %v", err)
+	}
+	completed, _, err := store.ReserveMemoryUpdate(context.Background(), db.MemoryUpdate{
+		Workdir:            workdir,
+		SourceSessionID:    session.ID,
+		SourceEndSeq:       first.Seq,
+		SourceEndMessageID: first.ID,
+		Model:              "memory-model",
+	})
+	if err != nil {
+		t.Fatalf("reserve completed update: %v", err)
+	}
+	if err := store.ClaimMemoryUpdate(context.Background(), completed.ID); err != nil {
+		t.Fatalf("claim completed update: %v", err)
+	}
+	if err := store.CompleteMemoryUpdate(context.Background(), completed.ID, strings.Repeat("a", 64)); err != nil {
+		t.Fatalf("complete memory update: %v", err)
+	}
+	failed, _, err := store.ReserveMemoryUpdate(context.Background(), db.MemoryUpdate{
+		Workdir:            workdir,
+		SourceSessionID:    session.ID,
+		SourceEndSeq:       second.Seq,
+		SourceEndMessageID: second.ID,
+		Model:              "memory-model",
+	})
+	if err != nil {
+		t.Fatalf("reserve failed update: %v", err)
+	}
+	if err := store.ClaimMemoryUpdate(context.Background(), failed.ID); err != nil {
+		t.Fatalf("claim failed update: %v", err)
+	}
+	if err := store.FailMemoryUpdate(context.Background(), failed.ID, "provider call: 503 service unavailable"); err != nil {
+		t.Fatalf("fail memory update: %v", err)
+	}
+
+	m := New(Options{Store: store, Workdir: workdir, Session: &session})
+	m.width, m.height = 100, 30
+	m = m.openMemoryHistory()
+	if len(m.memoryHistoryAll) != 2 {
+		t.Fatalf("history entries = %d, want completed memory plus failed update", len(m.memoryHistoryAll))
+	}
+	statuses := make(map[string]bool, len(m.memoryHistoryAll))
+	for _, item := range m.memoryHistoryAll {
+		statuses[item.update.Status] = true
+	}
+	if !statuses[db.MemoryUpdateStatusFailed] || !statuses[db.MemoryUpdateStatusCompleted] {
+		t.Fatalf("history statuses = %+v, want completed and failed", statuses)
+	}
+	plain := stripANSI(m.memoryHistoryDrawerContent(80))
+	for _, want := range []string{"failed", "ok"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("history missing %q: %q", want, plain)
+		}
+	}
+	failedTextVisible := false
+	for _, item := range m.memoryHistoryAll {
+		if strings.Contains(memoryHistoryText(item), "provider call: 503") {
+			failedTextVisible = true
+			break
+		}
+	}
+	if !failedTextVisible {
+		t.Fatal("failed history item is missing its recorded error")
+	}
+	for _, want := range []string{
+		lipgloss.NewStyle().Foreground(theme.ColorDanger()).Render("●"),
+		lipgloss.NewStyle().Foreground(theme.ColorGood()).Render("●"),
+	} {
+		if !strings.Contains(m.memoryHistoryDrawerContent(80), want) {
+			t.Fatalf("history missing colored status mark %q", want)
+		}
 	}
 }
 

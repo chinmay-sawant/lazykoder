@@ -328,6 +328,8 @@ type Model struct {
 	memoryHistoryAll        []memoryHistoryItem
 	memoryHistoryPage       int
 	memoryHistorySelected   memoryHistoryItem
+	memoryHistoryError      string
+	memoryHistorySelection  textSelection
 
 	slashMode                 bool
 	slashCursor               int
@@ -817,7 +819,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case tea.KeyPressMsg:
 		if msg.Mod.Contains(tea.ModCtrl) && (msg.Code == 'c' || msg.Code == 'C') {
-			if m.promptEditing() && (m.prompt.Value() != "" || m.promptSelectAll || m.promptSel.hasRange() || m.selection.hasRange()) {
+			if m.memoryHistoryDetailMode {
+				// The memory detail owns Ctrl+C, including its select-all state.
+			} else if m.promptEditing() && (m.prompt.Value() != "" || m.promptSelectAll || m.promptSel.hasRange() || m.selection.hasRange()) {
 				// Fall through to updateKey: copy if text is selected, or clear the input box if not selected.
 			} else if m.quitConfirm {
 				return m.closeDone(), tea.Quit
@@ -940,6 +944,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.promptSel.dragging {
 			return m.updatePromptSelection(msg.Mouse()), nil
 		}
+		if m.memoryHistoryDetailMode && m.memoryHistorySelection.dragging {
+			return m.updateMemoryHistoryDetailSelection(msg.Mouse()), nil
+		}
 		// Keep transcript selection / scrollbar drag working while the drawer
 		// is open; only update drawer hover when the pointer is on it.
 		if m.selection.dragging {
@@ -981,6 +988,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseReleaseMsg:
 		if m.promptSel.dragging {
 			return m.endPromptSelectionDrag()
+		}
+		if m.memoryHistorySelection.dragging {
+			m.memoryHistorySelection.dragging = false
+			text, ok := m.memoryHistorySelectedText()
+			if !ok {
+				return m, nil
+			}
+			m.copyNotice = "Text copied"
+			return m, tea.Batch(tea.SetClipboard(text), clearCopyNotice())
 		}
 		m.selection.dragging = false
 		m.dragOn = false

@@ -37,7 +37,8 @@ pickers are centered cards.
   from thinking through the assistant reply. It throbs while that
   turn is running and stays as a static line after the turn ends and
   when the session is reopened. Assistant replies fill a muted sky-blue panel
-  across every rendered row, including Markdown code. Typed text stays on the
+  across every rendered row, including the full role-and-timestamp band and
+  its gap. Markdown code uses the same panel. Typed text stays on the
   composer surface without a cursor-line highlight. The footer left side stays
   idle (`enter send`).
   The right side

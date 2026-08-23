@@ -236,6 +236,19 @@ ORDER BY source_end_seq ASC, time_created ASC, id ASC`, workdir,
 	return scanMemoryUpdates(rows)
 }
 
+// ListMemoryUpdatesForSession returns every durable memory attempt for one
+// parent session, including completed and failed attempts for history views.
+func (s *Store) ListMemoryUpdatesForSession(ctx context.Context, workdir, sessionID string) ([]MemoryUpdate, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+memoryUpdateColumns+` FROM memory_updates
+WHERE workdir = ? AND source_session_id = ?
+ORDER BY source_end_seq DESC, time_created DESC, id DESC`, workdir, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("db: list memory updates for session: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	return scanMemoryUpdates(rows)
+}
+
 func (s *Store) getMemoryUpdateBySource(ctx context.Context, workdir, sessionID, messageID string) (MemoryUpdate, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT `+memoryUpdateColumns+` FROM memory_updates
 WHERE workdir = ? AND source_session_id = ? AND source_end_message_id = ?`, workdir, sessionID, messageID)

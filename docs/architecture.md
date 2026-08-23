@@ -156,8 +156,17 @@ One user turn runs in `internal/agent.Send` with a hard step bound (default
 11. `/history` reuses the sub-agent drawer shell to show only memory entries
     sourced from the active chat. Entries are ordered by `last_seen_utc`, show
     twenty per page, and open in the same scrollable detail card. A real
-    memory-worker error stays in the red error row with its original cause;
-    insufficient source context remains a quiet, nonfatal outcome.
+    memory-worker error stays in the history view with its original cause.
+    Memory-document parser errors also appear in that view and clear after a
+    successful reload. The detail card supports app-level mouse drag
+    selection and `ctrl+a` / `ctrl+c` copy without arming quit confirmation.
+    Insufficient source context does not interrupt chat, but its failed ledger
+    row can still appear in history. Each row
+    also reads its matching `memory_updates` record and starts with a colored
+    dot and status label: green for completed, red for failed, and accent for
+    queued or running. Failed attempts without a memory entry still appear so
+    the history can show what failed. The detail card uses the edit, assistant,
+    and error panel backgrounds already used by transcript and recap views.
 
 Everything the loop needs for a resumed session lives in the store; there is
 no in-memory tool state for the parent transcript.

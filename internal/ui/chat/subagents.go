@@ -138,6 +138,8 @@ func (m Model) closeSubagentPicker() Model {
 	m.recapDetailRecord = db.RecapRecord{}
 	m.memoryHistoryMode = false
 	m.memoryHistoryDetailMode = false
+	m.memoryHistoryError = ""
+	m.memoryHistorySelection = textSelection{}
 	m.memoryHistoryItems = nil
 	m.memoryHistoryAll = nil
 	m.memoryHistorySelected = memoryHistoryItem{}
@@ -1354,6 +1356,9 @@ func (m Model) renderedSubagentLogItems() []string {
 
 func (m Model) updateSubagentPickerKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 	if m.subagentLogMode {
+		if m.memoryHistoryDetailMode {
+			return m.updateMemoryHistoryDetailKey(key)
+		}
 		if m.recapDetailMode {
 			return m.updateRecapDetailKey(key)
 		}
@@ -1581,6 +1586,7 @@ func (m Model) closeSubagentLogToDrawer() Model {
 	m.recapDetailMode = false
 	m.recapSelected = wasRecap
 	m.memoryHistoryDetailMode = false
+	m.memoryHistorySelection = textSelection{}
 	m.memoryHistoryMode = wasMemoryHistory || m.memoryHistoryMode
 	m.subagentDrawerCompact = false
 	if m.memoryHistoryMode {

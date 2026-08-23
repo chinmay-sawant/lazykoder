@@ -3,6 +3,7 @@ package chat
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/chinmay-sawant/lazykoder/internal/db"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
@@ -27,6 +28,22 @@ func TestAssistantPanelsDoNotPaintTheCanvasOverMarkdown(t *testing.T) {
 
 	m.subagentLogItems = []transcriptItem{item}
 	assertAssistantPanelBackground(t, "subagent log", m.renderSubagentLogContent())
+}
+
+func TestAssistantMetadataBandFillsTheTimestampGap(t *testing.T) {
+	t.Cleanup(func() { theme.SetMode(string(theme.ModeDark)) })
+	theme.SetMode(string(theme.ModeDark))
+	configureThemeStyles()
+
+	m := New(Options{Store: newTestStore(t), Workdir: t.TempDir()})
+	m.width = 80
+	line := m.metaBand(roleAssistant, time.Date(2026, 8, 23, 10, 0, 0, 0, time.UTC).UnixMilli())
+	want := ansiBackground(theme.ColorAssistantPanel())
+	for column, background := range ansiCellBackgrounds(line) {
+		if background != want {
+			t.Fatalf("assistant metadata background ended at column %d: got %q want %q in %q", column, background, want, line)
+		}
+	}
 }
 
 func TestRunningToolCardKeepsAnOpaqueCanvasBackground(t *testing.T) {

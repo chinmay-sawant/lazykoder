@@ -569,6 +569,30 @@ func (m Model) roleLine(label string, when int64) string {
 	return m.alignMeta(style.Render(label), formatClock(when))
 }
 
+// metaBand renders the role/timestamp line for assistant turns as a
+// full-pane-wide strip painted with the assistant panel color, so the blue
+// surface runs edge to edge instead of stopping at the text column.
+func (m Model) metaBand(label string, when int64) string {
+	style := roleStyle
+	switch label {
+	case roleYou:
+		style = userRoleStyle
+	case roleAssistant:
+		style = assistantRoleStyle
+	}
+	left := style.Background(theme.ColorAssistantPanel()).Render(label)
+	stamp := hintStyle.Background(theme.ColorAssistantPanel()).Render(formatClock(when))
+	width := m.metaWidth()
+	rw := lipgloss.Width(stamp)
+	lw := lipgloss.Width(left)
+	gap := width - lw - rw
+	gapStyle := lipgloss.NewStyle().Background(theme.ColorAssistantPanel())
+	if gap < 1 {
+		return left + gapStyle.Render(" ") + stamp
+	}
+	return left + gapStyle.Render(strings.Repeat(" ", gap)) + stamp
+}
+
 // transcriptPanel gives each conversational turn a quiet surface and rounded
 // border. Keeping the role line outside the panel preserves the activity rail
 // and makes the speaker boundary obvious even in a busy transcript.
@@ -838,11 +862,14 @@ func (m Model) renderItemWithToolMode(it transcriptItem, selected bool, streamin
 			userStyle.Render(frameUserPrompt(it.text, m.contentWidth(it.when))))
 		return m.roleLine(roleYou, it.when) + "\n" + body
 	case itemAssistant:
-		panelWidth := max(1, m.contentWidth(it.when))
+		// The panel and its role band span the full pane width. The clock
+		// lives on the band above the panel, so message text never shares a
+		// row with it and nothing needs to be reserved for the stamp.
+		panelWidth := max(1, m.metaWidth())
 		innerWidth := max(1, panelWidth-cardHorzPad)
 		rendered := markdown.Render(it.text, innerWidth)
 		rendered = transcriptPanel(rendered, panelWidth, theme.ColorAssistantPanel(), theme.ColorAssistantBorder())
-		return m.roleLine(roleAssistant, it.when) + "\n" + rendered
+		return m.metaBand(roleAssistant, it.when) + "\n" + rendered
 	case itemReasoning:
 		marker := "▸"
 		if !it.collapsed {
