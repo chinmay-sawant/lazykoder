@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -561,7 +562,10 @@ func (m Model) scheduleMemoryUpdate() tea.Cmd {
 			return memoryDoneMsg{}
 		}
 		if snapshotErr != nil || anchorErr != nil {
-			return memoryDoneMsg{}
+			if snapshotErr != nil {
+				return memoryDoneMsg{err: fmt.Errorf("build snapshot: %w", snapshotErr)}
+			}
+			return memoryDoneMsg{err: fmt.Errorf("build anchor snapshot: %w", anchorErr)}
 		}
 		record, created, err := store.ReserveMemoryUpdate(ctx, db.MemoryUpdate{
 			Workdir:            workdir,
@@ -571,7 +575,7 @@ func (m Model) scheduleMemoryUpdate() tea.Cmd {
 			Model:              model,
 		})
 		if err != nil {
-			return memoryDoneMsg{}
+			return memoryDoneMsg{err: fmt.Errorf("reserve memory update: %w", err)}
 		}
 		if !created {
 			switch record.Status {
@@ -579,7 +583,7 @@ func (m Model) scheduleMemoryUpdate() tea.Cmd {
 				return memoryDoneMsg{}
 			case db.MemoryUpdateStatusFailed:
 				if err := store.RequeueMemoryUpdate(ctx, record.ID); err != nil {
-					return memoryDoneMsg{}
+					return memoryDoneMsg{err: fmt.Errorf("requeue memory update: %w", err)}
 				}
 			default:
 				return memoryDoneMsg{}

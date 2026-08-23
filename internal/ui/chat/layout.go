@@ -30,7 +30,7 @@ type layoutKey struct {
 	w, h                        int
 	focus                       focusKind
 	slash, picker, subs, status bool
-	subLog, subCompact          bool
+	subLog, subCompact, history bool
 	hasErr, hasTodo             bool
 	settingsEdit                bool
 	settingsCursor              int
@@ -49,6 +49,7 @@ func (m Model) layoutKey() layoutKey {
 		status:         m.statusMode,
 		subLog:         m.subagentLogMode,
 		subCompact:     m.subagentDrawerCompact,
+		history:        m.memoryHistoryMode,
 		hasErr:         m.err != "",
 		hasTodo:        len(m.todos) > 0,
 		settingsEdit:   m.settingsEdit,

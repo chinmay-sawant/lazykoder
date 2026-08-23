@@ -25,7 +25,7 @@ type slashPaletteGroup struct {
 var slashPaletteGroups = []slashPaletteGroup{
 	{title: "Session", names: []string{"/new", "/resume", "/continue", "/compact"}},
 	{title: "Model", names: []string{"/model", "/variant", "/refresh"}},
-	{title: "Project", names: []string{"/agents", "/spawn", "/settings", "/skills", "/usage"}},
+	{title: "Project", names: []string{"/agents", "/history", "/spawn", "/settings", "/skills", "/usage"}},
 	{title: "Help", names: []string{"/help"}},
 }
 
@@ -219,6 +219,8 @@ func (m Model) runSlashArg(name, extra string) (Model, tea.Cmd) {
 		return m.openSettings(), m.maybeFetchUsage()
 	case "/agents", "/subs", "/subagents":
 		return m.openSubagentPicker(), nil
+	case "/history":
+		return m.openMemoryHistory(), nil
 	case "/spawn", "/agent":
 		return m.openSubagentSpawnForm()
 	case "/continue":

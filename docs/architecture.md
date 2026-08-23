@@ -153,6 +153,11 @@ One user turn runs in `internal/agent.Send` with a hard step bound (default
    untraceable. Durable sections remain strict. A SQLite `memory_updates` row
    records the source anchor, model, attempts, digest, and any failure so
    restarts can retry safely.
+11. `/history` reuses the sub-agent drawer shell to show only memory entries
+    sourced from the active chat. Entries are ordered by `last_seen_utc`, show
+    twenty per page, and open in the same scrollable detail card. A real
+    memory-worker error stays in the red error row with its original cause;
+    insufficient source context remains a quiet, nonfatal outcome.
 
 Everything the loop needs for a resumed session lives in the store; there is
 no in-memory tool state for the parent transcript.

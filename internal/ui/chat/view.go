@@ -75,6 +75,9 @@ func (m Model) frame() string {
 	case m.sessionPickerMode:
 		return m.sessionPickerScreen()
 	case m.subagentLogMode:
+		if m.memoryHistoryDetailMode {
+			return m.memoryHistoryDetailScreen()
+		}
 		if m.recapDetailMode {
 			return m.recapDetailScreen()
 		}

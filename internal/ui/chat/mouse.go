@@ -74,6 +74,30 @@ func (m Model) mousePress(msg tea.MouseClickMsg) (Model, tea.Cmd) {
 	// Sub-agent drawer sits above the composer: handle it before prompt hits
 	// so the compact strip is not stolen by the input box geometry.
 	if mu.Button == tea.MouseLeft && m.subagentPickerMode && !m.subagentLogMode {
+		if m.memoryHistoryMode {
+			if m.subagentDrawerCompact {
+				if m.pointerInSubagentDrawer(mu.Y) || m.subagentHeaderAt(mu.Y) {
+					m = m.clearTextSelection()
+					m = m.clearPromptSelection()
+					return m.expandMemoryHistoryDrawer(), nil
+				}
+			} else {
+				if m.subagentHeaderAt(mu.Y) {
+					m = m.clearTextSelection()
+					m = m.clearPromptSelection()
+					return m.collapseMemoryHistoryDrawer(), nil
+				}
+				if idx, ok := m.subagentIndexAtScreenY(mu.Y); ok {
+					m = m.clearTextSelection()
+					m = m.clearPromptSelection()
+					m.subagentCursor = idx
+					return m.openSelectedMemoryHistoryDetail()
+				}
+				if m.pointerInSubagentDrawer(mu.Y) {
+					return m, nil
+				}
+			}
+		}
 		if m.subagentDrawerCompact {
 			// Compact strip: any click expands (same as enter).
 			if m.pointerInSubagentDrawer(mu.Y) || m.subagentHeaderAt(mu.Y) {

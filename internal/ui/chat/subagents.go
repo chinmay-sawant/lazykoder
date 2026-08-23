@@ -65,6 +65,8 @@ func (m Model) openSubagentPicker() Model {
 	// the viewport for the drawer does not leave the background stuck mid-scroll.
 	follow := m.transcript.AtBottom()
 	m = m.setFocus(focusSubagents)
+	m.memoryHistoryMode = false
+	m.memoryHistoryDetailMode = false
 	m.subagentDrawerCompact = false
 	m.subagentHover = -1
 	m.prompt.SetValue("")
@@ -134,6 +136,12 @@ func (m Model) closeSubagentPicker() Model {
 	m.recapDetailMode = false
 	m.recapSelected = false
 	m.recapDetailRecord = db.RecapRecord{}
+	m.memoryHistoryMode = false
+	m.memoryHistoryDetailMode = false
+	m.memoryHistoryItems = nil
+	m.memoryHistoryAll = nil
+	m.memoryHistorySelected = memoryHistoryItem{}
+	m.memoryHistoryPage = 0
 	// Reclaim drawer rows into the transcript and keep following the bottom.
 	m.syncTranscript()
 	if follow {
@@ -584,6 +592,9 @@ func (m Model) subagentDrawerVPHeight() int {
 	reserved += minPaneHeight
 	available := max(1, m.height-reserved)
 	n := len(m.subagentItems)
+	if m.memoryHistoryMode {
+		n = len(m.memoryHistoryItems)
+	}
 	if n < 1 {
 		n = 1
 	}
@@ -671,6 +682,9 @@ func (m Model) ensureSubagentCursorVisible() {
 // subagentDrawerView is the model-picker-style list above the prompt.
 // Compact mode is a short summary strip (header + footer only).
 func (m Model) subagentDrawerView() string {
+	if m.memoryHistoryMode {
+		return m.memoryHistoryDrawerView()
+	}
 	cardW := m.pickerDrawerWidth()
 	live, ok, failed, total := m.subagentDrawerCounts()
 	var parts []string
@@ -725,7 +739,7 @@ func (m Model) subagentDrawerView() string {
 // Its green rail separates local memory from blue assistant output. The
 // database record is the source of truth; the full files open from this row.
 func (m Model) recapDrawerView(selected bool) string {
-	if !m.projectSettings.EffectiveRecap().Enabled || m.session == nil || m.session.Kind == db.SessionKindSubagent || m.session.ParentSessionID != nil {
+	if m.memoryHistoryMode || !m.projectSettings.EffectiveRecap().Enabled || m.session == nil || m.session.Kind == db.SessionKindSubagent || m.session.ParentSessionID != nil {
 		return ""
 	}
 	width := max(1, m.pickerDrawerWidth())
@@ -921,6 +935,9 @@ func (m Model) subagentDrawerCounts() (live, ok, failed, total int) {
 }
 
 func (m Model) subagentDrawerContent(width int) string {
+	if m.memoryHistoryMode {
+		return m.memoryHistoryDrawerContent(width)
+	}
 	var b strings.Builder
 	for i, row := range m.subagentItems {
 		if i > 0 {
@@ -1224,6 +1241,9 @@ func (m Model) subagentLogJumpBarView() string {
 // subagentLogHit handles a mouse press on the full-screen log view.
 // [x] returns to the drawer; clicks on thinking/tool blocks expand or collapse.
 func (m Model) subagentLogHit(x, y int, button tea.MouseButton) (Model, tea.Cmd, bool) {
+	if m.memoryHistoryDetailMode {
+		return m.memoryHistoryDetailHit(x, y, button)
+	}
 	if m.recapDetailMode {
 		return m.recapDetailHit(x, y, button)
 	}
@@ -1341,6 +1361,9 @@ func (m Model) updateSubagentPickerKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 			return m.closeDone(), tea.Quit
 		}
 		return m.updateSubagentLogKey(key)
+	}
+	if m.memoryHistoryMode {
+		return m.updateMemoryHistoryPickerKey(key)
 	}
 	// Drawer stays open while the composer stays fully interactive: typing,
 	// paste, send, etc. Only dedicated navigation keys are handled here.
@@ -1479,6 +1502,9 @@ func (m Model) updateSubagentPickerKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 }
 
 func (m Model) updateSubagentLogKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
+	if m.memoryHistoryDetailMode {
+		return m.updateMemoryHistoryDetailKey(key)
+	}
 	if m.recapDetailMode {
 		return m.updateRecapDetailKey(key)
 	}
@@ -1548,13 +1574,20 @@ func (m Model) updateRecapDetailKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 // closing the sub-agent drawer, so another child can be selected immediately.
 func (m Model) closeSubagentLogToDrawer() Model {
 	wasRecap := m.recapDetailMode
+	wasMemoryHistory := m.memoryHistoryDetailMode
 	m = m.setFocus(focusSubagents)
 	m.subagentLogItems = nil
 	m.subagentLogSelected = -1
 	m.recapDetailMode = false
 	m.recapSelected = wasRecap
+	m.memoryHistoryDetailMode = false
+	m.memoryHistoryMode = wasMemoryHistory || m.memoryHistoryMode
 	m.subagentDrawerCompact = false
-	m = m.reloadSubagentRows()
+	if m.memoryHistoryMode {
+		m = m.reloadMemoryHistory()
+	} else {
+		m = m.reloadSubagentRows()
+	}
 	return m.resizeSubagentDrawer()
 }
 
@@ -1732,9 +1765,13 @@ func (m Model) subagentHeaderScreenY() (int, bool) {
 	if !m.subagentPickerMode || m.subagentLogMode {
 		return 0, false
 	}
+	title := "sub-agents"
+	if m.memoryHistoryMode {
+		title = "memory history"
+	}
 	for i, line := range m.paintedLines() {
 		plain := ansi.Strip(line)
-		if strings.Contains(plain, "sub-agents") {
+		if strings.Contains(plain, title) {
 			return i, true
 		}
 	}
@@ -1749,7 +1786,7 @@ func (m Model) subagentHeaderAt(y int) bool {
 }
 
 func (m Model) recapRowAt(y int) bool {
-	if !m.subagentPickerMode || m.subagentLogMode || len(m.recapItems) == 0 {
+	if m.memoryHistoryMode || !m.subagentPickerMode || m.subagentLogMode || len(m.recapItems) == 0 {
 		return false
 	}
 	for i, line := range m.paintedLines() {
@@ -1775,7 +1812,11 @@ func (m Model) pointerInSubagentDrawer(y int) bool {
 // Only the visible list band counts so clicks on the header/footer/transcript
 // never open a sub-agent by accident.
 func (m Model) subagentIndexAtScreenY(y int) (int, bool) {
-	if !m.subagentPickerMode || m.subagentLogMode || len(m.subagentItems) == 0 {
+	itemCount := len(m.subagentItems)
+	if m.memoryHistoryMode {
+		itemCount = len(m.memoryHistoryItems)
+	}
+	if !m.subagentPickerMode || m.subagentLogMode || itemCount == 0 {
 		return 0, false
 	}
 	// Never treat the title row as a list hit (collapse is handled separately).
@@ -1792,7 +1833,7 @@ func (m Model) subagentIndexAtScreenY(y int) (int, bool) {
 		return 0, false
 	}
 	rel := y - listTop + m.subagentVp.YOffset()
-	if rel < 0 || rel >= len(m.subagentItems) {
+	if rel < 0 || rel >= itemCount {
 		return 0, false
 	}
 	return rel, true

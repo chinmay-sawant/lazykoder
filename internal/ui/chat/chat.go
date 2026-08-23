@@ -320,6 +320,15 @@ type Model struct {
 	subagentLogItems    []transcriptItem
 	subagentLogSelected int
 
+	// memoryHistoryMode reuses the sub-agent drawer shell for current-chat
+	// memory entries without mixing them into child-agent rows.
+	memoryHistoryMode       bool
+	memoryHistoryDetailMode bool
+	memoryHistoryItems      []memoryHistoryItem
+	memoryHistoryAll        []memoryHistoryItem
+	memoryHistoryPage       int
+	memoryHistorySelected   memoryHistoryItem
+
 	slashMode                 bool
 	slashCursor               int
 	slashItems                []slashCmd
@@ -395,6 +404,7 @@ var slashCommands = []slashCmd{
 	{name: "/model", description: "search and switch the live chat model"},
 	{name: "/variant", description: "switch live reasoning effort (low / medium / high / max)"},
 	{name: "/agents", description: "open the sub-agent drawer and logs", aliases: []string{"subs", "subagents"}},
+	{name: "/history", description: "open memory history for the current chat"},
 	{name: "/spawn", description: "spawn a new sub-agent via interactive form", aliases: []string{"agent"}},
 	{name: "/refresh", description: "reload the model list into models.json"},
 	{name: "/usage", description: "show OpenCode Go plan usage (rolling, weekly, monthly)"},
@@ -678,9 +688,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.memoryScanJobs > 0 {
 			m.memoryScanJobs--
 		}
-		if msg.err != nil && m.err == "" {
-			m.copyNotice = "memory update failed"
-			return m, clearCopyNotice()
+		if msg.err != nil && !errors.Is(msg.err, recap.ErrInsufficientMessages) {
+			m.err = appendChatError(m.err, "memory update failed: "+msg.err.Error())
 		}
 		return m, nil
 	case tipsTickMsg:
@@ -766,7 +775,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.subagentBuilt {
 			if m.subagentLogMode {
-				if m.recapDetailMode {
+				if m.memoryHistoryDetailMode {
+					m = m.resizeMemoryHistoryDetail()
+				} else if m.recapDetailMode {
 					m = m.resizeRecapDetail()
 				} else {
 					m = m.resizeSubagentLogCard()
@@ -864,6 +875,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.subagentLogMode {
+			if m.memoryHistoryDetailMode {
+				vp, _ := m.subagentLogVp.Update(msg)
+				m.subagentLogVp = vp
+				return m, nil
+			}
 			if m.recapDetailMode {
 				vp, _ := m.recapDetailVp.Update(msg)
 				m.recapDetailVp = vp
