@@ -126,9 +126,10 @@ fallback otherwise). Prefer this over reading many files to find symbols.
 - HTML responses return readable text plus bounded title, final URL, ordinary
   links, `mailto:` links, visible email addresses, mode, and truncation
   metadata. Links are reported as data and are not followed automatically.
-- Browser mode records the requested URL as `final_url`; redirect-target
-  capture requires a deeper browser protocol integration and remains open in
-  the phase ledger.
+- Browser mode currently records the requested URL as `final_url`; capturing
+  the redirect target requires a deeper browser protocol integration. The
+  remaining browser closure is tracked in
+  `plans/v0.0.12/phase-2-public-internet-and-browser-reading.md`.
 - Browser mode never reuses the user's profile, cookies, saved credentials,
   extensions, or downloads. It does not submit forms or send email.
 
@@ -153,9 +154,10 @@ completes with a partial summary and a note instead of status `failed`.
 
 Background jobs do not inherit cancellation from the parent turn. They keep
 running after the parent response ends and still obey their configured timeout.
-`task_cancel` and manager shutdown cancel them explicitly. When a child model
-has no explicit variant, the manager selects the first supported variant in
-that model's profile.
+`task_cancel` and manager shutdown cancel them explicitly. The v0.0.12
+ledger adds the proof that cancellation reaches the provider request and
+leaves no pending tool or job row. When a child model has no explicit variant,
+the manager selects the first supported variant in that model's profile.
 
 Child wall-clock lifetime is **not** a `task` argument. It always comes
 from project settings `agents.default_timeout_sec` (default 600s / 10m).

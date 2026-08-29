@@ -54,6 +54,12 @@ snapshots:
 | `v0.0.10/phase-11-browser-support.md` | safe browser-backed URL understanding, rendered content, links, and email-link extraction |
 | `v0.0.11/README.md` | recap and memory loop, OpenAI provider, orchestration, commit action, and history churn fixes |
 | `v0.0.11/phase-4b-commit-push-drawer.md` | Diff drawer, change navigation, and policy-gated commit action |
+| `v0.0.12/README.md` | v0.0.12 plan index, shared contract, phase order, and closure rules |
+| `v0.0.12/phase-1-cancellation-contract-and-lifecycle.md` | parent and child cancellation, provider stop semantics, and durable terminal state |
+| `v0.0.12/phase-2-public-internet-and-browser-reading.md` | public HTTP access, isolated browser reads, egress safety, and fixtures |
+| `v0.0.12/phase-3-subagent-goroutines-and-parent-orchestration.md` | bounded child goroutines, task controls, and recovery |
+| `v0.0.12/phase-4-screenshot-driven-tui-enhancements.md` | screenshot-led cancellation, browser status, and responsive TUI work |
+| `v0.0.12/phase-5-documentation-and-closure-gates.md` | documentation, automated gates, manual proof, and closure |
 
 Each checklist row is marked `[x]` only when the gate actually passed, with
 the command and exit code recorded beside the row. Rows are never checked
@@ -81,6 +87,10 @@ human runs them.
   timing, and conversation-aware history ordering. Automated gates are green;
   live provider and terminal scenarios remain human checks. Ledger:
   `plans/v0.0.11/`.
+- v0.0.12: planned public browser access, cancellable goroutine-based
+  sub-agents, explicit local versus provider-side stop semantics, and a
+  screenshot-driven TUI pass. Ledger:
+  `plans/v0.0.12/README.md`.
 
 ## In progress
 
