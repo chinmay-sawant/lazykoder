@@ -13,6 +13,7 @@ import (
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
 
 	"github.com/chinmay-sawant/lazykoder/internal/agent"
@@ -1851,13 +1852,18 @@ func (m Model) updateAskKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m.closeDone(), tea.Quit
 	}
 	opts := m.askQuestion.Options
+	// Include the hard-coded custom option as an extra selectable row
+	total := len(opts) + 1
 	switch key.Code {
 	case tea.KeyEscape, 'q', 'Q':
 		return m.resolveAskIndex(-1), nil
 	case tea.KeyEnter:
+		if m.askCursor == len(opts) {
+			return m.openAskCustomForm()
+		}
 		return m.resolveAskIndex(m.askCursor), nil
 	case 'j', tea.KeyDown:
-		if m.askCursor < len(opts)-1 {
+		if m.askCursor < total-1 {
 			m.askCursor++
 		}
 		return m, nil
@@ -1872,8 +1878,68 @@ func (m Model) updateAskKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 		if idx >= 0 && idx < len(opts) {
 			return m.resolveAskIndex(idx), nil
 		}
+		if idx == len(opts) {
+			return m.openAskCustomForm()
+		}
 	}
 	return m, nil
+}
+
+func (m Model) openAskCustomForm() (Model, tea.Cmd) {
+	var text string
+	input := huh.NewInput().
+		Title("Type your own answer here").
+		Description("This will be sent to the LLM instead of the canned options").
+		Placeholder("Your custom answer...").
+		Value(&text).
+		Validate(func(s string) error {
+			if strings.TrimSpace(s) == "" {
+				return fmt.Errorf("answer cannot be empty")
+			}
+			return nil
+		})
+	form := huh.NewForm(huh.NewGroup(input)).
+		WithTheme(formTheme()).
+		WithWidth(min(formOverlayMaxWidth, max(minPaneWidth, m.width-cardBorder)))
+	host := &formHost{
+		form:  form,
+		title: "Custom answer",
+		kind:  "ask-custom",
+		width: min(formOverlayMaxWidth, max(minPaneWidth, m.width-cardBorder)),
+		onDone: func(mod Model) (Model, tea.Cmd) {
+			trimmed := strings.TrimSpace(text)
+			// Append custom answer to both the UI question and the pending ask
+			// so the tool's index validation passes and the LLM receives the
+			// free-form text instead of a canned option.
+			if mod.pendingAsk != nil {
+				mod.pendingAsk.q.Options = append(mod.pendingAsk.q.Options, trimmed)
+				mod.askQuestion.Options = append(mod.askQuestion.Options, trimmed)
+				idx := len(mod.pendingAsk.q.Options) - 1
+				mod = mod.clearFocus(focusForm)
+				return mod.resolveAskIndex(idx), nil
+			}
+			// Fallback: treat as custom index
+			mod.askQuestion.Options = append(mod.askQuestion.Options, trimmed)
+			idx := len(mod.askQuestion.Options) - 1
+			mod = mod.clearFocus(focusForm)
+			return mod.resolveAskIndex(idx), nil
+		},
+		onCancel: func(mod Model) (Model, tea.Cmd) {
+			mod = mod.clearFocus(focusForm)
+			// Restore the ask overlay
+			mod = mod.setFocus(focusAsk)
+			return mod, nil
+		},
+	}
+	// Keep the pending ask alive but hide the ask overlay while the custom
+	// input is shown. The overlayOn dim stays via form overlay.
+	m = m.setFocus(focusForm)
+	m.formHost = host
+	// Preserve askCursor at custom index so cancel returns to same spot
+	m.askCursor = len(m.askQuestion.Options)
+	cmd := form.Init()
+	host.form = form
+	return m, cmd
 }
 
 func (m Model) updateHelpKey(key tea.KeyPressMsg) (Model, tea.Cmd) {

@@ -82,6 +82,9 @@ func (m Model) mousePress(msg tea.MouseClickMsg) (Model, tea.Cmd) {
 	if m.currentFocus() == focusAsk {
 		if mu.Button == tea.MouseLeft {
 			if idx, ok := m.askIndexAtScreen(mu.X, mu.Y); ok {
+				if idx == len(m.askQuestion.Options) {
+					return m.openAskCustomForm()
+				}
 				return m.resolveAskIndex(idx), nil
 			}
 		}

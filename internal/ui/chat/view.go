@@ -211,7 +211,11 @@ func (m Model) chatScreen() string {
 }
 
 func overlayOn(base string, width, height int, card string) string {
-	baseLines := strings.Split(lipgloss.NewStyle().Faint(true).Width(max(1, width)).Render(base), "\n")
+	dimBg := lipgloss.Color("#121212")
+	if theme.CurrentMode() == theme.ModeLight {
+		dimBg = lipgloss.Color("#d0d0d0")
+	}
+	baseLines := strings.Split(lipgloss.NewStyle().Background(dimBg).Foreground(theme.ColorMute()).Faint(true).Width(max(1, width)).Render(base), "\n")
 	for len(baseLines) < height {
 		baseLines = append(baseLines, "")
 	}
@@ -969,12 +973,12 @@ func (m Model) confirmOverlay() string {
 
 func (m Model) askOverlay() string {
 	_, cardW, lines, _ := m.askOverlayLines()
-	content := keepBackground(strings.Join(lines, "\n"), theme.ColorSurface())
+	content := keepBackground(strings.Join(lines, "\n"), theme.ColorDialog())
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(theme.ColorBorder()).
-		BorderBackground(theme.ColorSurface()).
-		Background(theme.ColorSurface()).
+		BorderForeground(theme.ColorAccent()).
+		BorderBackground(theme.ColorDialog()).
+		Background(theme.ColorDialog()).
 		Padding(1, cardHorzPad).
 		Width(cardW).
 		Render(content)
@@ -1023,7 +1027,30 @@ func (m Model) askOverlayLines() (innerW, cardW int, lines []string, spans []ask
 		}
 		spans = append(spans, askOptionSpan{index: i, start: start, end: len(lines)})
 	}
-	appendText("j/k select  •  enter confirm  •  esc cancel", hintStyle)
+	// Hard-coded custom answer affordance so the user is never trapped by the
+	// LLM's enumerated choices. Selecting it opens a free-form input.
+	customIdx := len(m.askQuestion.Options)
+	customLabel := "✏️  Type your own answer..."
+	start := len(lines)
+	prefix := fmt.Sprintf("  %d. ", customIdx+1)
+	style := hintStyle
+	if customIdx == m.askCursor {
+		prefix = fmt.Sprintf("▸ %d. ", customIdx+1)
+		style = lipgloss.NewStyle().Bold(true).Foreground(theme.ColorAccent())
+	}
+	continuation := strings.Repeat(" ", lipgloss.Width(prefix))
+	textW := max(1, innerW-lipgloss.Width(prefix))
+	wrapped := wrapAskText(customLabel, textW)
+	for j, line := range wrapped {
+		if j == 0 {
+			line = prefix + line
+		} else {
+			line = continuation + line
+		}
+		lines = append(lines, style.Width(innerW).MaxWidth(innerW).Render(line))
+	}
+	spans = append(spans, askOptionSpan{index: customIdx, start: start, end: len(lines)})
+	appendText("j/k select  •  enter confirm  •  esc cancel  •  custom writes to LLM", hintStyle)
 	return innerW, cardW, lines, spans
 }
 

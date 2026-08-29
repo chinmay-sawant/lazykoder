@@ -172,3 +172,103 @@ Codex extensibility means a contributor can ship a new provider, tool, or role w
 - [x] A new role can be added via an entry in `<workdir>/.lazykoder/roles.json` (or the global mirror) without editing `internal/roles/capabilities.go`, `internal/tools/task/task.go`, or `internal/subagent/config.go`; its allowlist, single-writer flag, and model class are honored in `Manager.Spawn` and validated at task-parse time.
 - [x] `/provider`, `/tools`, `/roles`, and `/skills` share discovery diagnostics that never block chat, and `/model` groups by `Info.Provider` rather than endpoint heuristics after the cache migration.
 - [x] Automated provider, orchestration, memory, UI, database, build, lint, and test gates pass. Live TTY checks at both required terminal sizes passed in dedicated tmux sessions.
+
+## Follow-on audit: model and scale plugin gaps
+
+Phase 6 is complete. The registry-plus-file pattern now covers providers,
+tools, and roles. But the model layer and the model-to-endpoint scale logic
+are the next candidates for the same plugin shape. This section records the
+hard-coded items that remain, classified by conversion complexity, and the
+prioritized list to convert them.
+
+### What is already plugin-style
+
+- Providers: `provider.Register(Descriptor)` in `internal/provider/catalog.go`
+  with `Factory`, `AuthChecker`, `LoginCommand` function fields, plus
+  `.lazykoder/providers.json` declarative loading. `provider.NewClient`
+  dispatches through the registry.
+- Tools: `toolplugin.Register` in `internal/agent/toolplugin/registry.go`
+  plus `internal/tools/catalog.go` shell descriptors in `.lazykoder/tools.json`.
+- Roles: `roles.Register(Role)` in `internal/roles/capabilities.go` plus
+  `.lazykoder/roles.json` loading.
+
+No package is literally named "DeepSync". The pattern described in the
+knowledge base as "pluggable catalogs" is the implementation behind that name.
+
+### Tier 1: trivial hard-coded values to make injectable
+
+- [ ] **P1: `modelsDevURL` is a hard-coded constant**
+  `internal/modelscache/catalog.go:25` sets
+  `modelsDevURL = "https://models.dev/api.json"`. A custom or private model
+  catalog can not be substituted. Make the source URL injectable via
+  `Options` or a setting, same pattern as the existing `*http.Client` option
+  on `Fetch`.
+
+- [ ] **P2: `deprecatedModelIDs` is a Go map**
+  `internal/modelscache/catalog.go:54` defines
+  `var deprecatedModelIDs = map[string]struct{}{"deepseek-v4-flash-free": {}}`.
+  This list grows in code. It should come from the models.dev catalog or a
+  small override file under `.lazykoder/`, not source.
+
+- [ ] **M5: `normalizeAuthMethod` admits only three values**
+  `internal/provider/catalog.go` lines 287-300 accept `"api_key"`,
+  `"codex"`, `"grok"`. A file-loaded provider cannot declare a custom auth
+  method. Accept an arbitrary string or add an `AuthMethodCustom` constant so
+  new auth flows do not require a code change.
+
+- [ ] **M4: `builtinFactories` is a Go map with no name lookup**
+  `internal/provider/factory.go` lines 13-30 holds a `map[string]DescriptorFactory`
+  that is only reachable from Go source. A `providers.json` entry can not
+  select a factory by name; it falls through to `openAICompatibleFactory`
+  only if it has a `base_url`. Add a `factory` string field to `Descriptor`
+  and a `provider.RegisterFactory(name, DescriptorFactory)` seam so a
+  declarative entry can bind to a compiled factory without touching
+  `factory.go`.
+
+### Tier 2: descriptor function-field hooks (medium complexity)
+
+- [ ] **M1: model-id heuristics are name-prefix tables**
+  `opencode.isResponsesModelID` (client.go line 87) matches
+  `strings.HasPrefix(id, "muse-spark-")`. `opencode.isFreeModelID`
+  (line 144) matches `"-free"` suffix and `"big-pickle"`. These decide the
+  request protocol and the Zen sibling endpoint. Move them onto the provider
+  descriptor as function fields so a provider controls its own id-shape rules
+  instead of one central name table.
+
+- [ ] **M2: route selection switches are OpenCode-specific**
+  `opencode.RouteForModel`, `RouteForModelMetadata`, and
+  `RouteForCatalogModel` (client.go lines 91-168) each switch on provider
+  strings (`"opencode-go"`, `"opencode"`) and embed Zen URL derivation. This
+  is the core model-to-endpoint scale logic. Unify behind a `RouteResolver`
+  function field on the provider `Descriptor`, with the current logic as the
+  default `DefaultRouteResolver`.
+
+- [ ] **M3: provider label from endpoint is a Go switch**
+  `modelscache.ProviderFromEndpoint` (modelscache.go lines 109-130) and
+  `CanonicalProvider` (lines 73-101) switch on URL fragments and legacy
+  labels. Fold into the `RouteResolver` interface above so endpoint-to-
+  provider identity is owned by the provider descriptor, not a central switch.
+
+- [ ] **R1: live catalog route resolution**
+  `modelscache.liveRoute` (catalog.go lines 130-154) and
+  `opencode.ZenBaseURL` / `ZenChatURL` / `ZenResponsesURL` (client.go lines
+  65-86) derive the Zen sibling URL from a Go base. This is OpenCode-specific
+  path surgery. Expose it through the same `RouteResolver` seam so a custom
+  provider does not inherit OpenCode path assumptions.
+
+### Evidence
+
+All line numbers come from reading the live source under `internal/`, not
+from the knowledge base. The knowledge-base pages (`wiki/concepts/models.md`,
+`wiki/concepts/providers.md`, `wiki/concepts/pluggable-catalogs.md`) describe
+the shipped Phase 6 state correctly but do not track these remaining
+hard-coded items.
+
+### Dependencies
+
+- Tier 1 items are independent. Each is verifiable with
+  `go build ./...` and the matching package test.
+- Tier 2 items depend on M4 (the factory-name lookup) so a declarative
+  provider can carry the function fields through a name binding.
+- None of the above changes the SQLite schema, so no migration entry is
+  needed.
