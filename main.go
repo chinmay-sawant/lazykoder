@@ -65,24 +65,61 @@ func main() {
 		}
 	}
 	client, keyErr := provider.NewClient(cfg.EffectiveProvider())
+	if client == nil {
+		// Active provider was deleted from providers.json - fallback to first available
+		ids := provider.IDs()
+		fallback := provider.IDOpenCode
+		if len(ids) > 0 {
+			fallback = ids[0]
+		}
+		if fallback != cfg.EffectiveProvider() {
+			// Try fallback without surfacing as keyErr so TUI still starts
+			if fb, err := provider.NewClient(fallback); err == nil && fb != nil {
+				client = fb
+				if keyErr == nil {
+					keyErr = fmt.Errorf("provider %q not found, using %q", cfg.EffectiveProvider(), fallback)
+				}
+			}
+		}
+	}
 	childProvider := cfg.EffectiveOrchestrator().Provider
 	childClient := client
 	if childProvider != cfg.EffectiveProvider() {
-		childClient, _ = provider.NewClient(childProvider)
+		if cc, err := provider.NewClient(childProvider); err == nil && cc != nil {
+			childClient = cc
+		}
 	}
 	if keyErr != nil {
 		initial = keyErr.Error()
 	}
 	retry := cfg.EffectiveRetry()
-	client.SetRetryPolicy(opencode.RetryPolicy{
-		MaxRetries: retry.MaxRetries,
-		Delay:      time.Duration(retry.DelaySeconds) * time.Second,
-	})
-	if childClient != client {
+	if client != nil {
+		client.SetRetryPolicy(opencode.RetryPolicy{
+			MaxRetries: retry.MaxRetries,
+			Delay:      time.Duration(retry.DelaySeconds) * time.Second,
+		})
+	}
+	if childClient != nil && childClient != client {
 		childClient.SetRetryPolicy(opencode.RetryPolicy{
 			MaxRetries: retry.MaxRetries,
 			Delay:      time.Duration(retry.DelaySeconds) * time.Second,
 		})
+	}
+	if client == nil {
+		initial = "no provider available: " + initial
+		ids := provider.IDs()
+		if len(ids) == 0 {
+			fmt.Fprintln(os.Stderr, "lazykoder: no providers configured; add one via .lazykoder/providers.json")
+			os.Exit(1)
+		}
+		if c, err := provider.NewClient(ids[0]); err == nil && c != nil {
+			client = c
+		}
+		if client == nil {
+			fmt.Fprintln(os.Stderr, "lazykoder: no providers configured")
+			os.Exit(1)
+		}
+		childClient = client
 	}
 
 	// Always start fresh. Past runs stay in SQLite and load via /resume.

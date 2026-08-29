@@ -88,6 +88,8 @@ func (m Model) frame() string {
 		return m.settingsScreen()
 	case m.usageMode:
 		return m.usageScreen()
+	case m.providerDeleteMode:
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, m.providerDeleteView())
 	case m.helpMode:
 		return m.helpScreen()
 	}

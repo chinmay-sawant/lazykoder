@@ -17,6 +17,7 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/settings"
 	"github.com/chinmay-sawant/lazykoder/internal/skills"
 	toolcatalog "github.com/chinmay-sawant/lazykoder/internal/tools"
+	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
 
 // pickerRowMinLeftW is the minimum width left for the model label when a
@@ -65,6 +66,9 @@ func (m Model) pickerView() string {
 		kind = "roles"
 	}
 	meta := m.pickerSelectedLabel()
+	// For provider picker, keep meta as selected label; the delete affordance
+	// is rendered right-aligned on the header line via custom header logic below
+	// so it appears top-right besides the close hint, matching the help [x] pattern.
 
 	vpH := m.pickerVPHeight()
 	body := ""
@@ -103,7 +107,7 @@ func (m Model) pickerView() string {
 	case pickerKindSkills:
 		filter = "filter /  •  enter activate  •  esc cancel"
 	case pickerKindProvider:
-		filter = "filter /  •  enter select or sign in  •  esc cancel"
+		filter = "filter /  •  enter select  •  del delete  •  esc cancel"
 	case pickerKindTools:
 		filter = "filter /  •  enter toggle  •  esc cancel"
 	case pickerKindRoles:
@@ -116,7 +120,65 @@ func (m Model) pickerView() string {
 	} else if m.pickerFilter != "" {
 		filter = "filter: " + m.pickerFilter + "  •  enter select"
 	}
+	if m.pickerKind == pickerKindProvider && m.pickerProviderDeletable() {
+		// Render header with [del] right-aligned, similar to help overlay [x]
+		leftHead := ""
+		if kind != "" {
+			leftHead = drawerHeaderTitleStyle.Render(kind)
+		}
+		if kind != "" && meta != "" {
+			leftHead += hintStyle.Render("  ·  ")
+		}
+		if meta != "" {
+			leftHead += drawerHeaderMetaStyle.Render(meta)
+		}
+		rightHead := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("9")).Render("[del]")
+		// Use errStyle-like red for delete affordance
+		gap := cardW - lipgloss.Width(leftHead) - lipgloss.Width(rightHead)
+		if gap < 1 {
+			gap = 1
+			// Truncate left if needed
+			leftHead = truncateRunes(leftHead, max(1, cardW-lipgloss.Width(rightHead)-1))
+			gap = cardW - lipgloss.Width(leftHead) - lipgloss.Width(rightHead)
+			if gap < 1 {
+				gap = 1
+			}
+		}
+		head := leftHead + strings.Repeat(" ", gap) + rightHead
+		if lipgloss.Width(head) > cardW {
+			head = truncateRunes(head, cardW)
+		}
+		var parts []string
+		parts = append(parts, head)
+		if body != "" {
+			parts = append(parts, body)
+		}
+		if filter != "" {
+			foot := hintStyle.Width(cardW).Render(truncateRunes(filter, cardW))
+			parts = append(parts, foot)
+		}
+		content := keepBackground(strings.Join(parts, "\n"), theme.ColorSurface())
+		return lipgloss.NewStyle().Background(theme.ColorSurface()).Width(cardW).MaxWidth(cardW).Render(content)
+	}
 	return drawerChrome(kind, meta, body, filter, cardW)
+}
+
+func (m Model) pickerProviderDeletable() bool {
+	if m.pickerKind != pickerKindProvider || len(m.pickerItems) == 0 {
+		return false
+	}
+	if m.pickerCursor < 0 || m.pickerCursor >= len(m.pickerItems) {
+		return false
+	}
+	id := m.pickerItems[m.pickerCursor]
+	if id == "__add_new_provider__" || strings.TrimSpace(id) == "" {
+		return false
+	}
+	// Only show delete when the provider exists in the registry
+	if _, ok := provider.DescriptorFor(id); !ok {
+		return false
+	}
+	return true
 }
 
 // pickerContent renders the filtered model list with the cursor marker.
@@ -438,6 +500,11 @@ func (m Model) updatePickerKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 	switch key.Code {
 	case 'q', 'Q', 'x', 'X':
 		m = m.closePicker()
+		return m, nil
+	case tea.KeyDelete, tea.KeyBackspace:
+		if m.pickerKind == pickerKindProvider && m.pickerProviderDeletable() {
+			return m.requestProviderDelete()
+		}
 		return m, nil
 	case 'r', 'R':
 		if m.pickerKind == pickerKindProvider {

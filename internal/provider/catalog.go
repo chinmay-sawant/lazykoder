@@ -263,15 +263,39 @@ func cleanStrings(values []string) []string {
 	return out
 }
 
+type pendingRoot struct {
+	root  catalog.Root
+	items []providerEntry
+}
+
+func pendingHasID(pending []pendingRoot, id string) bool {
+	for _, pr := range pending {
+		for _, it := range pr.items {
+			if it.Descriptor.ID == id {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // LoadProviders merges built-ins and compiled registrations with bounded JSON
 // descriptors from local and global .lazykoder directories. It also installs
 // the merged catalog so NewClient and the TUI use the same snapshot.
+//
+// When a local .lazykoder/providers.json file exists and parses as a JSON
+// array, its IDs become the authoritative local set: built-in IDs not present
+// in the file are hidden so a delete from the file actually hides the provider
+// instead of reappearing via the compiled fallback.
 func LoadProviders(workdir string) (Catalog, error) {
 	if strings.TrimSpace(workdir) == "" {
 		return Catalog{}, errors.New("provider: workdir is required")
 	}
 	roots, diagnostics := catalog.ResolveRoots(workdir, true, true, nil)
 	entries := baseProviderEntries()
+	localFound := false
+	localIDs := make(map[string]struct{})
+	var pending []pendingRoot
 	for _, root := range roots {
 		path := filepath.Join(root.Path, "providers.json")
 		data, err := catalog.ReadBoundedFile(path, catalog.DefaultMaxDescriptorSize)
@@ -284,7 +308,28 @@ func LoadProviders(workdir string) (Catalog, error) {
 		}
 		items, itemDiagnostics := parseProviderFile(data, root)
 		diagnostics = append(diagnostics, itemDiagnostics...)
-		for _, item := range items {
+		// Even an empty array counts as "found" so an explicit [] hides all builtins
+		if root.Scope == catalog.ScopeLocal {
+			localFound = true
+			localIDs = make(map[string]struct{}, len(items))
+			for _, it := range items {
+				localIDs[it.Descriptor.ID] = struct{}{}
+			}
+		}
+		pending = append(pending, pendingRoot{root: root, items: items})
+	}
+	// If local file exists, hide built-in IDs not present in it
+	if localFound {
+		for id := range entries {
+			if _, ok := localIDs[id]; !ok {
+				if !pendingHasID(pending, id) {
+					delete(entries, id)
+				}
+			}
+		}
+	}
+	for _, pr := range pending {
+		for _, item := range pr.items {
 			if item.Descriptor.Factory == nil {
 				if factory, ok := builtinFactories[item.Descriptor.ID]; ok {
 					item.Descriptor.Factory = factory
@@ -296,7 +341,7 @@ func LoadProviders(workdir string) (Catalog, error) {
 				item.Descriptor.AuthChecker = cliAuthChecker
 				item.Descriptor.LoginCommand = cliLoginCommand
 			}
-			if previous, exists := entries[item.Descriptor.ID]; exists && root.Scope == catalog.ScopeGlobal && previous.Source == "local" {
+			if previous, exists := entries[item.Descriptor.ID]; exists && pr.root.Scope == catalog.ScopeGlobal && previous.Source == "local" {
 				continue
 			}
 			entries[item.Descriptor.ID] = item

@@ -257,8 +257,9 @@ type Model struct {
 	pendingAsk  *askRequest
 	confirm     confirm.Model
 	confirmMode bool
-	formMode    bool
-	formHost    *formHost
+	formMode        bool
+	formHost        *formHost
+	addProviderData *addProviderData
 	askMode     bool
 	askQuestion question.Question
 	askCursor   int
@@ -396,6 +397,9 @@ type Model struct {
 	worktreeDirty   worktreeDirtyChecker
 	pushPromptUntil time.Time
 	pushPromptBusy  bool
+
+	providerDeleteMode   bool
+	providerDeleteTarget string
 }
 
 // slashCmd is one entry of the slash command menu. aliases are extra
@@ -1132,6 +1136,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.openSessionPicker(), nil
 		}
 		switch m.currentFocus() {
+		case focusProviderDelete:
+			return m.updateProviderDeleteKey(msg)
 		case focusForm:
 			return m.updateFormKey(msg)
 		case focusConfirm:

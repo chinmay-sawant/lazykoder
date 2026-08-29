@@ -18,7 +18,7 @@ const (
 	spawnFormSelectHeight = 4
 	spawnFormMaxWidth     = 72
 	settingFormMaxWidth   = 60
-	formOverlayMaxWidth   = 76
+	formOverlayMaxWidth   = 106
 )
 
 type formHost struct {
@@ -233,7 +233,6 @@ func (m Model) updateFormKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 		return m.clearFocus(focusForm), nil
 	}
-
 	return m.updateFormMsg(key)
 }
 

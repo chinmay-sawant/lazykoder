@@ -123,13 +123,15 @@ func (m Model) openAddProviderDialog() (Model, tea.Cmd) {
 	data := &addProviderData{
 		template: templateID,
 	}
+	m.addProviderData = data
 	form := huh.NewForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
 				Key("template").
 				Title("Template").
-				Description("Choose a provider template").
+				Description("Choose a provider template: opencode, openai, gemini, grok, codex, xai, custom").
 				Options(providerTemplateOptions()...).
+				Height(len(providerTemplates)).
 				Value(&data.template),
 			huh.NewInput().
 				Key("id").
@@ -140,7 +142,15 @@ func (m Model) openAddProviderDialog() (Model, tea.Cmd) {
 				Validate(func(s string) error {
 					id := strings.TrimSpace(s)
 					if id == "" {
-						id = placeholderID
+						tid := strings.TrimSpace(data.template)
+						if tid == "" {
+							tid = "opencode"
+						}
+						if tid == "opencode" {
+							id = nextOpenCodePlaceholder()
+						} else {
+							id = randomProviderPlaceholder(tid)
+						}
 					}
 					if strings.Contains(id, " ") {
 						return fmt.Errorf("id must not contain spaces")
@@ -181,6 +191,7 @@ func (m Model) openAddProviderDialog() (Model, tea.Cmd) {
 		width: min(formOverlayMaxWidth, max(minPaneWidth, m.width-cardBorder)),
 		onDone: func(mod Model) (Model, tea.Cmd) {
 			mod = mod.clearFocus(focusForm)
+			mod.addProviderData = nil
 			id := strings.TrimSpace(data.id)
 			if id == "" {
 				id = randomProviderPlaceholder(strings.TrimSpace(data.template))
@@ -229,6 +240,7 @@ func (m Model) openAddProviderDialog() (Model, tea.Cmd) {
 			return mod, tea.Batch(clearCopyNotice(), mod.checkProviderAuth(id))
 		},
 		onCancel: func(mod Model) (Model, tea.Cmd) {
+			mod.addProviderData = nil
 			return mod.clearFocus(focusForm), nil
 		},
 	}
@@ -346,42 +358,121 @@ func (m Model) addProviderOverlayView() string {
 }
 
 func providerAddProviderPreview(m Model) string {
-	if m.formHost == nil {
+	if m.formHost == nil || m.addProviderData == nil {
 		return ""
 	}
-	// Show the first template as preview when the form is pristine.
-	// The live template choice is stored in the form data pointer, but the
-	// preview is intentionally static to avoid huh internal state coupling.
-	t := findProviderTemplate("opencode")
+	data := m.addProviderData
+	tmplID := strings.TrimSpace(data.template)
+	if tmplID == "" {
+		tmplID = "opencode"
+	}
+	t := findProviderTemplate(tmplID)
+	id := strings.TrimSpace(data.id)
+	if id == "" {
+		if tmplID == "opencode" {
+			id = nextOpenCodePlaceholder()
+		} else {
+			id = randomProviderPlaceholder(tmplID)
+		}
+	}
+	label := strings.TrimSpace(data.label)
+	if label == "" {
+		if tmplID == "opencode" {
+			label = nextOpenCodeLabelPlaceholder()
+		} else {
+			label = t.label
+			if label == "" {
+				label = id
+			}
+		}
+	}
+	baseURL := strings.TrimSpace(data.baseURL)
+	if baseURL == "" {
+		baseURL = t.baseURL
+	}
+	envKey := strings.TrimSpace(data.envKey)
+	if envKey == "" {
+		envKey = t.envKey
+	}
+	model := strings.TrimSpace(data.model)
+	if model == "" {
+		model = t.model
+	}
 	preview := map[string]any{
-		"id":          "example: " + randomProviderPlaceholder(t.id),
-		"label":       t.label,
+		"id":          id,
+		"label":       label,
 		"auth_method": t.auth,
-		"base_url":    t.baseURL,
-		"env_key":     t.envKey,
-		"model":       t.model,
+		"model":       model,
+	}
+	if baseURL != "" {
+		preview["base_url"] = baseURL
+	}
+	if envKey != "" {
+		preview["env_key"] = envKey
+	}
+	if t.auth == "grok" {
+		preview["cli"] = "grok"
+	}
+	if t.auth == "codex" {
+		preview["cli"] = "codex"
+	}
+	if len(t.id) > 0 && t.id != "custom" {
+		// keep auth display consistent
 	}
 	b, _ := json.MarshalIndent(preview, "", "  ")
-	return "Template JSON preview:\n" + string(b)
+	return "Live JSON preview:\n" + string(b)
+}
+
+func (m Model) addProviderOverlayRect() (left, top, width, height int, ok bool) {
+	if m.formHost == nil || m.formHost.kind != "add-provider" || !m.formMode {
+		return 0, 0, 0, 0, false
+	}
+	card := m.addProviderOverlayView()
+	cardW := lipgloss.Width(card)
+	cardH := lipgloss.Height(card)
+	if cardW < 1 || cardH < 1 || m.width < 1 || m.height < 1 {
+		return 0, 0, 0, 0, false
+	}
+	left = max(0, (m.width-cardW)/centerDiv)
+	top = max(0, (m.height-cardH)/centerDiv)
+	if top+cardH > m.height {
+		top = max(0, m.height-cardH)
+	}
+	return left, top, cardW, cardH, true
 }
 
 func (m Model) addProviderCloseRect() (x0, y, x1 int, ok bool) {
-	if m.formHost == nil || m.formHost.kind != "add-provider" {
+	left, top, width, height, ok := m.addProviderOverlayRect()
+	if !ok {
 		return 0, 0, 0, false
 	}
-	if !m.formMode {
-		return 0, 0, 0, false
-	}
-	for i, line := range strings.Split(m.frame(), "\n") {
-		plain := ansi.Strip(line)
-		if !strings.Contains(plain, "Add New Provider") || !strings.Contains(plain, "[x]") {
-			continue
+	card := m.addProviderOverlayView()
+	innerW := max(1, width-cardBorder-cardBorderPad)
+	_ = innerW
+	_ = height
+	// Header row is: border(1) + padding top(1) + 0 offset inside.
+	// closeBtn "[x]" is right-aligned in innerW.
+	headerY := top + 1 + 1
+	closeW := lipgloss.Width("[x]")
+	// inner left edge inside border+padding
+	innerLeft := left + 1 + cardHorzPad
+	// header gap: innerW - titleW - closeW, but we can compute directly right aligned
+	x0 = innerLeft + innerW - closeW
+	x1 = x0 + closeW
+	y = headerY
+	// Use rendered card to find exact span for safety, fallback to computed.
+	for _, line := range strings.Split(card, "\n") {
+		if strings.Contains(line, "[x]") && strings.Contains(line, "Add New Provider") {
+			s, e, found := displaySpan(ansi.Strip(line), "[x]")
+			if found {
+				// s is offset inside card's inner width; translate to screen
+				x0 = left + 1 + cardHorzPad + s
+				x1 = left + 1 + cardHorzPad + e
+				y = headerY
+				_ = card
+				break
+			}
 		}
-		start, end, found := displaySpan(plain, "[x]")
-		if !found {
-			continue
-		}
-		return max(0, start-1), i, end + 1, true
 	}
-	return 0, 0, 0, false
+	return max(0, x0-1), y, x1 + 1, true
 }

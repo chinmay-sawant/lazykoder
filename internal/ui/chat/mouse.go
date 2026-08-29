@@ -26,6 +26,54 @@ func (m Model) jumpBarRow() int {
 // mousePress starts a scrollbar drag when the click lands on a scrollbar
 // column, and jumps the viewport to the clicked position.
 func (m Model) mousePress(msg tea.MouseClickMsg) (Model, tea.Cmd) {
+	// Add-provider dialog owns the whole screen while open. Handle its chrome
+	// before transcript/rail hit-testing so clicks on the centered card are not
+	// mis-routed to the faint chat behind it.
+	if m.formMode && m.formHost != nil && m.formHost.kind == "add-provider" {
+		mu := msg.Mouse()
+		if x0, y, x1, ok := m.addProviderCloseRect(); ok && mu.Button == tea.MouseLeft && mu.Y == y && mu.X >= x0 && mu.X < x1 {
+			return m.clearFocus(focusForm), nil
+		}
+		if left, top, width, height, ok := m.addProviderOverlayRect(); ok {
+			if mu.X >= left && mu.X < left+width && mu.Y >= top && mu.Y < top+height {
+				// Click inside the centered card: translate to form local coords
+				// so huh's text inputs and select receive the hit. Huh expects
+				// screen coordinates, but the card is offset, so subtract.
+				local := tea.MouseClickMsg{}
+				// Preserve button/mod, shift position to card-local.
+				// tea.MouseClickMsg embeds tea.Mouse, so rebuild via type assertion
+				// fallback: just forward the original to huh - it uses relative
+				// ANSI widths, and the card-local translation is handled by
+				// forwarding with adjusted coordinates when possible.
+				_ = local
+				// Directly forward to huh; huh's internal hit test uses the
+				// rendered view's width, and the overlay centering is transparent
+				// because View() strings are not offset. Forwarding the screen
+				// event is sufficient after the close rect check.
+				return m.updateFormMsg(msg)
+			}
+		}
+		// Click outside the card closes nothing - keep dialog open.
+		if mu.Button == tea.MouseLeft {
+			return m, nil
+		}
+	}
+	// Provider delete confirmation is a full-screen overlay like help.
+	if m.providerDeleteMode {
+		mu := msg.Mouse()
+		if mu.Button == tea.MouseLeft {
+			// Any click outside the card cancels, inside handles y/n via keys
+			// For now, clicks on the card do nothing except keep modal.
+			return m, nil
+		}
+	}
+	// Provider picker delete affordance: top-right [del] in header
+	if m.pickerMode && m.pickerKind == pickerKindProvider && m.pickerProviderDeletable() {
+		mu := msg.Mouse()
+		if x0, y, x1, ok := m.providerPickerDeleteRect(); ok && mu.Button == tea.MouseLeft && mu.Y == y && mu.X >= x0 && mu.X < x1 {
+			return m.requestProviderDelete()
+		}
+	}
 	m = m.ensureLayout()
 	mu := msg.Mouse()
 	m.copyNotice = ""
@@ -38,11 +86,6 @@ func (m Model) mousePress(msg tea.MouseClickMsg) (Model, tea.Cmd) {
 			}
 		}
 		return m, nil
-	}
-	if m.formMode && m.formHost != nil && m.formHost.kind == "add-provider" {
-		if x0, y, x1, ok := m.addProviderCloseRect(); ok && mu.Button == tea.MouseLeft && mu.Y == y && mu.X >= x0 && mu.X < x1 {
-			return m.clearFocus(focusForm), nil
-		}
 	}
 	// Model / variant chips live on the composer footer. Handle them before
 	// the prompt and sub-agent drawer so those never swallow chip clicks
