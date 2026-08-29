@@ -442,8 +442,7 @@ func (m Model) promptLine() string {
 		}
 		text = withScrollbar(text, contentW, h, percent, true)
 	}
-	body := lipgloss.JoinVertical(lipgloss.Left, text, m.composerFooter(contentW))
-	body = keepBackground(body, theme.ColorComposer())
+	text = keepBackground(text, theme.ColorComposer())
 	// The composer uses a dedicated input surface above the neutral black
 	// canvas. Its border carries state: it throbs with the shared pulse while
 	// the agent works, holds a dim accent glow while the user edits, and stays
@@ -455,13 +454,58 @@ func (m Model) promptLine() string {
 	case m.promptEditing():
 		border = theme.PulseAccent(composerFocusGlow)
 	}
-	return lipgloss.NewStyle().
+	boxed := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(border).
 		BorderBackground(theme.ColorComposer()).
 		Background(theme.ColorComposer()).
 		Width(max(minPaneWidth, m.width)).
-		Render(body)
+		Render(text)
+	return embedComposerBorderLabels(boxed, m.composerFooter(contentW), border)
+}
+
+func embedComposerBorderLabels(boxed, footer string, border color.Color) string {
+	lines := strings.Split(boxed, "\n")
+	if len(lines) == 0 {
+		return boxed
+	}
+	plain := ansi.Strip(footer)
+	plain = strings.TrimSpace(plain)
+	if plain == "" {
+		return boxed
+	}
+	// Render label with transparent/muted look on the border: faint + muted fg, border bg.
+	label := lipgloss.NewStyle().Foreground(theme.ColorMute()).Faint(true).Background(theme.ColorComposer()).Render(" "+plain+" ")
+	labelPlain := " "+plain+" "
+	labelW := lipgloss.Width(labelPlain)
+	idx := len(lines) - 1
+	bottom := lines[idx]
+	bw := lipgloss.Width(ansi.Strip(bottom))
+
+	left := 1
+	if left+labelW > bw-1 {
+		left = max(1, bw-labelW-1)
+	}
+	// Splice display-aware: replace runes in the stripped bottom, then re-apply border color.
+	stripped := ansi.Strip(bottom)
+	runes := []rune(stripped)
+	// Find display columns: for rounded border, width == rune count (all single width).
+	// Replace slice [left : left+labelW] with labelPlain runes
+	for i, r := range []rune(labelPlain) {
+		pos := left + i
+		if pos >= 0 && pos < len(runes) {
+			runes[pos] = r
+		}
+	}
+	_ = string(runes)
+	// Re-style bottom border with border color, but keep label faint/muted via embedded ANSI.
+	// Build colored bottom: border color for border chars, label already has its own ANSI.
+	borderStyle := lipgloss.NewStyle().Foreground(border).Background(theme.ColorComposer())
+	// Split newBottomPlain around label to color border parts separately
+	before := string(runes[:left])
+	after := string(runes[left+labelW:])
+	lines[idx] = borderStyle.Render(before) + label + borderStyle.Render(after)
+	return strings.Join(lines, "\n")
 }
 
 func (m Model) composerFooter(width int) string {

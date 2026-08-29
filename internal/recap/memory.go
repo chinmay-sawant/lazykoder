@@ -1067,24 +1067,38 @@ func WriteMemoryDocument(ctx context.Context, workdir string, document MemoryDoc
 }
 
 func BuildMemoryPrompt(snapshot Snapshot, document MemoryDocument, relatedRecaps string) (string, error) {
-	current, err := renderMemoryPromptDocument(document)
+	// Keep the prompt focused: only snapshot messages plus recent_context
+	// (and skills) are sent for memory creation. Preferences, decisions,
+	// things_to_avoid, questions and source ledger are dropped to keep the
+	// prompt at ~5000 tokens with priority to recent_context.
+	filtered := filterMemoryDocumentForPrompt(document)
+	current, err := renderMemoryPromptDocument(filtered)
 	if err != nil {
 		return "", err
 	}
 	if len([]rune(string(current))) > memoryPromptCompactionThreshold {
-		compact := compactMemoryPromptDocument(document, snapshot)
+		compact := compactMemoryPromptDocument(filtered, snapshot)
 		current, err = renderMemoryPromptDocument(compact)
 		if err != nil {
 			return "", err
 		}
 	}
+	// Enforce ~5000 tokens (~20000 runes) with priority to snapshot + recent_context
+	const memoryPromptMaxRunes = 20000
+	promptLimit := memoryPromptLimit()
+	if promptLimit > memoryPromptMaxRunes {
+		promptLimit = memoryPromptMaxRunes
+	}
 	currentText := truncateString(string(current), memoryMaxPromptDocument)
-	relatedText := truncateString(relatedRecaps, maxRelatedOutput)
+	// Drop related knowledge by default to keep prompt small; only snapshot
+	// plus recent_context should go. If needed, related can be re-added
+	// behind a tiny remaining budget, but for now drop it.
+	relatedText := ""
+	_ = relatedRecaps
 	snapshotPrompt, err := buildPrompt(snapshot, "")
 	if err != nil {
 		return "", fmt.Errorf("memory: snapshot prompt: %w", err)
 	}
-	promptLimit := memoryPromptLimit()
 	base := renderMemoryPrompt(snapshot, "", "", snapshotPrompt)
 	remaining := promptLimit - len([]rune(base))
 	if remaining < 0 {
@@ -1098,6 +1112,19 @@ func BuildMemoryPrompt(snapshot Snapshot, document MemoryDocument, relatedRecaps
 		return "", errors.New("memory: prompt exceeds limit")
 	}
 	return prompt, nil
+}
+
+func filterMemoryDocumentForPrompt(document MemoryDocument) MemoryDocument {
+	filtered := cloneMemoryDocument(document)
+	// Drop non-priority sections to keep prompt at ~5000 tokens
+	filtered.Preferences = nil
+	filtered.Decisions = nil
+	filtered.ThingsToAvoid = nil
+	filtered.Questions = nil
+	// Keep RecentContext and Skills as priority
+	// Sources are already stripped in renderMemoryPromptDocument, but clear here too
+	filtered.Sources = nil
+	return filtered
 }
 
 func memoryPromptLimit() int {
