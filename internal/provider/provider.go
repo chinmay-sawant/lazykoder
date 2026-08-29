@@ -23,7 +23,16 @@ type Client interface {
 	RetryPolicy() opencode.RetryPolicy
 	SetRetryPolicy(opencode.RetryPolicy)
 	ModelInfos(context.Context) ([]opencode.ModelInfo, error)
+}
+
+// FreeModelCatalog is implemented by providers that expose an additional
+// catalog outside their standard models endpoint.
+type FreeModelCatalog interface {
 	FreeModelInfos(context.Context) ([]opencode.ModelInfo, error)
+}
+
+// UsageProvider is implemented by providers that expose account usage.
+type UsageProvider interface {
 	Usage(context.Context) (opencode.BillingUsage, error)
 }
 

@@ -138,7 +138,7 @@ func TestMergeMemorySupersedesAndRetainsSourceLedger(t *testing.T) {
 			SourceMessageIDs: []string{"msg_4"},
 		}},
 	}
-	got, err := MergeMemory(previous, envelope, snapshot, time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC))
+	got, err := MergeMemoryWithSkills(previous, envelope, snapshot, nil, time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatalf("MergeMemory: %v", err)
 	}

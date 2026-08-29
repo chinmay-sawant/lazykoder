@@ -14,6 +14,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/chinmay-sawant/lazykoder/internal/workspace"
 )
 
 const (
@@ -301,30 +303,9 @@ func formatHits(raw, root string, max int) (string, int, bool, error) {
 
 func resolvePath(path, root string) (string, error) {
 	path = strings.TrimSpace(path)
-	var p string
-	if path == "" || path == "." {
-		p = root
-	} else if filepath.IsAbs(path) {
-		p = filepath.Clean(path)
-	} else {
-		p = filepath.Join(root, filepath.Clean(path))
-	}
-	abs, err := filepath.Abs(p)
+	abs, err := workspace.Resolve(path, root)
 	if err != nil {
 		return "", fmt.Errorf("grep: %s: %w", path, err)
-	}
-	abs = filepath.Clean(abs)
-	if !inside(abs, root) {
-		return "", fmt.Errorf("grep: %s: path escapes session directory", abs)
-	}
-	// Symlink escape check (best-effort).
-	rootReal, err := filepath.EvalSymlinks(root)
-	if err == nil {
-		if resolved, err := filepath.EvalSymlinks(abs); err == nil {
-			if !inside(resolved, rootReal) {
-				return "", fmt.Errorf("grep: %s: path escapes session directory via symlink", abs)
-			}
-		}
 	}
 	st, err := os.Stat(abs)
 	if err != nil {
@@ -334,14 +315,6 @@ func resolvePath(path, root string) (string, error) {
 		return "", fmt.Errorf("grep: %s: not a regular file or directory", abs)
 	}
 	return abs, nil
-}
-
-func inside(p, root string) bool {
-	rel, err := filepath.Rel(root, p)
-	if err != nil {
-		return false
-	}
-	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel))
 }
 
 func relOrSelf(path, root string) string {

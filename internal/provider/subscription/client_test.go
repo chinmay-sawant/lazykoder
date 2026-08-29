@@ -11,6 +11,16 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 )
 
+func writeExecutableTestScript(t *testing.T, path, script string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(script), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCodexClientReturnsLazyKoderToolCalls(t *testing.T) {
 	var got Request
 	client := NewCodex("gpt-test-codex", WithRunner(func(_ context.Context, request Request) (string, error) {
@@ -61,9 +71,7 @@ printf '%s\n' \
   '  - grok-4.6' \
   '  * grok-4.5 (default)'
 `
-	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	writeExecutableTestScript(t, path, script)
 	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
 
 	client := NewGrok("grok-4.6")
@@ -95,9 +103,7 @@ func TestGrokClientForwardsSelectedReasoningEffort(t *testing.T) {
 printf '%s\n' "$@" > "$GROK_ARGS_FILE"
 printf '%s\n' '{"content":"done","tool_calls":[]}'
 `
-	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	writeExecutableTestScript(t, path, script)
 	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
 	t.Setenv("GROK_ARGS_FILE", argsPath)
 

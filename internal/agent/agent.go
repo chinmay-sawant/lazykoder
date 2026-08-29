@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -124,7 +125,6 @@ type Agent struct {
 
 	// projectInstructions caches workdir AGENTS.md after the first load.
 	projectInstructions     string
-	projectInstructionsPath string
 	projectInstructionsDone bool
 
 	// recallBlock is wire-only and valid for the first ordinary model request
@@ -158,16 +158,9 @@ func New(store *db.Store, client provider.Client, workdir string, opts Options) 
 	if strings.TrimSpace(opts.Model) == "" {
 		opts.Model = opencode.DefaultModelID
 	}
-	opts.ToolNames = cloneStrings(opts.ToolNames)
-	opts.BashAllowlist = cloneStrings(opts.BashAllowlist)
+	opts.ToolNames = slices.Clone(opts.ToolNames)
+	opts.BashAllowlist = slices.Clone(opts.BashAllowlist)
 	return &Agent{store: store, client: client, workdir: workdir, opts: opts}
-}
-
-func cloneStrings(values []string) []string {
-	if values == nil {
-		return nil
-	}
-	return append([]string{}, values...)
 }
 
 // ensureProjectInstructions loads AGENTS.md once per Agent.
@@ -176,12 +169,11 @@ func (a *Agent) ensureProjectInstructions() {
 		return
 	}
 	a.projectInstructionsDone = true
-	content, path, ok := LoadProjectInstructions(a.workdir)
+	content, _, ok := LoadProjectInstructions(a.workdir)
 	if !ok {
 		return
 	}
 	a.projectInstructions = content
-	a.projectInstructionsPath = path
 }
 
 // withProjectInstructions prepends a system message when AGENTS.md is present.

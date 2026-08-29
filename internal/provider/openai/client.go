@@ -162,13 +162,3 @@ func (client *Client) ModelInfos(ctx context.Context) ([]opencode.ModelInfo, err
 	}
 	return infos, nil
 }
-
-// FreeModelInfos has no OpenAI-specific free-model route.
-func (client *Client) FreeModelInfos(context.Context) ([]opencode.ModelInfo, error) {
-	return nil, nil
-}
-
-// Usage is not exposed by the OpenAI models endpoint.
-func (client *Client) Usage(context.Context) (opencode.BillingUsage, error) {
-	return opencode.BillingUsage{}, nil
-}

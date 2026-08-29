@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -21,6 +20,7 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/tools/todo"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/webfetch"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/write"
+	"github.com/chinmay-sawant/lazykoder/internal/workspace"
 )
 
 type bashArgs struct {
@@ -30,19 +30,6 @@ type bashArgs struct {
 
 // baseToolRunner executes one allowed base tool call (method-expression shape).
 type baseToolRunner func(a *Agent, ctx context.Context, events chan<- Event, partID, title string, tc ChatToolCall) (string, error)
-
-// baseToolRunners maps advertised base tool names to their executors.
-// Task-family tools are not registered here; they go through SubagentHost.
-var baseToolRunners = map[string]baseToolRunner{
-	toolBash:      (*Agent).execBash,
-	toolRead:      (*Agent).execRead,
-	toolGrep:      (*Agent).execGrep,
-	toolWrite:     (*Agent).execWrite,
-	toolEdit:      (*Agent).execEdit,
-	toolWebfetch:  (*Agent).execWebfetch,
-	toolQuestion:  (*Agent).execQuestion,
-	toolTodowrite: (*Agent).execTodowrite,
-}
 
 func splitToolCallArguments(tc ChatToolCall) ([]ChatToolCall, error) {
 	dec := json.NewDecoder(strings.NewReader(tc.Arguments))
@@ -229,16 +216,16 @@ func toolTitle(tc ChatToolCall) string {
 }
 
 func (a *Agent) executeTool(ctx context.Context, events chan<- Event, partID, title string, tc ChatToolCall) (string, error) {
-	requireBaseToolRegistry()
 	if isTaskToolName(tc.Name) {
 		return a.execTaskTool(ctx, events, partID, title, tc)
 	}
-	if _, known := allBaseToolSpecs[tc.Name]; known && !toolAllowed(a.opts.ToolNames, tc.Name) {
+	registration, known := baseToolRegistry[tc.Name]
+	if known && !toolAllowed(a.opts.ToolNames, tc.Name) {
 		out := "tool not allowed: " + tc.Name
 		return a.updateTool(ctx, events, partID, title, tc, "denied", &out, deniedJSON(), nil, nil)
 	}
-	if run, ok := baseToolRunners[tc.Name]; ok {
-		return run(a, ctx, events, partID, title, tc)
+	if known {
+		return registration.runner(a, ctx, events, partID, title, tc)
 	}
 	out := "unknown tool: " + tc.Name
 	return a.updateTool(ctx, events, partID, title, tc, "denied", &out, deniedJSON(), nil, nil)
@@ -276,10 +263,12 @@ func (a *Agent) execBash(ctx context.Context, events chan<- Event, partID, title
 	if workdir == "" {
 		workdir = a.workdir
 	}
-	if !withinWorkspace(a.workdir, workdir) {
+	resolvedWorkdir, err := workspace.Resolve(workdir, a.workdir)
+	if err != nil {
 		msg := "bash: workdir must remain inside the approved workspace"
 		return a.updateTool(ctx, events, partID, title, tc, "denied", &msg, errorJSON(msg), nil, nil)
 	}
+	workdir = resolvedWorkdir
 	deny := func() (string, error) {
 		out := deniedJSON()
 		return a.updateTool(ctx, events, partID, title, tc, "denied", &out, out, nil, nil)
@@ -601,25 +590,4 @@ func errorJSON(msg string) string {
 		Error string `json:"error"`
 	}{Error: msg})
 	return string(out)
-}
-
-func withinWorkspace(root, candidate string) bool {
-	r, err := filepath.Abs(root)
-	if err != nil {
-		return false
-	}
-	c, err := filepath.Abs(candidate)
-	if err != nil {
-		return false
-	}
-	r, err = filepath.EvalSymlinks(r)
-	if err != nil {
-		return false
-	}
-	c, err = filepath.EvalSymlinks(c)
-	if err != nil {
-		return false
-	}
-	rel, err := filepath.Rel(r, c)
-	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }

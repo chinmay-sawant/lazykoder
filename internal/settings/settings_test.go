@@ -486,26 +486,6 @@ func TestEmptyModelNormalizes(t *testing.T) {
 	}
 }
 
-func TestToolsForRole(t *testing.T) {
-	a := Default().Agents
-	explore := a.ToolsForRole("explore")
-	if !reflect.DeepEqual(explore, []string{"bash", "read", "grep", "webfetch"}) {
-		t.Fatalf("explore = %v", explore)
-	}
-	plan := a.ToolsForRole("plan")
-	if !reflect.DeepEqual(plan, []string{"bash", "read", "grep", "webfetch"}) {
-		t.Fatalf("plan = %v", plan)
-	}
-	general := a.ToolsForRole("general")
-	if !reflect.DeepEqual(general, []string{"bash", "read", "grep", "write", "edit", "webfetch"}) {
-		t.Fatalf("general = %v", general)
-	}
-	unknown := a.ToolsForRole("other")
-	if !reflect.DeepEqual(unknown, []string{"bash", "read", "grep", "webfetch"}) {
-		t.Fatalf("unknown = %v", unknown)
-	}
-}
-
 func TestEffectiveTimeout(t *testing.T) {
 	a := Agents{DefaultTimeoutSec: 0}
 	if a.EffectiveTimeout() != 0 {

@@ -5,22 +5,10 @@ import (
 	"time"
 
 	"github.com/chinmay-sawant/lazykoder/internal/roles"
+	"github.com/chinmay-sawant/lazykoder/internal/settings"
 )
 
 const (
-	// HardMaxConcurrent is the absolute concurrency ceiling.
-	HardMaxConcurrent = 20
-	// DefaultMaxConcurrent is the default slot count.
-	DefaultMaxConcurrent = 4
-	// DefaultMaxQueued is the default cap on running+queued jobs.
-	DefaultMaxQueued = 40
-	// DefaultMaxDepth is 1 (no nested task tools on children).
-	DefaultMaxDepth = 1
-	// DefaultTimeout is the child wall-clock timeout.
-	DefaultTimeout = 600 * time.Second
-	// DefaultChildMaxSteps is the child agent step budget.
-	// Keep in sync with settings.DefaultChildMaxSteps.
-	DefaultChildMaxSteps = 1000
 	// DefaultRole is used when Spec.Role is empty.
 	DefaultRole = RoleExplore
 	// BashConfirmParent asks the parent UI to confirm child bash.
@@ -38,7 +26,6 @@ type Config struct {
 	Timeout              time.Duration
 	ChildMaxSteps        int
 	Model                string // inherit if empty (runner)
-	Endpoint             string
 	Variant              string
 	ExploreModel         string
 	ExploreClass         string
@@ -51,45 +38,42 @@ type Config struct {
 
 // NewConfig returns production defaults with sub-agents enabled.
 func NewConfig() Config {
-	return Config{
-		Enabled:              true,
-		MaxConcurrent:        DefaultMaxConcurrent,
-		MaxQueued:            DefaultMaxQueued,
-		MaxDepth:             DefaultMaxDepth,
-		Timeout:              DefaultTimeout,
-		ChildMaxSteps:        DefaultChildMaxSteps,
-		BashConfirm:          BashConfirmParent,
-		AllowParallelWriters: false,
-		DefaultRole:          DefaultRole,
-	}.Normalize()
+	return ConfigFromSettings(settings.Default())
 }
 
 // Normalize clamps fields to safe ranges and fills defaults.
 func (c Config) Normalize() Config {
-	if c.MaxConcurrent < 1 {
-		c.MaxConcurrent = DefaultMaxConcurrent
+	if c.MaxConcurrent < settings.MinMaxConcurrent {
+		c.MaxConcurrent = settings.DefaultMaxConcurrent
 	}
-	if c.MaxConcurrent > HardMaxConcurrent {
-		c.MaxConcurrent = HardMaxConcurrent
+	if c.MaxConcurrent > settings.MaxMaxConcurrent {
+		c.MaxConcurrent = settings.MaxMaxConcurrent
 	}
 	if c.MaxQueued < 1 {
-		c.MaxQueued = DefaultMaxQueued
+		c.MaxQueued = settings.DefaultMaxQueued
 	}
-	if c.MaxDepth < 1 {
-		c.MaxDepth = DefaultMaxDepth
+	if c.MaxQueued > settings.MaxMaxQueued {
+		c.MaxQueued = settings.MaxMaxQueued
 	}
-	// Product nesting is depth 1 until a nested Host ships; clamp extras.
-	if c.MaxDepth > DefaultMaxDepth {
-		c.MaxDepth = DefaultMaxDepth
+	if c.MaxQueued < c.MaxConcurrent {
+		c.MaxQueued = c.MaxConcurrent
 	}
-	if c.Timeout <= 0 {
-		c.Timeout = DefaultTimeout
+	if c.MaxDepth < settings.DefaultMaxDepth {
+		c.MaxDepth = settings.DefaultMaxDepth
 	}
-	if c.ChildMaxSteps < 1 {
-		c.ChildMaxSteps = DefaultChildMaxSteps
+	if c.MaxDepth > settings.MaxMaxDepth {
+		c.MaxDepth = settings.MaxMaxDepth
+	}
+	if c.Timeout < 0 {
+		c.Timeout = time.Duration(settings.DefaultAgentsTimeoutSec) * time.Second
+	}
+	if c.ChildMaxSteps < settings.MinMaxSteps {
+		c.ChildMaxSteps = settings.DefaultChildMaxSteps
+	}
+	if c.ChildMaxSteps > settings.MaxMaxSteps {
+		c.ChildMaxSteps = settings.MaxMaxSteps
 	}
 	c.Model = strings.TrimSpace(c.Model)
-	c.Endpoint = strings.TrimSpace(c.Endpoint)
 	c.Variant = strings.TrimSpace(c.Variant)
 	c.ExploreModel = strings.TrimSpace(c.ExploreModel)
 	c.ExploreClass = strings.TrimSpace(strings.ToLower(c.ExploreClass))

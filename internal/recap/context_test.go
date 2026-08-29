@@ -1,6 +1,7 @@
 package recap
 
 import (
+	"context"
 	"errors"
 	"testing"
 )
@@ -10,41 +11,42 @@ func TestContextAwareEntriesRejectNilContext(t *testing.T) {
 	snapshot := workerTestSnapshot()
 	worker := Worker{Model: "test"}
 	memoryWorker := MemoryWorker{Model: "test"}
+	var nilContext context.Context
 
 	tests := []struct {
 		name string
 		call func() error
 	}{
 		{name: "worker", call: func() error {
-			_, err := worker.Generate(nil, snapshot, "")
+			_, err := worker.Generate(nilContext, snapshot, "")
 			return err
 		}},
 		{name: "memory worker", call: func() error {
-			_, err := memoryWorker.Generate(nil, snapshot, NewMemoryDocument(), "")
+			_, err := memoryWorker.Generate(nilContext, snapshot, NewMemoryDocument(), "")
 			return err
 		}},
 		{name: "related avoid", call: func() error {
-			_, err := RelatedAvoid(nil, root, snapshot, nil)
+			_, err := RelatedAvoid(nilContext, root, snapshot, nil)
 			return err
 		}},
 		{name: "related memory evidence", call: func() error {
-			_, err := RelatedRecapEvidence(nil, root, snapshot, nil)
+			_, err := RelatedRecapEvidence(nilContext, root, snapshot, nil)
 			return err
 		}},
 		{name: "materialize", call: func() error {
-			_, err := Materialize(nil, root, MaterializeInput{})
+			_, err := Materialize(nilContext, root, MaterializeInput{})
 			return err
 		}},
 		{name: "write memory", call: func() error {
-			_, err := WriteMemoryDocument(nil, root, NewMemoryDocument())
+			_, err := WriteMemoryDocument(nilContext, root, NewMemoryDocument())
 			return err
 		}},
 		{name: "run", call: func() error {
-			_, err := Run(nil, RunInput{})
+			_, err := Run(nilContext, RunInput{})
 			return err
 		}},
 		{name: "memory run", call: func() error {
-			return RunMemoryUpdate(nil, MemoryRunInput{})
+			return RunMemoryUpdate(nilContext, MemoryRunInput{})
 		}},
 	}
 	for _, test := range tests {

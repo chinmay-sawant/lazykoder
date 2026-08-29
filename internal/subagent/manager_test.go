@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/chinmay-sawant/lazykoder/internal/db"
+	"github.com/chinmay-sawant/lazykoder/internal/settings"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/task"
 )
 
@@ -399,20 +400,20 @@ func TestHostUnknownToolDenied(t *testing.T) {
 	if status != "denied" {
 		t.Fatalf("status=%q", status)
 	}
-	if !IsTaskTool("task") || IsTaskTool("bash") {
+	if !task.IsTaskTool("task") || task.IsTaskTool("bash") {
 		t.Fatal("IsTaskTool mismatch")
 	}
 }
 
 func TestConfigNormalize(t *testing.T) {
-	c := Config{MaxConcurrent: 100, MaxQueued: 0, Timeout: 0, DefaultRole: "nope", MaxDepth: 3, ChildMaxSteps: 0}.Normalize()
-	if c.MaxConcurrent != HardMaxConcurrent {
+	c := Config{MaxConcurrent: 100, MaxQueued: 0, Timeout: -time.Second, DefaultRole: "nope", MaxDepth: 3, ChildMaxSteps: 0}.Normalize()
+	if c.MaxConcurrent != settings.MaxMaxConcurrent {
 		t.Fatalf("MaxConcurrent=%d", c.MaxConcurrent)
 	}
-	if c.MaxQueued != DefaultMaxQueued {
+	if c.MaxQueued != settings.DefaultMaxQueued {
 		t.Fatalf("MaxQueued=%d", c.MaxQueued)
 	}
-	if c.Timeout != DefaultTimeout {
+	if c.Timeout != time.Duration(settings.DefaultAgentsTimeoutSec)*time.Second {
 		t.Fatalf("Timeout=%v", c.Timeout)
 	}
 	if c.DefaultRole != DefaultRole {
@@ -421,10 +422,10 @@ func TestConfigNormalize(t *testing.T) {
 	if c.BashConfirm != BashConfirmParent {
 		t.Fatalf("BashConfirm=%q", c.BashConfirm)
 	}
-	if c.MaxDepth != DefaultMaxDepth || DefaultMaxDepth != 1 {
+	if c.MaxDepth != settings.DefaultMaxDepth || settings.DefaultMaxDepth != 1 {
 		t.Fatalf("MaxDepth=%d, want product depth 1", c.MaxDepth)
 	}
-	if c.ChildMaxSteps != DefaultChildMaxSteps || DefaultChildMaxSteps != 1000 {
+	if c.ChildMaxSteps != settings.DefaultChildMaxSteps || settings.DefaultChildMaxSteps != 1000 {
 		t.Fatalf("ChildMaxSteps=%d, want 1000", c.ChildMaxSteps)
 	}
 }

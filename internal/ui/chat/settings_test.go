@@ -360,8 +360,8 @@ func TestSettingsRecapModelOpensSharedModelDrawer(t *testing.T) {
 	m.settingsCursor = settingsRowRecapModel
 
 	m = upd(m, tea.KeyPressMsg{Code: tea.KeyEnter})
-	if !m.pickerMode || m.pickerKind != pickerKindModel || !m.settingsPickRecap {
-		t.Fatalf("picker state = mode=%v kind=%q recap=%v, want shared model drawer", m.pickerMode, m.pickerKind, m.settingsPickRecap)
+	if !m.pickerMode || m.pickerKind != pickerKindModel || m.settingsPickerTarget != settingsPickerRecapModel {
+		t.Fatalf("picker state = mode=%v kind=%q target=%d, want shared recap model drawer", m.pickerMode, m.pickerKind, m.settingsPickerTarget)
 	}
 	if m.pickerCursor != 0 {
 		t.Fatalf("picker cursor = %d, want current recap model at index 0", m.pickerCursor)
@@ -393,8 +393,8 @@ func TestSettingsRecapModelMouseOpensSharedModelDrawer(t *testing.T) {
 		t.Fatalf("recap model label missing from painted row: %q", line)
 	}
 	next, _, hit := m.settingsHit((x0+x1)/2, settingsPaintedRowY(m, "recap model"), tea.MouseLeft)
-	if !hit || !next.pickerMode || next.pickerKind != pickerKindModel || !next.settingsPickRecap {
-		t.Fatalf("mouse result = hit=%v picker=%v kind=%q recap=%v, want shared model drawer", hit, next.pickerMode, next.pickerKind, next.settingsPickRecap)
+	if !hit || !next.pickerMode || next.pickerKind != pickerKindModel || next.settingsPickerTarget != settingsPickerRecapModel {
+		t.Fatalf("mouse result = hit=%v picker=%v kind=%q target=%d, want shared recap model drawer", hit, next.pickerMode, next.pickerKind, next.settingsPickerTarget)
 	}
 }
 
@@ -417,8 +417,8 @@ func TestSettingsChildVariantUsesSharedVariantDrawer(t *testing.T) {
 	m.settingsCursor = settingsRowChildVariant
 
 	m = upd(m, tea.KeyPressMsg{Code: tea.KeyEnter})
-	if !m.pickerMode || m.pickerKind != pickerKindVariant || !m.settingsPickChildVariant {
-		t.Fatalf("picker state = mode=%v kind=%q child-variant=%v, want shared variant drawer", m.pickerMode, m.pickerKind, m.settingsPickChildVariant)
+	if !m.pickerMode || m.pickerKind != pickerKindVariant || m.settingsPickerTarget != settingsPickerChildVariant {
+		t.Fatalf("picker state = mode=%v kind=%q target=%d, want shared child variant drawer", m.pickerMode, m.pickerKind, m.settingsPickerTarget)
 	}
 	if len(m.pickerItems) != 2 || m.pickerItems[0] != "low" || m.pickerItems[1] != "high" {
 		t.Fatalf("child variant choices = %v, want [low high]", m.pickerItems)
@@ -458,8 +458,8 @@ func TestSettingsChildVariantMouseOpensSharedVariantDrawer(t *testing.T) {
 	}
 
 	next, _, hit := m.settingsHit((x0+x1)/2, settingsPaintedRowY(m, "child model variant"), tea.MouseLeft)
-	if !hit || !next.pickerMode || next.pickerKind != pickerKindVariant || !next.settingsPickChildVariant {
-		t.Fatalf("mouse result = hit=%v picker=%v kind=%q child-variant=%v, want shared variant drawer", hit, next.pickerMode, next.pickerKind, next.settingsPickChildVariant)
+	if !hit || !next.pickerMode || next.pickerKind != pickerKindVariant || next.settingsPickerTarget != settingsPickerChildVariant {
+		t.Fatalf("mouse result = hit=%v picker=%v kind=%q target=%d, want shared child variant drawer", hit, next.pickerMode, next.pickerKind, next.settingsPickerTarget)
 	}
 }
 
@@ -468,24 +468,23 @@ func TestSettingsChildAndExploreModelMouseOpenSharedModelDrawer(t *testing.T) {
 		name     string
 		row      int
 		label    string
-		child    bool
-		explore  bool
+		target   settingsPickerTarget
 		getValue func(settings.Settings) string
 	}{
 		{
-			name:  "child model override",
-			row:   settingsRowChildModel,
-			label: "child model override",
-			child: true,
+			name:   "child model override",
+			row:    settingsRowChildModel,
+			label:  "child model override",
+			target: settingsPickerChildModel,
 			getValue: func(s settings.Settings) string {
 				return s.Agents.ModelOverride
 			},
 		},
 		{
-			name:    "explore model",
-			row:     settingsRowExploreModel,
-			label:   "explore model",
-			explore: true,
+			name:   "explore model",
+			row:    settingsRowExploreModel,
+			label:  "explore model",
+			target: settingsPickerExploreModel,
 			getValue: func(s settings.Settings) string {
 				return s.Agents.ExploreModel
 			},
@@ -508,8 +507,8 @@ func TestSettingsChildAndExploreModelMouseOpenSharedModelDrawer(t *testing.T) {
 			if !next.pickerMode || next.pickerKind != pickerKindModel {
 				t.Fatalf("mouse result = picker=%v kind=%q, want shared model drawer", next.pickerMode, next.pickerKind)
 			}
-			if next.settingsPickChild != tc.child || next.settingsPickExplore != tc.explore {
-				t.Fatalf("picker target = child=%v explore=%v, want child=%v explore=%v", next.settingsPickChild, next.settingsPickExplore, tc.child, tc.explore)
+			if next.settingsPickerTarget != tc.target {
+				t.Fatalf("picker target = %d, want %d", next.settingsPickerTarget, tc.target)
 			}
 			if next.pickerSelectedValue() != "" || next.pickerCursor != 0 {
 				t.Fatalf("inherit selection = value %q cursor %d, want empty value at index 0", next.pickerSelectedValue(), next.pickerCursor)

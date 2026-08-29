@@ -30,8 +30,12 @@ func TestSaveLoadRoundtrip(t *testing.T) {
 	if models[0].Endpoint != "https://opencode.ai/zen/go/v1/chat/completions" {
 		t.Errorf("endpoint = %q", models[0].Endpoint)
 	}
-	if EndpointOf(models, "deepseek-v4-flash") == "" || EndpointOf(models, "missing") != "" {
-		t.Errorf("EndpointOf = %q / %q", EndpointOf(models, "deepseek-v4-flash"), EndpointOf(models, "missing"))
+	info, found := InfoOf(models, "deepseek-v4-flash")
+	if !found || info.Endpoint == "" {
+		t.Fatalf("saved model endpoint = %+v, found=%t", info, found)
+	}
+	if _, found := InfoOf(models, "missing"); found {
+		t.Fatal("missing model unexpectedly found")
 	}
 	if !fresh {
 		t.Error("fresh = false, want true within TTL")

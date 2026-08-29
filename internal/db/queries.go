@@ -212,7 +212,7 @@ func (s *Store) SetMessageVisibility(ctx context.Context, messageID string, visi
 	if err := tx.QueryRowContext(ctx, `SELECT session_id FROM messages WHERE id = ?`, messageID).Scan(&sessionID); err != nil {
 		return fmt.Errorf("db: message session for visibility: %w", err)
 	}
-	if err := touchSessionTx(ctx, tx, sessionID, 0); err != nil {
+	if err := touchSession(ctx, tx, sessionID, 0); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -242,10 +242,6 @@ func touchSession(ctx context.Context, db execContext, sessionID string, when in
 		return fmt.Errorf("db: touch session: %w", err)
 	}
 	return nil
-}
-
-func touchSessionTx(ctx context.Context, tx *sql.Tx, sessionID string, when int64) error {
-	return touchSession(ctx, tx, sessionID, when)
 }
 
 func touchConversationTx(ctx context.Context, tx *sql.Tx, sessionID string, when int64) error {

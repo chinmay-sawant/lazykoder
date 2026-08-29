@@ -523,40 +523,31 @@ func (m Model) selectPickerItem(idx int) (Model, tea.Cmd) {
 	if !m.pickerBuilt || idx < 0 || idx >= len(m.pickerItems) {
 		return m, nil
 	}
-	if m.settingsPickChildVariant {
+	switch m.settingsPickerTarget {
+	case settingsPickerChildVariant:
 		m = m.setChildVariant(m.pickerItems[idx])
-		m = m.finishPickerSelection()
-		m.settingsPickChildVariant = false
-		return m.openSettings(), nil
-	}
-	if m.settingsPickDefault {
+	case settingsPickerDefaultModel, settingsPickerDefaultVariant:
 		if m.pickerKind == pickerKindVariant {
 			m = m.setDefaultVariant(m.pickerItems[idx])
 		} else {
 			m = m.setDefaultModel(m.pickerItems[idx])
 		}
-		m = m.finishPickerSelection()
-		m.settingsPickDefault = false
-		return m.openSettings(), nil
-	}
-	if m.settingsPickRecap {
+	case settingsPickerRecapModel:
 		m = m.setRecapModel(m.pickerItems[idx])
-		m = m.finishPickerSelection()
-		m.settingsPickRecap = false
-		return m.openSettings(), nil
-	}
-	if m.settingsPickChild || m.settingsPickExplore {
+	case settingsPickerChildModel, settingsPickerExploreModel:
 		selected := strings.TrimSpace(m.pickerItems[idx])
-		if m.settingsPickChild {
+		if m.settingsPickerTarget == settingsPickerChildModel {
 			m = m.setChildModel(selected)
 		} else {
 			m = m.setExploreModel(selected)
 		}
-		m = m.finishPickerSelection()
-		m.settingsPickChild = false
-		m.settingsPickExplore = false
-		return m.openSettings(), nil
+	default:
+		goto normalSelection
 	}
+	m = m.finishPickerSelection()
+	return m.openSettings(), nil
+
+normalSelection:
 	if m.pickerKind == pickerKindSkills {
 		for _, skill := range m.pickerSkillItems {
 			if skill.DescriptorPath != m.pickerItems[idx] {
@@ -631,17 +622,12 @@ func (m Model) finishPickerSelection() Model {
 }
 
 func (m Model) closePicker() Model {
-	reopenSettings := m.settingsPickDefault || m.settingsPickRecap ||
-		m.settingsPickChild || m.settingsPickExplore || m.settingsPickChildVariant
+	reopenSettings := m.settingsPickerTarget != settingsPickerNone
 	m = m.clearFocus(focusPicker)
 	m.pickerKind = pickerKindModel
 	m.pickerSkillItems = nil
 	m.dragOn = false
-	m.settingsPickDefault = false
-	m.settingsPickRecap = false
-	m.settingsPickChild = false
-	m.settingsPickExplore = false
-	m.settingsPickChildVariant = false
+	m.settingsPickerTarget = settingsPickerNone
 	if reopenSettings {
 		return m.openSettings()
 	}
@@ -824,7 +810,7 @@ func (m Model) pickerSource() []string {
 }
 
 func (m Model) variantPickerModel() (string, string) {
-	if m.settingsPickChildVariant {
+	if m.settingsPickerTarget == settingsPickerChildVariant {
 		cfg := m.projectSettings
 		return childModel(cfg), cfg.EffectiveOrchestrator().Provider
 	}
@@ -840,7 +826,7 @@ func (m Model) modelPickerChoices() []modelChoice {
 }
 
 func (m Model) settingsModelPickerUsesInherit() bool {
-	return m.settingsPickChild || m.settingsPickExplore
+	return m.settingsPickerTarget == settingsPickerChildModel || m.settingsPickerTarget == settingsPickerExploreModel
 }
 
 func (m Model) pickerSelectedValue() string {
@@ -851,7 +837,7 @@ func (m Model) pickerSelectedValue() string {
 		return ""
 	}
 	if m.pickerKind == pickerKindVariant {
-		if m.settingsPickChildVariant {
+		if m.settingsPickerTarget == settingsPickerChildVariant {
 			return m.projectSettings.Agents.ModelVariant
 		}
 		return m.variant
@@ -859,13 +845,13 @@ func (m Model) pickerSelectedValue() string {
 	if m.pickerKind == pickerKindProvider {
 		return m.projectSettings.EffectiveProvider()
 	}
-	if m.settingsPickChild {
+	if m.settingsPickerTarget == settingsPickerChildModel {
 		return m.projectSettings.Agents.ModelOverride
 	}
-	if m.settingsPickExplore {
+	if m.settingsPickerTarget == settingsPickerExploreModel {
 		return m.projectSettings.Agents.ExploreModel
 	}
-	if m.settingsPickRecap {
+	if m.settingsPickerTarget == settingsPickerRecapModel {
 		return m.projectSettings.EffectiveRecap().Model
 	}
 	current := m.model
@@ -883,7 +869,7 @@ func (m Model) pickerSelectedLabel() string {
 		return "none"
 	}
 	if m.pickerKind == pickerKindVariant {
-		if m.settingsPickChildVariant {
+		if m.settingsPickerTarget == settingsPickerChildVariant {
 			if m.projectSettings.Agents.ModelVariant == "" {
 				return "default"
 			}
@@ -900,16 +886,16 @@ func (m Model) pickerSelectedLabel() string {
 		}
 		return m.projectSettings.EffectiveProvider()
 	}
-	if m.settingsPickChild && m.projectSettings.Agents.ModelOverride == "" {
+	if m.settingsPickerTarget == settingsPickerChildModel && m.projectSettings.Agents.ModelOverride == "" {
 		return "inherit"
 	}
-	if m.settingsPickExplore && m.projectSettings.Agents.ExploreModel == "" {
+	if m.settingsPickerTarget == settingsPickerExploreModel && m.projectSettings.Agents.ExploreModel == "" {
 		return "inherit"
 	}
-	if m.settingsPickChild {
+	if m.settingsPickerTarget == settingsPickerChildModel {
 		return m.projectSettings.Agents.ModelOverride
 	}
-	if m.settingsPickExplore {
+	if m.settingsPickerTarget == settingsPickerExploreModel {
 		return m.projectSettings.Agents.ExploreModel
 	}
 	current := m.model

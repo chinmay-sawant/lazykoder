@@ -140,6 +140,18 @@ func buildPrompt(snapshot Snapshot, relatedAvoid string) (string, error) {
 // are intentionally ignored because this lookup must never delay the parent
 // turn or prevent a recap from being generated.
 func RelatedAvoid(ctx context.Context, workdir string, snapshot Snapshot, runner *grep.Runner) (string, error) {
+	return relatedEvidence(ctx, workdir, snapshot, runner, relatedSearchOptions{
+		paths: []string{"knowledge-base/recaps/things-to-avoid"},
+	})
+}
+
+type relatedSearchOptions struct {
+	paths           []string
+	caseInsensitive bool
+	skipNoMatches   bool
+}
+
+func relatedEvidence(ctx context.Context, workdir string, snapshot Snapshot, runner *grep.Runner, opts relatedSearchOptions) (string, error) {
 	if err := requireContext(ctx); err != nil {
 		return "", err
 	}
@@ -149,16 +161,24 @@ func RelatedAvoid(ctx context.Context, workdir string, snapshot Snapshot, runner
 	}
 	searchCtx, cancel := context.WithTimeout(ctx, relatedAvoidTimeout)
 	defer cancel()
-	result, err := grep.Run(searchCtx, workdir, grep.Options{
-		Pattern:    pattern,
-		Path:       "knowledge-base/recaps/things-to-avoid",
-		Glob:       "*.md",
-		MaxMatches: maxRelatedMatches,
-	}, runner)
-	if err != nil {
-		return "", nil
+	for _, path := range opts.paths {
+		result, err := grep.Run(searchCtx, workdir, grep.Options{
+			Pattern:         pattern,
+			Path:            path,
+			Glob:            "*.md",
+			CaseInsensitive: opts.caseInsensitive,
+			MaxMatches:      maxRelatedMatches,
+		}, runner)
+		if err != nil {
+			continue
+		}
+		output := strings.TrimSpace(result.Output)
+		if opts.skipNoMatches && (output == "" || output == "no matches") {
+			continue
+		}
+		return truncateString(result.Output, maxRelatedOutput), nil
 	}
-	return truncateString(result.Output, maxRelatedOutput), nil
+	return "", nil
 }
 
 func relatedPattern(snapshot Snapshot) string {

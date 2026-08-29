@@ -21,7 +21,7 @@ func TestUsageSlashCommandAndModal(t *testing.T) {
 		Monthly: opencode.BillingWindow{Percent: 63, Status: "ok", ResetsAt: time.Now().Add(7 * 24 * time.Hour)},
 	}
 	m.usageLoaded = true
-	m, _ = m.runSlash("/usage")
+	m, _ = m.runSlashArg("/usage", "")
 	v := stripANSI(viewText(m))
 	for _, want := range []string{"USAGE", "rolling", "weekly", "monthly", "26%", "10%", "63%"} {
 		if !strings.Contains(v, want) {

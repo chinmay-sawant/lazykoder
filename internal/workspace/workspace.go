@@ -18,11 +18,10 @@ const (
 	gitignoreMode = 0o600
 )
 
-// Env holds the initialized workspace: the .lazykoder dir, the db path, and the open store.
+// Env holds the initialized workspace directory and open store.
 type Env struct {
-	Dir    string
-	DBPath string
-	DB     *db.Store
+	Dir string
+	DB  *db.Store
 }
 
 // Init creates <cwd>/.lazykoder (0755, exist-ok), opens and migrates the db, and appends ".lazykoder/" to <cwd>/.gitignore only if absent. Idempotent.
@@ -44,7 +43,7 @@ func Init(cwd string) (*Env, error) {
 		store.Close()
 		return nil, fmt.Errorf("workspace: gitignore: %w", err)
 	}
-	return &Env{Dir: dir, DBPath: dbPath, DB: store}, nil
+	return &Env{Dir: dir, DB: store}, nil
 }
 
 func ensureGitignore(cwd string) error {

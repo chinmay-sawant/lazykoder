@@ -10,6 +10,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/chinmay-sawant/lazykoder/internal/provider"
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
@@ -72,9 +73,13 @@ func (m Model) fetchUsage() tea.Cmd {
 		if m.client == nil {
 			return usageMsg{err: fmt.Errorf("opencode client is not configured")}
 		}
+		usageClient, ok := m.client.(provider.UsageProvider)
+		if !ok {
+			return usageMsg{err: fmt.Errorf("usage is not available for the selected provider")}
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), usageTimeout)
 		defer cancel()
-		u, err := m.client.Usage(ctx)
+		u, err := usageClient.Usage(ctx)
 		return usageMsg{usage: u, err: err}
 	}
 }

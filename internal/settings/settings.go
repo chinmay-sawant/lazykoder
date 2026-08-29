@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/chinmay-sawant/lazykoder/internal/provider"
-	"github.com/chinmay-sawant/lazykoder/internal/roles"
 )
 
 const (
@@ -51,8 +50,8 @@ const (
 	// MaxMaxDepth caps sub-agent nesting depth. Product depth is 1 until
 	// nested Host ships; do not advertise editable depth above 1.
 	MaxMaxDepth = 1
-	// maxMaxQueued caps the sub-agent queue size.
-	maxMaxQueued = 100
+	// MaxMaxQueued caps the sub-agent queue size.
+	MaxMaxQueued = 100
 	// MinCompactPercent is the lowest selectable auto-compact threshold.
 	MinCompactPercent = 5
 	// MaxCompactPercent is the highest selectable auto-compact threshold.
@@ -374,11 +373,6 @@ func (a Agents) EffectiveTimeout() time.Duration {
 	return time.Duration(a.DefaultTimeoutSec) * time.Second
 }
 
-// ToolsForRole returns the tool allow-list for a sub-agent role.
-func (a Agents) ToolsForRole(role string) []string {
-	return roles.Tools(role)
-}
-
 func (s Settings) normalized() Settings {
 	s.Appearance.Theme = NormalizeTheme(s.Appearance.Theme)
 	if s.Slot.MaxSteps < MinMaxSteps {
@@ -481,8 +475,8 @@ func (a Agents) normalized() Agents {
 	if a.MaxQueued < 1 {
 		a.MaxQueued = DefaultMaxQueued
 	}
-	if a.MaxQueued > maxMaxQueued {
-		a.MaxQueued = maxMaxQueued
+	if a.MaxQueued > MaxMaxQueued {
+		a.MaxQueued = MaxMaxQueued
 	}
 	if a.MaxQueued < a.MaxConcurrent {
 		a.MaxQueued = a.MaxConcurrent

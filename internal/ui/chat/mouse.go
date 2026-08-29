@@ -276,7 +276,7 @@ func (m Model) activateSlashItem(idx int) (Model, tea.Cmd) {
 	m.slashFromPaste = false
 	m.prompt.SetValue("")
 	m.promptUndo = nil
-	return m.runSlash(name)
+	return m.runSlashArg(name, "")
 }
 
 // mouseDrag keeps the viewport following the pointer while a scrollbar

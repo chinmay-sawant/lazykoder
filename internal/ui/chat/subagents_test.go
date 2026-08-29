@@ -254,7 +254,7 @@ func (r *instantRunner) Run(ctx context.Context, job subagent.Job) (subagent.Res
 func TestAgentsSlashOpensPicker(t *testing.T) {
 	st := newTestStore(t)
 	m := New(Options{Store: st, Workdir: t.TempDir()})
-	m, _ = m.runSlash("/agents")
+	m, _ = m.runSlashArg("/agents", "")
 	if !m.subagentPickerMode {
 		t.Fatal("/agents should open subagent picker")
 	}

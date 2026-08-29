@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -49,11 +48,6 @@ type file struct {
 	Models    []Info `json:"models"`
 }
 
-// Path returns the cache file path inside the workspace dir.
-func Path(dir string) string {
-	return filepath.Join(dir, "models.json")
-}
-
 // IDs extracts model ids from a list of Info rows.
 func IDs(infos []Info) []string {
 	out := make([]string, 0, len(infos))
@@ -71,22 +65,6 @@ func HasContext(infos []Info) bool {
 		}
 	}
 	return false
-}
-
-// ContextOf returns the cached context window for id, or 0 if unknown.
-func ContextOf(infos []Info, id string) int {
-	if info, ok := InfoOf(infos, id); ok {
-		return info.Context
-	}
-	return 0
-}
-
-// EndpointOf returns the stored provider endpoint for id, or an empty value.
-func EndpointOf(infos []Info, id string) string {
-	if info, ok := InfoOf(infos, id); ok {
-		return info.Endpoint
-	}
-	return ""
 }
 
 // ProviderOf returns the stored provider label for id, or a fallback
@@ -149,20 +127,6 @@ func IsFree(info Info) bool {
 
 func isFreeID(id string) bool {
 	return strings.HasSuffix(id, "-free") || id == "big-pickle"
-}
-
-// HasVariant reports whether id lists variant as a selectable option.
-func HasVariant(infos []Info, id, variant string) bool {
-	info, ok := InfoOf(infos, id)
-	if !ok || variant == "" {
-		return false
-	}
-	for _, name := range info.Variants {
-		if name == variant {
-			return true
-		}
-	}
-	return false
 }
 
 // MergeByID appends extras whose provider and ids are not already in base.

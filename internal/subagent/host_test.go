@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chinmay-sawant/lazykoder/internal/roles"
 	"github.com/chinmay-sawant/lazykoder/internal/settings"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/task"
 )
@@ -40,6 +41,15 @@ func TestConfigFromSettingsUsesChildModelVariant(t *testing.T) {
 	got := ConfigFromSettings(cfg)
 	if got.Variant != "high" {
 		t.Fatalf("child config variant = %q, want high", got.Variant)
+	}
+}
+
+func TestConfigFromSettingsPreservesDisabledTimeout(t *testing.T) {
+	cfg := settings.Default()
+	cfg.Agents.DefaultTimeoutSec = 0
+
+	if got := ConfigFromSettings(cfg).Timeout; got != 0 {
+		t.Fatalf("timeout = %v, want disabled", got)
 	}
 }
 
@@ -351,7 +361,7 @@ func TestManagerUsesSharedRoleCapabilities(t *testing.T) {
 				ran := r.ran
 				r.mu.Unlock()
 				if ran {
-					want := (settings.Agents{}).ToolsForRole(role)
+					want := roles.Tools(role)
 					if strings.Join(got, ",") != strings.Join(want, ",") {
 						t.Fatalf("Job.Tools = %v, settings tools = %v", got, want)
 					}

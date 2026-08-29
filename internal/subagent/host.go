@@ -42,11 +42,6 @@ func (h *Host) Specs() []opencode.ToolSpec {
 	return task.Specs()
 }
 
-// IsTaskTool reports whether name is a parent task control-plane tool.
-func IsTaskTool(name string) bool {
-	return task.IsTaskTool(name)
-}
-
 // Execute dispatches a task tool. status is completed, denied, or error.
 // result is a JSON string for the model. err is reserved for host wiring failures.
 // parentSessionID from the parent agent wins over Host.ParentSessionID.

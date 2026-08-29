@@ -1639,13 +1639,16 @@ func TestRefreshStampsZenEndpoint(t *testing.T) {
 			if r.Header.Get("Authorization") == "" {
 				t.Error("zen models request missing Authorization")
 			}
-			fmt.Fprint(w, `{"data":[{"id":"deepseek-v4-flash-free"},{"id":"deepseek-v4-flash"}]}`)
+			fmt.Fprint(w, `{"data":[{"id":"hy3-free"},{"id":"deepseek-v4-flash"}]}`)
 		default:
 			http.NotFound(w, r)
 		}
 	}))
 	t.Cleanup(srv.Close)
 	c := opencode.NewClient("test-key", opencode.WithBaseURL(srv.URL+"/zen/go/v1"))
+	if _, ok := any(c).(provider.FreeModelCatalog); !ok {
+		t.Fatal("OpenCode client does not expose the free-model catalog capability")
+	}
 	m := New(Options{Store: newTestStore(t), Client: c, Workdir: dir, CachePath: cachePath})
 	msg := m.refreshModels()
 	got, ok := msg.(modelsMsg)
@@ -1663,7 +1666,7 @@ func TestRefreshStampsZenEndpoint(t *testing.T) {
 	if !ok || flash.Endpoint != srv.URL+"/zen/go/v1/chat/completions" {
 		t.Fatalf("go model = %+v", flash)
 	}
-	free, ok := modelscache.InfoOf(infos, "deepseek-v4-flash-free")
+	free, ok := modelscache.InfoOf(infos, "hy3-free")
 	if !ok || free.Endpoint != srv.URL+"/zen/v1/chat/completions" {
 		t.Fatalf("zen free model = %+v", free)
 	}

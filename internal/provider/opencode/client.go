@@ -68,16 +68,35 @@ func ZenChatURL(goBase string) (string, bool) {
 	return ChatURL(zen), true
 }
 
-// ChatURLForModel picks the chat URL for a model id when models.json has no
-// stored endpoint. Free Zen models go to the Zen sibling; others use base.
-func ChatURLForModel(base, id string) string {
-	return RouteForModel(base, id).Endpoint
+// ZenResponsesURL is the Zen Responses URL derived from a Go API base.
+func ZenResponsesURL(goBase string) (string, bool) {
+	zen, ok := ZenBaseURL(goBase)
+	if !ok {
+		return "", false
+	}
+	return ResponsesURL(zen), true
+}
+
+// isResponsesModelID reports whether the model requires the OpenAI Responses
+// protocol. The Zen/Go models endpoint does not advertise this per model, so
+// the client falls back to a name heuristic. Keep this list narrow and prefer
+// provider-advertised api_format when present (see RouteForModelMetadata).
+func isResponsesModelID(id string) bool {
+	return strings.HasPrefix(id, "muse-spark-")
 }
 
 // RouteForModel chooses the default route for an OpenCode model id. Free
 // models use the Zen sibling when the base is an OpenCode Go route. Model
 // metadata should use RouteForModelMetadata when it advertises a protocol.
 func RouteForModel(base, id string) Route {
+	if isResponsesModelID(id) {
+		if isFreeModelID(id) {
+			if endpoint, ok := ZenResponsesURL(base); ok {
+				return Route{Endpoint: endpoint, Provider: ProviderZen}
+			}
+		}
+		return Route{Endpoint: ResponsesURL(base), Provider: ProviderGo}
+	}
 	if isFreeModelID(id) {
 		if endpoint, ok := ZenChatURL(base); ok {
 			return Route{Endpoint: endpoint, Provider: ProviderZen}
@@ -124,12 +143,6 @@ func resolveRouteEndpoint(base, endpoint string) (string, bool) {
 	}
 }
 
-// RouteForCatalogProvider turns a models.dev provider key into the matching
-// OpenCode route. Unknown keys have no OpenCode route.
-func RouteForCatalogProvider(base, provider string) (Route, bool) {
-	return RouteForCatalogModel(base, provider, "")
-}
-
 // RouteForCatalogModel turns a models.dev provider and model id into the
 // matching default OpenCode route. models.dev does not currently advertise
 // the request protocol, so callers should prefer provider model metadata when
@@ -139,6 +152,14 @@ func RouteForCatalogModel(base, provider, id string) (Route, bool) {
 	case "opencode-go":
 		return RouteForModel(base, id), true
 	case "opencode":
+		// Zen free models normally map to the Zen chat sibling, but the
+		// Muse family requires the Responses protocol even when the catalog
+		// carries no endpoint/api_format (see isResponsesModelID).
+		if isResponsesModelID(id) {
+			if endpoint, ok := ZenResponsesURL(base); ok {
+				return Route{Endpoint: endpoint, Provider: ProviderZen}, true
+			}
+		}
 		endpoint, ok := ZenChatURL(base)
 		if !ok {
 			return Route{}, false

@@ -54,14 +54,7 @@ func estimateTokenDelta(text string) int64 {
 		return 0
 	}
 	runes := int64(len([]rune(text)))
-	return maxInt64(1, (runes+tokenRunesPerUnit-1)/tokenRunesPerUnit)
-}
-
-func maxInt64(a, b int64) int64 {
-	if a > b {
-		return a
-	}
-	return b
+	return max(1, (runes+tokenRunesPerUnit-1)/tokenRunesPerUnit)
 }
 
 // FormatTokensPerSecond formats a completed step rate for diagnostics and

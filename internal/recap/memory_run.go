@@ -132,7 +132,7 @@ func RunMemoryUpdate(ctx context.Context, input MemoryRunInput) (runErr error) {
 		recordMemoryStageDuration(stageDurations, "merge_write", mergeStarted)
 		return nil
 	}
-	merged, err := MergeMemoryWithSkills(document, envelope, input.Snapshot, input.SkillReferences, timeNow())
+	merged, err := MergeMemoryWithSkills(document, envelope, input.Snapshot, input.SkillReferences, time.Now())
 	if err != nil {
 		recordMemoryStageDuration(stageDurations, "merge_write", mergeStarted)
 		return fail(err)
@@ -213,38 +213,9 @@ type memoryDocumentResult struct {
 }
 
 func RelatedRecapEvidence(ctx context.Context, workdir string, snapshot Snapshot, runner *grep.Runner) (string, error) {
-	if err := requireContext(ctx); err != nil {
-		return "", err
-	}
-	pattern := relatedPattern(snapshot)
-	if pattern == "" {
-		return "", nil
-	}
-	searchCtx, cancel := context.WithTimeout(ctx, relatedAvoidTimeout)
-	defer cancel()
-	result, err := grep.Run(searchCtx, workdir, grep.Options{
-		Pattern:         pattern,
-		Path:            "knowledge-base/recaps",
-		Glob:            "*.md",
-		CaseInsensitive: true,
-		MaxMatches:      maxRelatedMatches,
-	}, runner)
-	if err == nil && strings.TrimSpace(result.Output) != "" && strings.TrimSpace(result.Output) != "no matches" {
-		return truncateString(result.Output, maxRelatedOutput), nil
-	}
-	result, err = grep.Run(searchCtx, workdir, grep.Options{
-		Pattern:         pattern,
-		Path:            "knowledge-base",
-		Glob:            "*.md",
-		CaseInsensitive: true,
-		MaxMatches:      maxRelatedMatches,
-	}, runner)
-	if err != nil || strings.TrimSpace(result.Output) == "" || strings.TrimSpace(result.Output) == "no matches" {
-		return "", nil
-	}
-	return truncateString(result.Output, maxRelatedOutput), nil
-}
-
-func timeNow() time.Time {
-	return time.Now()
+	return relatedEvidence(ctx, workdir, snapshot, runner, relatedSearchOptions{
+		paths:           []string{"knowledge-base/recaps", "knowledge-base"},
+		caseInsensitive: true,
+		skipNoMatches:   true,
+	})
 }

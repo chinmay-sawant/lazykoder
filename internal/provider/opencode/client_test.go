@@ -538,10 +538,10 @@ func TestChatURLHelpers(t *testing.T) {
 	if _, ok := ZenChatURL("http://127.0.0.1:1"); ok {
 		t.Fatal("ZenChatURL ok on non-go base")
 	}
-	if got := ChatURLForModel(goBase, "deepseek-v4-flash-free"); got != zen {
+	if got := RouteForModel(goBase, "deepseek-v4-flash-free").Endpoint; got != zen {
 		t.Fatalf("free model URL = %q, want %q", got, zen)
 	}
-	if got := ChatURLForModel(goBase, "deepseek-v4-flash"); got != goBase+"/chat/completions" {
+	if got := RouteForModel(goBase, "deepseek-v4-flash").Endpoint; got != goBase+"/chat/completions" {
 		t.Fatalf("go model URL = %q", got)
 	}
 }

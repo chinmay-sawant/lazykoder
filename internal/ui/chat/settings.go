@@ -2,6 +2,7 @@ package chat
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -95,13 +96,16 @@ const (
 	settingsLineRow
 )
 
-type settingsModelPickerTarget uint8
+type settingsPickerTarget uint8
 
 const (
-	settingsModelPickerDefault settingsModelPickerTarget = iota
-	settingsModelPickerChild
-	settingsModelPickerExplore
-	settingsModelPickerRecap
+	settingsPickerNone settingsPickerTarget = iota
+	settingsPickerDefaultModel
+	settingsPickerDefaultVariant
+	settingsPickerChildModel
+	settingsPickerChildVariant
+	settingsPickerExploreModel
+	settingsPickerRecapModel
 )
 
 type settingsRowDefinition struct {
@@ -165,11 +169,7 @@ func (m Model) closeSettings() Model {
 	m = m.clearFocus(focusSettings)
 	m.settingsCursor = 0
 	m.settingsHover = -1
-	m.settingsPickDefault = false
-	m.settingsPickRecap = false
-	m.settingsPickChild = false
-	m.settingsPickExplore = false
-	m.settingsPickChildVariant = false
+	m.settingsPickerTarget = settingsPickerNone
 	m.settingsEdit = false
 	m.settingsEditValue = ""
 	return m
@@ -633,9 +633,9 @@ func (m Model) activateSettingsRow() (Model, tea.Cmd) {
 	case settingsRowTheme:
 		return m.cycleTheme(1), nil
 	case settingsRowModel:
-		return m.openSettingsModelPicker(settingsModelPickerDefault), nil
+		return m.openSettingsModelPicker(settingsPickerDefaultModel), nil
 	case settingsRowVariant:
-		m.settingsPickDefault = true
+		m.settingsPickerTarget = settingsPickerDefaultVariant
 		m.settingsMode = false
 		// Seed live model so the variant list matches the default model.
 		if m.projectSettings.Model.Default != "" {
@@ -643,15 +643,15 @@ func (m Model) activateSettingsRow() (Model, tea.Cmd) {
 		}
 		return m.openKindPicker(pickerKindVariant), nil
 	case settingsRowChildModel:
-		return m.openSettingsModelPicker(settingsModelPickerChild), nil
+		return m.openSettingsModelPicker(settingsPickerChildModel), nil
 	case settingsRowChildVariant:
 		return m.openSettingsChildVariantPicker(), nil
 	case settingsRowExploreModel:
-		return m.openSettingsModelPicker(settingsModelPickerExplore), nil
+		return m.openSettingsModelPicker(settingsPickerExploreModel), nil
 	case settingsRowRecapEnabled:
 		return m.setRecapEnabled(!m.projectSettings.EffectiveRecap().Enabled), nil
 	case settingsRowRecapModel:
-		return m.openSettingsModelPicker(settingsModelPickerRecap), nil
+		return m.openSettingsModelPicker(settingsPickerRecapModel), nil
 	case settingsRowRecapAfterChats:
 		return m.openSettingInputForm("Recap after chats", "Successful chats before a recap", strconv.Itoa(m.projectSettings.EffectiveRecap().AfterChats), validateRecapAfterChats, func(mod Model, val string) (Model, tea.Cmd) {
 			v, _ := strconv.Atoi(val)
@@ -749,22 +749,14 @@ func (m Model) activateSettingsRow() (Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) openSettingsModelPicker(target settingsModelPickerTarget) Model {
-	m.settingsPickDefault = target == settingsModelPickerDefault
-	m.settingsPickRecap = target == settingsModelPickerRecap
-	m.settingsPickChild = target == settingsModelPickerChild
-	m.settingsPickExplore = target == settingsModelPickerExplore
-	m.settingsPickChildVariant = false
+func (m Model) openSettingsModelPicker(target settingsPickerTarget) Model {
+	m.settingsPickerTarget = target
 	m.settingsMode = false
 	return m.openKindPicker(pickerKindModel)
 }
 
 func (m Model) openSettingsChildVariantPicker() Model {
-	m.settingsPickDefault = false
-	m.settingsPickRecap = false
-	m.settingsPickChild = false
-	m.settingsPickExplore = false
-	m.settingsPickChildVariant = true
+	m.settingsPickerTarget = settingsPickerChildVariant
 	m.settingsMode = false
 	return m.openKindPicker(pickerKindVariant)
 }
@@ -1021,7 +1013,7 @@ func (m Model) cycleDefaultModel(delta int) Model {
 	if cur == "" {
 		cur = settings.DefaultModelID
 	}
-	idx := indexOfString(list, cur)
+	idx := slices.Index(list, cur)
 	if idx < 0 {
 		idx = 0
 	}
@@ -1035,7 +1027,7 @@ func (m Model) cycleDefaultModel(delta int) Model {
 func (m Model) cycleDefaultVariant(delta int) Model {
 	list := m.defaultVariantChoices()
 	cur := m.projectSettings.Model.Variant
-	idx := indexOfString(list, cur)
+	idx := slices.Index(list, cur)
 	if idx < 0 {
 		idx = 0
 	}
@@ -1055,7 +1047,7 @@ func (m Model) cycleRecapModel(delta int) Model {
 	if cur == "" {
 		cur = settings.DefaultModelID
 	}
-	idx := indexOfString(list, cur)
+	idx := slices.Index(list, cur)
 	if idx < 0 {
 		idx = 0
 	}
@@ -1082,7 +1074,7 @@ func (m Model) inheritModelChoices() []string {
 
 func (m Model) cycleChildModel(delta int) Model {
 	list := m.inheritModelChoices()
-	idx := indexOfString(list, m.projectSettings.Agents.ModelOverride)
+	idx := slices.Index(list, m.projectSettings.Agents.ModelOverride)
 	if idx < 0 {
 		idx = 0
 	}
@@ -1096,7 +1088,7 @@ func (m Model) cycleChildModel(delta int) Model {
 func (m Model) cycleChildVariant(delta int) Model {
 	list := m.childVariantChoices()
 	cur := m.projectSettings.Agents.ModelVariant
-	idx := indexOfString(list, cur)
+	idx := slices.Index(list, cur)
 	if idx < 0 {
 		idx = 0
 	}
@@ -1109,7 +1101,7 @@ func (m Model) cycleChildVariant(delta int) Model {
 
 func (m Model) cycleExploreModel(delta int) Model {
 	list := m.inheritModelChoices()
-	idx := indexOfString(list, m.projectSettings.Agents.ExploreModel)
+	idx := slices.Index(list, m.projectSettings.Agents.ExploreModel)
 	if idx < 0 {
 		idx = 0
 	}
@@ -1138,7 +1130,7 @@ func (m Model) setExploreModel(id string) Model {
 func (m Model) cycleAgentsRole(delta int) Model {
 	list := []string{"explore", "plan", "general"}
 	cur := m.projectSettings.Agents.DefaultRole
-	idx := indexOfString(list, cur)
+	idx := slices.Index(list, cur)
 	if idx < 0 {
 		idx = 0
 	}
@@ -1153,7 +1145,7 @@ func (m Model) cycleAgentsRole(delta int) Model {
 func (m Model) cycleBashConfirm(delta int) Model {
 	list := []string{"parent", "deny"}
 	cur := m.projectSettings.Agents.BashConfirm
-	idx := indexOfString(list, cur)
+	idx := slices.Index(list, cur)
 	if idx < 0 {
 		idx = 0
 	}
@@ -1199,15 +1191,6 @@ func (m Model) variantChoicesFor(modelID, providerID string) []string {
 		out = append(out, v)
 	}
 	return out
-}
-
-func indexOfString(list []string, want string) int {
-	for i, s := range list {
-		if s == want {
-			return i
-		}
-	}
-	return -1
 }
 
 func (m Model) cycleTheme(delta int) Model {

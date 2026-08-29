@@ -215,17 +215,6 @@ func (client *Client) ModelInfos(ctx context.Context) ([]opencode.ModelInfo, err
 	}}, nil
 }
 
-// FreeModelInfos has no subscription-specific free-model catalog.
-func (client *Client) FreeModelInfos(context.Context) ([]opencode.ModelInfo, error) {
-	return nil, nil
-}
-
-// Usage is intentionally unavailable because subscription CLIs do not expose
-// account billing through this integration.
-func (client *Client) Usage(context.Context) (opencode.BillingUsage, error) {
-	return opencode.BillingUsage{}, nil
-}
-
 type responseBody struct {
 	Content   string         `json:"content"`
 	ToolCalls []toolCallBody `json:"tool_calls"`

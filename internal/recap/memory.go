@@ -289,11 +289,6 @@ func validMemorySection(value string) bool {
 	}
 }
 
-// MergeMemory applies a validated envelope to the existing aggregate.
-func MergeMemory(previous MemoryDocument, envelope MemoryEnvelope, snapshot Snapshot, now time.Time) (MemoryDocument, error) {
-	return MergeMemoryWithSkills(previous, envelope, snapshot, nil, now)
-}
-
 // MergeMemoryWithSkills applies model facts and request-time skill provenance.
 func MergeMemoryWithSkills(previous MemoryDocument, envelope MemoryEnvelope, snapshot Snapshot, skillRefs []MemorySkillReference, now time.Time) (MemoryDocument, error) {
 	if err := validateMemoryEnvelope(envelope, snapshot); err != nil {
@@ -371,7 +366,7 @@ func mergeMemorySkills(target *[]MemorySkillReference, refs []MemorySkillReferen
 		entry.Scope = ref.Scope
 		entry.Path = ref.Path
 		entry.ContentHash = ref.ContentHash
-		entry.UseCount += maxInt(1, ref.UseCount)
+		entry.UseCount += max(1, ref.UseCount)
 		entry.LastUsedUTC = ref.LastUsedUTC
 		entry.SourceMessageIDs = mergeStrings(entry.SourceMessageIDs, ref.SourceMessageIDs)
 	}
@@ -385,13 +380,6 @@ func memorySkillKey(name, scope, path string) string {
 // SkillReferenceID returns the stable identifier used in memories.md.
 func SkillReferenceID(name, scope, path string) string {
 	return memorySkillKey(name, scope, path)
-}
-
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }
 
 func mergeMemoryFacts(target *[]MemoryEntry, category string, facts []MemoryFact, nowUTC string) {

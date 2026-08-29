@@ -170,24 +170,20 @@ type Options struct {
 
 // Model is the chat screen: title, transcript, prompt, status and confirm flow.
 type Model struct {
-	store                    *db.Store
-	client                   provider.Client
-	childClient              provider.Client
-	newProviderClient        provider.ClientFactory
-	providerAuth             provider.AuthChecker
-	providerLogin            provider.LoginCommandFactory
-	providerAuthStatus       map[string]provider.AuthStatus
-	providerLoginTarget      string
-	workdir                  string
-	session                  *db.Session
-	maxSteps                 int
-	settingsPath             string
-	projectSettings          settings.Settings
-	settingsPickDefault      bool // model/variant picker is setting the project default
-	settingsPickRecap        bool // model picker is setting the recap model
-	settingsPickChild        bool // model picker is setting the child model override
-	settingsPickExplore      bool // model picker is setting the explore model
-	settingsPickChildVariant bool // variant picker is setting the child model variant
+	store                *db.Store
+	client               provider.Client
+	childClient          provider.Client
+	newProviderClient    provider.ClientFactory
+	providerAuth         provider.AuthChecker
+	providerLogin        provider.LoginCommandFactory
+	providerAuthStatus   map[string]provider.AuthStatus
+	providerLoginTarget  string
+	workdir              string
+	session              *db.Session
+	maxSteps             int
+	settingsPath         string
+	projectSettings      settings.Settings
+	settingsPickerTarget settingsPickerTarget
 
 	width  int
 	height int
@@ -397,6 +393,7 @@ type slashCmd struct {
 	name        string
 	description string
 	aliases     []string
+	group       string
 }
 
 type inputHistoryItem struct {
@@ -431,23 +428,23 @@ type tpsSample struct {
 }
 
 var slashCommands = []slashCmd{
-	{name: "/new", description: "start a new session and clear the transcript"},
-	{name: "/resume", description: "open past sessions (ctrl+s, also /session)", aliases: []string{"sessions", "session"}},
-	{name: "/provider", description: "select the active chat provider"},
-	{name: "/model", description: "search and switch the live chat model"},
-	{name: "/variant", description: "switch live reasoning effort"},
-	{name: "/agents", description: "open the sub-agent drawer and logs", aliases: []string{"subs", "subagents"}},
-	{name: "/history", description: "open memory history for the current chat"},
-	{name: "/memory", description: "show next-turn memory context and toggle injection"},
-	{name: "/spawn", description: "spawn a new sub-agent via interactive form", aliases: []string{"agent"}},
-	{name: "/refresh", description: "reload the model list into models.json"},
-	{name: "/usage", description: "show OpenCode Go plan usage (rolling, weekly, monthly)"},
-	{name: "/status", description: "open the status drawer and toggle details"},
-	{name: "/skills", description: "discover and activate local and global skills", aliases: []string{"skill"}},
-	{name: "/settings", description: "project defaults (model, agents, compaction, safety)", aliases: []string{"slot"}},
-	{name: "/continue", description: "resume after a step-limit stop (or send continue)"},
-	{name: "/compact", description: "summarize older context now (optional notes)"},
-	{name: "/help", description: "keyboard shortcuts (?, also /keys)", aliases: []string{"keys"}},
+	{name: "/new", description: "start a new session and clear the transcript", group: "Session"},
+	{name: "/resume", description: "open past sessions (ctrl+s, also /session)", aliases: []string{"sessions", "session"}, group: "Session"},
+	{name: "/continue", description: "resume after a step-limit stop (or send continue)", group: "Session"},
+	{name: "/compact", description: "summarize older context now (optional notes)", group: "Session"},
+	{name: "/provider", description: "select the active chat provider", group: "Model"},
+	{name: "/model", description: "search and switch the live chat model", group: "Model"},
+	{name: "/variant", description: "switch live reasoning effort", group: "Model"},
+	{name: "/refresh", description: "reload the model list into models.json", group: "Model"},
+	{name: "/agents", description: "open the sub-agent drawer and logs", aliases: []string{"subs", "subagents"}, group: "Project"},
+	{name: "/history", description: "open memory history for the current chat", group: "Project"},
+	{name: "/memory", description: "show next-turn memory context and toggle injection", group: "Project"},
+	{name: "/spawn", description: "spawn a new sub-agent via interactive form", aliases: []string{"agent"}, group: "Project"},
+	{name: "/settings", description: "project defaults (model, agents, compaction, safety)", aliases: []string{"slot"}, group: "Project"},
+	{name: "/skills", description: "discover and activate local and global skills", aliases: []string{"skill"}, group: "Project"},
+	{name: "/usage", description: "show OpenCode Go plan usage (rolling, weekly, monthly)", group: "Project"},
+	{name: "/status", description: "open the status drawer and toggle details", group: "Project"},
+	{name: "/help", description: "keyboard shortcuts (?, also /keys)", aliases: []string{"keys"}, group: "Help"},
 }
 
 type modelsMsg struct {
@@ -685,15 +682,20 @@ func (m Model) refreshModels() tea.Msg {
 		catalog := toCacheInfos(infos)
 		catalog = modelscache.PreserveSpecializedEndpoints(catalog, modelInfosForProvider(previous, providerID))
 		if providerID == provider.IDOpenCode {
-			if extras, xerr := client.FreeModelInfos(ctx); xerr == nil && len(extras) > 0 {
-				catalog = modelscache.MergeByID(catalog, toCacheInfos(extras))
+			if catalogClient, ok := client.(provider.FreeModelCatalog); ok {
+				extras, xerr := catalogClient.FreeModelInfos(ctx)
+				if xerr == nil && len(extras) > 0 {
+					catalog = modelscache.MergeByID(catalog, toCacheInfos(extras))
+				}
 			}
 			if live, lerr := fetchLiveCatalog(ctx, client); lerr == nil {
 				catalog = modelscache.ApplyLive(catalog, live)
 			}
+			catalog = modelscache.FilterDeprecated(catalog)
 		}
 		cached = modelscache.MergeByID(cached, catalog)
 	}
+	cached = modelscache.FilterDeprecated(cached)
 	list := modelscache.IDs(cached)
 	if loaded {
 		if m.cachePath != "" {

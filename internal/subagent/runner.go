@@ -112,7 +112,6 @@ func (r AgentRunner) Run(ctx context.Context, job Job) (Result, error) {
 		ContextWindow:    job.ContextWindow,
 		Confirm:          job.Confirm,
 		Ask:              ask,
-		Host:             childSubagentHost(job),
 		ToolNames:        job.Tools,
 		AgentName:        job.Name,
 		SkillContext:     append([]skills.Context{}, job.Skills...),
@@ -143,7 +142,7 @@ func (r AgentRunner) Run(ctx context.Context, job Job) (Result, error) {
 		}
 		// Step budget exhausted after real work is a partial success, not a crash.
 		// Parent models were treating "failed / step limit" as a hard agent crash.
-		if isStepLimitErr(err) {
+		if errors.Is(err, agent.ErrStepLimit) {
 			res.Summary = withStepLimitNote(summary, err)
 			res.Status = string(StatusCompleted)
 			return res, nil
@@ -183,10 +182,6 @@ func (r AgentRunner) finishedSummary(ctx context.Context, sessionID string) (str
 	return summary, true
 }
 
-func isStepLimitErr(err error) bool {
-	return errors.Is(err, agent.ErrStepLimit)
-}
-
 func withStepLimitNote(summary string, err error) string {
 	note := "[note: child step limit reached; results may be incomplete"
 	if err != nil {
@@ -205,14 +200,4 @@ func strPtr(s string) *string {
 		return nil
 	}
 	return &s
-}
-
-// childSubagentHost returns a nested Host only when Depth is still below
-// MaxDepth. Product MaxMaxDepth is 1, so this is always nil today. Nested
-// Host construction is reserved for when nesting ships.
-func childSubagentHost(job Job) agent.SubagentHost {
-	if job.Depth >= job.MaxDepth {
-		return nil
-	}
-	return nil
 }

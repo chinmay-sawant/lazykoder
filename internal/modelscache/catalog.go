@@ -59,6 +59,7 @@ type liveModel struct {
 	Limit            liveLimit          `json:"limit"`
 	Cost             *liveCost          `json:"cost"`
 	ReasoningOptions []liveReasonOption `json:"reasoning_options"`
+	Status           string             `json:"status"`
 }
 
 type liveLimit struct {
@@ -97,10 +98,26 @@ func ParseModelsDev(raw []byte) (map[string]Info, error) {
 			if id == "" {
 				continue
 			}
+			if strings.EqualFold(strings.TrimSpace(m.Status), "deprecated") {
+				continue
+			}
 			out[id] = liveInfo(id, m, key)
 		}
 	}
 	return out, nil
+}
+
+var deprecatedModelIDs = map[string]struct{}{
+	"deepseek-v4-flash-free": {},
+}
+
+// IsDeprecatedModelID reports whether id is retained in provider listings but
+// upstream has marked it unavailable. The Zen models endpoint still advertises
+// the id even after models.dev marks it deprecated, so callers should drop it
+// from the picker rather than routing requests to it.
+func IsDeprecatedModelID(id string) bool {
+	_, ok := deprecatedModelIDs[id]
+	return ok
 }
 
 func liveInfo(id string, m liveModel, provider string) Info {
@@ -227,6 +244,23 @@ func ApplyLive(infos []Info, live map[string]Info) []Info {
 	out := make([]Info, len(infos))
 	for i, info := range infos {
 		out[i] = MergeLive(info, live)
+	}
+	return out
+}
+
+// FilterDeprecated removes ids that are still listed by the provider but are
+// known to be unavailable upstream (see IsDeprecatedModelID). Callers should
+// run this after merging Zen and live catalog rows and before persisting.
+func FilterDeprecated(infos []Info) []Info {
+	if len(infos) == 0 {
+		return infos
+	}
+	out := make([]Info, 0, len(infos))
+	for _, info := range infos {
+		if IsDeprecatedModelID(info.ID) {
+			continue
+		}
+		out = append(out, info)
 	}
 	return out
 }
