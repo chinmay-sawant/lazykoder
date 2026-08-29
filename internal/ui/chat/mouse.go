@@ -39,6 +39,11 @@ func (m Model) mousePress(msg tea.MouseClickMsg) (Model, tea.Cmd) {
 		}
 		return m, nil
 	}
+	if m.formMode && m.formHost != nil && m.formHost.kind == "add-provider" {
+		if x0, y, x1, ok := m.addProviderCloseRect(); ok && mu.Button == tea.MouseLeft && mu.Y == y && mu.X >= x0 && mu.X < x1 {
+			return m.clearFocus(focusForm), nil
+		}
+	}
 	// Model / variant chips live on the composer footer. Handle them before
 	// the prompt and sub-agent drawer so those never swallow chip clicks
 	// (including while the sub-agent strip is open).

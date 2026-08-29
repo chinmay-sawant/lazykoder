@@ -358,6 +358,9 @@ func (m Model) pickerRow(id, providerID string, selected bool, width int) string
 		return left
 	}
 	if m.pickerKind == pickerKindProvider {
+		if id == "__add_new_provider__" {
+			return pickerRowWithRight(left+"  + Add New Provider", "", width)
+		}
 		descriptor, ok := provider.DescriptorFor(id)
 		if !ok {
 			return left
@@ -593,6 +596,10 @@ normalSelection:
 		return m.finishPickerSelection(), nil
 	}
 	if m.pickerKind == pickerKindProvider {
+		if m.pickerItems[idx] == "__add_new_provider__" {
+			m = m.closePicker()
+			return m.openAddProviderDialog()
+		}
 		descriptor, ok := provider.DescriptorFor(m.pickerItems[idx])
 		if !ok {
 			return m, nil
@@ -756,6 +763,11 @@ func (m *Model) applyFilter() {
 			}
 			if modelMatchesFilter(id, modelscache.ProviderOf(m.modelInfos, id), needle) {
 				m.pickerItems = append(m.pickerItems, id)
+			}
+		}
+		if m.pickerKind == pickerKindProvider {
+			if needle == "" || strings.Contains(strings.ToLower("+ Add New Provider"), needle) {
+				m.pickerItems = append(m.pickerItems, "__add_new_provider__")
 			}
 		}
 	}
@@ -1057,6 +1069,9 @@ func (m Model) pickerItemLabelForProvider(id, providerID string) string {
 		return id
 	}
 	if m.pickerKind == pickerKindProvider {
+		if id == "__add_new_provider__" {
+			return "+ Add New Provider"
+		}
 		if descriptor, ok := provider.DescriptorFor(id); ok {
 			return descriptor.Label
 		}

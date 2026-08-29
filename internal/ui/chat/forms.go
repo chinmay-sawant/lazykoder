@@ -267,6 +267,9 @@ func (m Model) formOverlay() string {
 	if m.formHost == nil || m.formHost.form == nil {
 		return ""
 	}
+	if m.formHost.kind == "add-provider" {
+		return m.addProviderOverlayView()
+	}
 	cardW := max(minPaneWidth, min(formOverlayMaxWidth, m.overlayWidth()))
 	innerW := max(1, cardW-cardBorder-cardBorderPad)
 
