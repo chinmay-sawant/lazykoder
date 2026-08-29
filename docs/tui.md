@@ -421,11 +421,38 @@ session. Selecting a model from another provider group also saves that parent
 provider and model as the project default. The settings card can change the
 defaults directly.
 
-When a successful parent turn leaves a dirty worktree, a compact `commit and
-push` control appears above the composer for 90 seconds. Click it or press
-`ctrl+g` to start the explicit action. The normal agent and bash confirmation
-path handles the status, diff, commit, and push work, so failures remain
-visible.
+When a successful parent turn leaves a dirty worktree, a **Diff drawer**
+appears above the composer for 90 seconds (same trigger as the previous
+button: zero tool errors plus a non-empty worktree per the checker seam
+injected from `main.go`). Run `/diff` to open the same drawer manually. A
+clean manual check shows `no changes`. The drawer mirrors the `/model`
+channel: it uses `drawer.go:drawerChrome` and `drawerRowLine` so header, meta,
+body, and hint match the model drawer. The header shows `Diff`, the branch,
+and the dirty count. The meta shows the file count. The body lists changed
+files with `+added -removed` counts (binary files show a placeholder, renames are collapsed to the
+new path, rows are sorted and truncated like the model list with the `▸`
+selection marker). The right side of the header carries a collapse control
+`[x]`; click it or press `esc` to collapse. The drawer auto-hides after 90
+seconds if not interacted with; any click or key inside resets the timer.
+Selecting a file by click opens all of its changes in the expanded code view.
+`enter` on a selected file does the same. The expanded view keeps each change
+section visible with horizontal separators between sections, a right-side
+scrollbar when the code overflows, and the existing line-numbered diff. Its
+header shows the file path, `+added -removed` summary, file position such as
+`2 of 10 files`, and the selected change position such as `change 2 of 4`.
+Press `enter` or `escape` in the code
+view to return to the separated change list. Up/Down or `j`/`k` selects a
+change there, and Enter or clicking a change expands it. In code view, Up/Down
+and the mouse wheel scroll the actual diff. Left/Right, or the popup's
+previous/next controls, switch files and refresh the path, summary, count,
+change list, and diff. Down from the final file focuses the `commit and push`
+action row; Enter there starts the explicit commit flow. The
+action reuses the same one-shot agent
+turn as the button era (status, diff, recent log, conventional-commit
+instruction) and executes `git add -A && git commit && git push` via the
+existing policy gate; failures render an alert row. Click `[x]` in the popup
+or drawer header to close the current view. No new git commands run in the
+view layer outside the injected checker seam and the policy-gated turn.
 
 ## Continue
 

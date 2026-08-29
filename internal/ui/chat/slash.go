@@ -183,6 +183,8 @@ func (m Model) runSlashArg(name, extra string) (Model, tea.Cmd) {
 		return m.openUsageModal(), m.fetchUsage()
 	case "/status":
 		return m.openStatusDrawer(), nil
+	case "/diff":
+		return m, m.checkWorktreeForDiff()
 	case "/skills":
 		if !m.projectSettings.EffectiveSkills().Enabled {
 			m.copyNotice = "skills disabled in settings"

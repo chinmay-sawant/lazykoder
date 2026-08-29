@@ -66,6 +66,29 @@ func (m Model) updateKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.escapePending = false
 	}
 
+	if m.commitDrawerVisible() {
+		empty := strings.TrimSpace(m.prompt.Value()) == ""
+		switch key.Code {
+		case tea.KeyEscape:
+			return m.handleCommitDrawerKey(key)
+		case tea.KeyUp, tea.KeyDown, tea.KeyEnter:
+			if empty {
+				if key.Code == tea.KeyEnter {
+					return m.handleCommitDrawerKey(key)
+				}
+				if next, cmd := m.handleCommitDrawerKey(key); cmd != nil || next.commitDrawerSelected != m.commitDrawerSelected || next.pushPromptUntil != m.pushPromptUntil {
+					return next, cmd
+				}
+			}
+		case 'j', 'k':
+			if empty && (key.String() == "j" || key.String() == "k") {
+				if next, cmd := m.handleCommitDrawerKey(key); cmd != nil || next.commitDrawerSelected != m.commitDrawerSelected {
+					return next, cmd
+				}
+			}
+		}
+	}
+
 	// Soft newline in the composer (shift+enter / alt+enter / ctrl+j).
 	// Handled before select-all is cleared and before plain Enter submits.
 	if isPromptNewline(key) {

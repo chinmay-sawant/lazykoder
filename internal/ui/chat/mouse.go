@@ -26,6 +26,10 @@ func (m Model) jumpBarRow() int {
 // mousePress starts a scrollbar drag when the click lands on a scrollbar
 // column, and jumps the viewport to the clicked position.
 func (m Model) mousePress(msg tea.MouseClickMsg) (Model, tea.Cmd) {
+	if m.commitDiffDetailMode {
+		next, cmd, _ := m.commitDiffDetailHit(msg.Mouse().X, msg.Mouse().Y, msg.Mouse().Button)
+		return next, cmd
+	}
 	// Add-provider dialog owns the whole screen while open. Handle its chrome
 	// before transcript/rail hit-testing so clicks on the centered card are not
 	// mis-routed to the faint chat behind it.
@@ -121,6 +125,14 @@ func (m Model) mousePress(msg tea.MouseClickMsg) (Model, tea.Cmd) {
 			return m.toggleStatusSegment(db.StatusSegmentNames[idx])
 		}
 		return m, nil
+	}
+	if m.commitDrawerVisible() {
+		if next, cmd, hit := m.commitDrawerHit(mu.X, mu.Y, mu.Button); hit {
+			if cmd != nil {
+				return next, cmd
+			}
+			return next, nil
+		}
 	}
 	if mu.Button == tea.MouseLeft {
 		if y, ok := m.commitPushRowScreenY(); ok && mu.Y == y {

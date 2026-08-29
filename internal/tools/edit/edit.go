@@ -61,7 +61,15 @@ func Run(filePath, oldString, newString, rootDir string) (Result, error) {
 // UnifiedDiff returns a unified diff of oldContent vs newContent with correct
 // 1-based file line numbers in the @@ hunk headers.
 func UnifiedDiff(oldContent, newContent string) string {
-	return diffLines(strings.Split(oldContent, "\n"), strings.Split(newContent, "\n"))
+	return diffLines(splitContentLines(oldContent), splitContentLines(newContent))
+}
+
+func splitContentLines(content string) []string {
+	lines := strings.Split(content, "\n")
+	if len(lines) > 1 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return lines
 }
 
 // resolve returns the absolute cleaned path of filePath inside rootDir, rejecting escapes.

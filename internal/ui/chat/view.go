@@ -71,6 +71,8 @@ func (m Model) frame() string {
 	// Full-screen cards keep the historical paint order (sessions before log
 	// before settings...). Overlays stack on chat; key routing uses currentFocus.
 	switch {
+	case m.commitDiffDetailMode:
+		return m.commitDiffDetailScreen()
 	case m.sessionPickerMode:
 		return m.sessionPickerScreen()
 	case m.subagentLogMode:
@@ -169,6 +171,10 @@ func (m Model) chatScreen() string {
 	if m.subagentPickerMode && !m.subagentLogMode {
 		bottom.WriteString("\n")
 		bottom.WriteString(m.subagentDrawerView())
+	}
+	if m.commitDrawerVisible() {
+		bottom.WriteString("\n")
+		bottom.WriteString(m.commitDrawerView(m.width))
 	}
 	if m.statusMode {
 		bottom.WriteString("\n")
@@ -405,6 +411,9 @@ func (m Model) composerTop() int {
 	if m.subagentPickerMode && !m.subagentLogMode {
 		top += 1 + lipgloss.Height(m.subagentDrawerView())
 	}
+	if m.commitDrawerVisible() {
+		top += 1 + lipgloss.Height(m.commitDrawerView(m.width))
+	}
 	if m.statusMode {
 		top += 1 + lipgloss.Height(m.statusDrawerView())
 	}
@@ -421,9 +430,6 @@ func (m Model) composerBlock() string {
 	}
 	if m.showLiveStatus() && !m.liveStatusInSubagentDrawer() {
 		parts = append(parts, m.liveStatusView())
-	}
-	if button := m.commitPushRow(); button != "" {
-		parts = append(parts, button)
 	}
 	parts = append(parts, m.promptLine())
 	if len(parts) == 1 {
@@ -484,8 +490,8 @@ func embedComposerBorderLabels(boxed, footer string, border color.Color) string 
 		return boxed
 	}
 	// Render label with transparent/muted look on the border: faint + muted fg, border bg.
-	label := lipgloss.NewStyle().Foreground(theme.ColorMute()).Faint(true).Background(theme.ColorComposer()).Render(" "+plain+" ")
-	labelPlain := " "+plain+" "
+	label := lipgloss.NewStyle().Foreground(theme.ColorMute()).Faint(true).Background(theme.ColorComposer()).Render(" " + plain + " ")
+	labelPlain := " " + plain + " "
 	labelW := lipgloss.Width(labelPlain)
 	idx := len(lines) - 1
 	bottom := lines[idx]
@@ -802,6 +808,9 @@ func (m Model) transcriptRenderHeight() int {
 	}
 	if m.subagentPickerMode && !m.subagentLogMode {
 		fixedRows += 1 + lipgloss.Height(m.subagentDrawerView())
+	}
+	if m.commitDrawerVisible() {
+		fixedRows += 1 + lipgloss.Height(m.commitDrawerView(m.width))
 	}
 	if m.statusMode {
 		fixedRows += 1 + lipgloss.Height(m.statusDrawerView())

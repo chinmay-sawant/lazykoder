@@ -250,20 +250,20 @@ type Model struct {
 	tpsSamples           []tpsSample
 	stepMetrics          bool
 
-	confirmCh   chan confirmRequest
-	askCh       chan askRequest
-	doneCh      chan struct{}
-	doneClosed  bool
-	pending     *confirmRequest
-	pendingAsk  *askRequest
-	confirm     confirm.Model
-	confirmMode bool
+	confirmCh       chan confirmRequest
+	askCh           chan askRequest
+	doneCh          chan struct{}
+	doneClosed      bool
+	pending         *confirmRequest
+	pendingAsk      *askRequest
+	confirm         confirm.Model
+	confirmMode     bool
 	formMode        bool
 	formHost        *formHost
 	addProviderData *addProviderData
-	askMode     bool
-	askQuestion question.Question
-	askCursor   int
+	askMode         bool
+	askQuestion     question.Question
+	askCursor       int
 
 	helpMode bool
 
@@ -395,9 +395,21 @@ type Model struct {
 	// subMgr owns in-process sub-agent jobs for this chat model.
 	subMgr *subagent.Manager
 
-	worktreeDirty   worktreeDirtyChecker
-	pushPromptUntil time.Time
-	pushPromptBusy  bool
+	worktreeDirty             worktreeDirtyChecker
+	pushPromptUntil           time.Time
+	pushPromptBusy            bool
+	commitDrawerSelected      int
+	commitDrawerActionFocused bool
+	commitFiles               []WorktreeFile
+	commitBranch              string
+	commitDiffPreview         map[string]string
+	commitDiffDetailMode      bool
+	commitDiffDetailPath      string
+	commitDiffHunks           []string
+	commitDiffHunkSelected    int
+	commitDiffHunkContextMode bool
+	commitDiffHunkVp          viewport.Model
+	commitDiffDetailVp        viewport.Model
 
 	providerDeleteMode   bool
 	providerDeleteTarget string
@@ -462,6 +474,7 @@ var slashCommands = []slashCmd{
 	{name: "/roles", description: "discover and select sub-agent roles", aliases: []string{"role"}, group: "Project"},
 	{name: "/usage", description: "show OpenCode Go plan usage (rolling, weekly, monthly)", group: "Project"},
 	{name: "/status", description: "open the status drawer and toggle details", group: "Project"},
+	{name: "/diff", description: "open the current worktree diff drawer", group: "Project"},
 	{name: "/help", description: "keyboard shortcuts (?, also /keys)", aliases: []string{"keys"}, group: "Help"},
 }
 
@@ -576,6 +589,9 @@ func New(opts Options) Model {
 		userNavTip:             -1,
 		cachePath:              opts.CachePath,
 		worktreeDirty:          opts.WorktreeDirty,
+		commitDiffPreview:      make(map[string]string),
+		commitDiffHunkVp:       viewport.New(viewport.WithWidth(defaultWidth-1), viewport.WithHeight(1)),
+		commitDiffDetailVp:     viewport.New(viewport.WithWidth(defaultWidth-1), viewport.WithHeight(1)),
 		transcript:             viewport.New(viewport.WithWidth(defaultWidth-1), viewport.WithHeight(defaultHeight-chromeLines)),
 		todoVp:                 viewport.New(viewport.WithWidth(defaultWidth-1), viewport.WithHeight(maxTodoPanelRows)),
 		prompt:                 newPromptArea(defaultWidth),
@@ -911,17 +927,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = appendChatError(m.err, msg.err.Error())
 			return m, nil
 		}
-		if msg.dirty {
+		if msg.info.Dirty || msg.manual {
 			m.pushPromptUntil = time.Now().Add(commitActionLifetime)
+			m.commitBranch = msg.info.Branch
+			m.commitFiles = msg.info.Files
+			m.commitDiffPreview = msg.info.Diffs
+			m.commitDrawerActionFocused = false
+			if len(m.commitFiles) > 0 {
+				m.commitDrawerSelected = 0
+			}
 			m.layout = layoutSnap{}
 			return m, m.scheduleCommitPushExpiry()
 		}
 		m.pushPromptUntil = time.Time{}
+		m.commitFiles = nil
+		m.commitBranch = msg.info.Branch
+		m.commitDiffPreview = nil
+		m.commitDrawerActionFocused = false
 		m.layout = layoutSnap{}
 		return m, nil
 	case commitActionExpiredMsg:
 		if !m.pushPromptUntil.IsZero() && !time.Now().Before(m.pushPromptUntil) {
 			m.pushPromptUntil = time.Time{}
+			m.commitDiffDetailMode = false
+			m.commitDiffDetailPath = ""
+			m.commitDiffHunks = nil
+			m.commitDiffHunkSelected = 0
+			m.commitDiffHunkContextMode = false
+			m.commitDrawerActionFocused = false
 			m.layout = layoutSnap{}
 		}
 		return m, nil
@@ -1082,6 +1115,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m = m.resizeSubagentDrawer()
 			}
 		}
+		if m.commitDiffDetailMode {
+			m = m.resizeCommitDiffDetail()
+		}
 		return m, nil
 	case tea.PasteMsg:
 		// Full-screen sub-agent log keeps paste blocked; the list drawer does not.
@@ -1130,6 +1166,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if m.commitDiffDetailMode {
+			return m.handleCommitDiffDetailKey(msg)
+		}
 		if isUndoKey(msg) && !m.confirmMode && !m.pickerMode && !m.sessionPickerMode && !m.subagentPickerMode {
 			return m.undoPrompt(), nil
 		}
@@ -1169,6 +1208,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.askMode {
 			return m, nil
 		}
+		if m.commitDiffDetailMode {
+			if m.commitDiffHunkContextMode {
+				vp, viewportCmd := m.commitDiffDetailVp.Update(msg)
+				m.commitDiffDetailVp = vp
+				m, timerCmd := m.resetCommitDrawerTimer()
+				return m, tea.Batch(viewportCmd, timerCmd)
+			}
+			delta := 1
+			if msg.Mouse().Button == tea.MouseWheelUp {
+				delta = -1
+			}
+			return m.navigateCommitDiffHunk(delta)
+		}
 		if m.sessionPickerMode {
 			vp, _ := m.sessionVp.Update(msg)
 			m.sessionVp = vp
@@ -1187,6 +1239,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			vp, _ := m.subagentLogVp.Update(msg)
 			m.subagentLogVp = vp
+			return m, nil
+		}
+		if m.commitDrawerVisible() && m.pointerInCommitDrawer(msg.Mouse().Y) {
+			if msg.Mouse().Y < m.commitDrawerTop()+1 {
+				return m, nil
+			}
+			delta := 1
+			if strings.Contains(msg.String(), "up") || msg.Button == tea.MouseWheelUp {
+				delta = -1
+			}
+			files := m.commitDrawerFiles()
+			if len(files) > 0 {
+				next := m.commitDrawerSelected + delta
+				if next < 0 {
+					next = 0
+				}
+				if next >= len(files) {
+					next = len(files) - 1
+				}
+				m.commitDrawerSelected = next
+				nm, cmd := m.resetCommitDrawerTimer()
+				m = nm
+				return m, cmd
+			}
 			return m, nil
 		}
 		// Drawer open: wheel over the drawer scrolls the list; wheel over the
@@ -1215,6 +1291,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.mousePress(msg)
 	case tea.MouseMotionMsg:
 		if m.askMode {
+			return m, nil
+		}
+		if m.commitDiffDetailMode {
 			return m, nil
 		}
 		if m.settingsMode {

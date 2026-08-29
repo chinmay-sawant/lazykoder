@@ -250,11 +250,14 @@ no in-memory tool state for the parent transcript.
     gets at most one retry. Malformed or failed planning falls back to the
     ordinary turn.
 
-13. After a successful parent turn leaves a dirty worktree, an explicit UI
-    status check can show a `commit and push` row above the composer for 90
-    seconds. Clicking it or pressing `ctrl+g` starts a hidden control prompt
-    in the normal agent loop. The existing bash policy gate confirms status,
-    diff, commit, and push commands, and failures remain visible.
+13. After a successful parent turn leaves a dirty worktree, a Diff drawer
+    appears above the composer for 90 seconds. `/diff` opens the same drawer
+    manually. Its file rows show real unified diffs, and Enter opens a change
+    list split at each `@@` section. Enter or clicking a change opens that
+    section in a scrollable detail popup. Clicking its `commit and push` action
+    or reaching the action row with Down starts a hidden control prompt in the
+    normal agent loop. The existing bash policy gate confirms status, diff,
+    commit, and push commands, and failures remain visible.
 
 ### First-request recall
 
