@@ -365,7 +365,18 @@ func (m Model) commitPushRowScreenY() (int, bool) {
 }
 
 func (m Model) activateCommitPush() (Model, tea.Cmd) {
-	if !m.commitPushVisible() || m.client == nil || m.session == nil {
+	if !m.commitPushVisible() || m.client == nil {
+		return m, nil
+	}
+	if m.store == nil {
+		m.err = "cannot commit and push: session store unavailable"
+		return m, nil
+	}
+	if m.session == nil {
+		m = m.ensureSession("commit and push")
+	}
+	if m.session == nil {
+		m.err = "cannot commit and push: failed to initialize session"
 		return m, nil
 	}
 	m.pushPromptUntil = time.Time{}

@@ -76,7 +76,7 @@ func (m Model) updateKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 				if key.Code == tea.KeyEnter {
 					return m.handleCommitDrawerKey(key)
 				}
-				if next, cmd := m.handleCommitDrawerKey(key); cmd != nil || next.commitDrawerSelected != m.commitDrawerSelected || next.pushPromptUntil != m.pushPromptUntil {
+				if next, cmd := m.handleCommitDrawerKey(key); cmd != nil || next.commitDrawerSelected != m.commitDrawerSelected || next.commitDrawerActionFocused != m.commitDrawerActionFocused || next.pushPromptUntil != m.pushPromptUntil {
 					return next, cmd
 				}
 			}

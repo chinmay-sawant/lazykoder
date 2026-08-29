@@ -799,6 +799,7 @@ func (m Model) handleCommitDrawerKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		files := m.commitDrawerFiles()
 		if m.commitDrawerSelected < len(files)-1 {
 			m.commitDrawerSelected++
+			m.commitDrawerActionFocused = false
 			m.pushPromptUntil = time.Now().Add(commitActionLifetime)
 			return m, m.scheduleCommitPushExpiry()
 		}

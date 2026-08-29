@@ -446,8 +446,10 @@ change there, and Enter or clicking a change expands it. In code view, Up/Down
 and the mouse wheel scroll the actual diff. Left/Right, or the popup's
 previous/next controls, switch files and refresh the path, summary, count,
 change list, and diff. Down from the final file focuses the `commit and push`
-action row; Enter there starts the explicit commit flow. The
-action reuses the same one-shot agent
+action row; Up returns focus to the final file so Enter opens its diff. Enter on
+the action row starts the explicit commit flow. If the app has not created a
+chat session yet, activation creates one first. The action reuses the same
+one-shot agent
 turn as the button era (status, diff, recent log, conventional-commit
 instruction) and executes `git add -A && git commit && git push` via the
 existing policy gate; failures render an alert row. Click `[x]` in the popup

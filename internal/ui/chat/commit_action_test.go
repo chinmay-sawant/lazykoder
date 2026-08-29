@@ -67,6 +67,38 @@ func TestCommitPushActivationKeepsPromptWireOnly(t *testing.T) {
 	}
 }
 
+func TestCommitDrawerEnterActivatesFocusedAction(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	m.width = 80
+	m.height = 24
+	m.pushPromptUntil = time.Now().Add(time.Minute)
+	m.commitFiles = []WorktreeFile{{Path: "a.go", Added: 1}}
+	m.commitDrawerActionFocused = true
+
+	next, cmd := m.Update(keyMsg("enter"))
+	model := next.(Model)
+	if cmd == nil || !model.pushPromptBusy || model.session == nil {
+		t.Fatalf("Enter did not create a session and activate the focused action: cmd=%v busy=%v session=%v", cmd != nil, model.pushPromptBusy, model.session != nil)
+	}
+}
+
+func TestCommitDrawerClickActivatesAction(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	m.width = 80
+	m.height = 24
+	m.pushPromptUntil = time.Now().Add(time.Minute)
+	m.commitFiles = []WorktreeFile{{Path: "a.go", Added: 1}}
+	x0, y, x1, ok := m.commitDrawerActionRect()
+	if !ok {
+		t.Fatal("commit action button was not hit-testable")
+	}
+	next, cmd := m.Update(tea.MouseClickMsg{X: (x0 + x1) / 2, Y: y, Button: tea.MouseLeft})
+	model := next.(Model)
+	if cmd == nil || !model.pushPromptBusy || model.session == nil {
+		t.Fatalf("click did not create a session and activate the action: rect=(%d,%d,%d) cmd=%v busy=%v session=%v", x0, y, x1, cmd != nil, model.pushPromptBusy, model.session != nil)
+	}
+}
+
 func TestCommitDrawerVisibleMirrorsPushWindow(t *testing.T) {
 	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
 	m.width = 80
@@ -115,6 +147,42 @@ func TestCommitDrawerKeyNavigation(t *testing.T) {
 	m4, _ := m3.handleCommitDrawerKey(keyMsg("up"))
 	if m4.commitDrawerSelected != 0 {
 		t.Fatalf("up: selected=%d want 0", m4.commitDrawerSelected)
+	}
+}
+
+func TestCommitDrawerKeyboardReturnsFromActionToFinalFile(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	m.width = 80
+	m.height = 24
+	m.pushPromptUntil = time.Now().Add(time.Minute)
+	m.commitFiles = []WorktreeFile{
+		{Path: "a.go", Added: 1, Removed: 1},
+		{Path: "b.go", Added: 1, Removed: 1},
+	}
+	m.commitDiffPreview = map[string]string{
+		"a.go": "diff --git a/a.go b/a.go\n@@ -1 +1 @@\n-old-a\n+new-a\n",
+		"b.go": "diff --git a/b.go b/b.go\n@@ -1 +1 @@\n-old-b\n+new-b\n",
+	}
+
+	next, _ := m.Update(keyMsg("down"))
+	m = next.(Model)
+	if m.commitDrawerSelected != 1 || m.commitDrawerActionFocused {
+		t.Fatalf("first down should select the final file: selected=%d action=%v", m.commitDrawerSelected, m.commitDrawerActionFocused)
+	}
+	next, _ = m.Update(keyMsg("down"))
+	m = next.(Model)
+	if m.commitDrawerSelected != 1 || !m.commitDrawerActionFocused {
+		t.Fatalf("down at the final file should focus the action: selected=%d action=%v", m.commitDrawerSelected, m.commitDrawerActionFocused)
+	}
+	next, _ = m.Update(keyMsg("up"))
+	m = next.(Model)
+	if m.commitDrawerSelected != 1 || m.commitDrawerActionFocused {
+		t.Fatalf("up should return focus to the final file: selected=%d action=%v", m.commitDrawerSelected, m.commitDrawerActionFocused)
+	}
+	next, _ = m.Update(keyMsg("enter"))
+	m = next.(Model)
+	if !m.commitDiffDetailMode || m.commitDiffDetailPath != "b.go" {
+		t.Fatalf("Enter should open the final file: detail=%v path=%q", m.commitDiffDetailMode, m.commitDiffDetailPath)
 	}
 }
 
