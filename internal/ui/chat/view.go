@@ -42,7 +42,7 @@ const (
 	tipsMinWidth    = 100  // min terminal width to show rotating tips
 	twoColMinWidth  = 100  // min terminal width for the two-column keys layout
 	minCentDisplay  = 0.01 // smallest USD to print with 4 decimals
-	overlayMaxW     = 64   // max inner width of the keys overlay
+	overlayMaxW     = 96   // max inner width of the keys overlay
 	overlayColMin   = 28   // min column width in the two-column keys layout
 	minAvailW       = 8    // min header space before dropping title onto row 2
 	cardHorzPad     = 2    // horizontal card padding
@@ -923,28 +923,52 @@ func (m Model) helpOverlay() string {
 	gap := max(1, innerW-lipgloss.Width(title)-lipgloss.Width(closeBtn))
 	header := title + strings.Repeat(" ", gap) + closeBtn
 
-	format := func(row [2]string, width int) string {
-		line := keyStyle.Render(row[0]) + strings.Repeat(" ", max(keyColPad, keyW-lipgloss.Width(row[0])+keyColPad)) + actStyle.Render(row[1])
+	format := func(row [2]string, width int, kw int) string {
+		// Fixed key column + fixed gap so the description column always starts
+		// at the same x. This gives a clean grid instead of ragged spacing.
+		keyPart := keyStyle.Render(row[0])
+		gapW := max(keyColPad, kw-lipgloss.Width(row[0])+keyColPad)
+		actPart := actStyle.Render(row[1])
+		line := keyPart + strings.Repeat(" ", gapW) + actPart
 		if lipgloss.Width(line) > width {
-			return truncateRunes(row[0]+"  "+row[1], width)
+			// Preserve grid alignment even when truncating.
+			plain := truncateRunes(row[0]+"  "+row[1], width)
+			return hintStyle.Render(plain)
+		}
+		// Pad to exact column width so the next column starts aligned.
+		if w := lipgloss.Width(line); w < width {
+			line += strings.Repeat(" ", width-w)
 		}
 		return line
 	}
 	var body strings.Builder
 	if twoCol {
 		mid := (len(rows) + 1) / layoutHalf
+		// Per-column key widths give tighter grids than one global max.
+		keyWLeft, keyWRight := 0, 0
+		for i := range mid {
+			if w := lipgloss.Width(rows[i][0]); w > keyWLeft {
+				keyWLeft = w
+			}
+		}
+		for i := mid; i < len(rows); i++ {
+			if w := lipgloss.Width(rows[i][0]); w > keyWRight {
+				keyWRight = w
+			}
+		}
 		for i := 0; i < mid; i++ {
 			if i > 0 {
 				body.WriteString("\n")
 			}
-			left := format(rows[i], colW)
+			left := format(rows[i], colW, keyWLeft)
 			right := ""
 			if i+mid < len(rows) {
-				right = format(rows[i+mid], colW)
+				right = format(rows[i+mid], colW, keyWRight)
+			} else {
+				right = strings.Repeat(" ", colW)
 			}
-			pad := max(1, innerW-lipgloss.Width(left)-lipgloss.Width(right))
 			body.WriteString(left)
-			body.WriteString(strings.Repeat(" ", pad))
+			body.WriteString(strings.Repeat(" ", twoColPad))
 			body.WriteString(right)
 		}
 	} else {
@@ -952,7 +976,7 @@ func (m Model) helpOverlay() string {
 			if i > 0 {
 				body.WriteString("\n")
 			}
-			body.WriteString(format(row, innerW))
+			body.WriteString(format(row, innerW, keyW))
 		}
 	}
 	body.WriteString("\n")
