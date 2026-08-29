@@ -62,7 +62,7 @@ func (h *Host) Execute(ctx context.Context, parentSessionID, name, argsJSON, par
 	case task.ToolTaskList:
 		return h.execList(resolvedParentID, argsJSON)
 	case task.ToolTaskStatus:
-		return h.execStatus(argsJSON)
+		return h.execStatus(resolvedParentID, argsJSON)
 	case task.ToolTaskWait:
 		return h.execWait(ctx, resolvedParentID, argsJSON)
 	case task.ToolTaskCancel:
@@ -116,13 +116,13 @@ func (h *Host) execList(parentSessionID, argsJSON string) (string, string, strin
 	return completedTaskResult(result, err)
 }
 
-func (h *Host) execStatus(argsJSON string) (string, string, string, error) {
+func (h *Host) execStatus(parentSessionID, argsJSON string) (string, string, string, error) {
 	args, err := task.ParseStatusArgs([]byte(argsJSON))
 	if err != nil {
 		return toolError(err.Error())
 	}
 	snap, ok := h.Mgr.Status(args.ID)
-	if !ok {
+	if !ok || snap.ParentSessionID != parentSessionID {
 		return toolError(fmt.Sprintf("task_status: unknown id %q", args.ID))
 	}
 	result, err := task.EncodeStatusResult(task.StatusResult{Task: taskInfo(snap)})
@@ -135,6 +135,9 @@ func (h *Host) execWait(ctx context.Context, parentSessionID, argsJSON string) (
 		return toolError(err.Error())
 	}
 	if strings.TrimSpace(args.ID) != "" {
+		if snap, ok := h.Mgr.Status(args.ID); !ok || snap.ParentSessionID != parentSessionID {
+			return toolError(fmt.Sprintf("task_wait: unknown id %q", args.ID))
+		}
 		res, err := h.Mgr.Wait(ctx, args.ID)
 		if err != nil {
 			return toolError(err.Error())
@@ -205,11 +208,14 @@ func (h *Host) execCancel(parentSessionID, argsJSON string) (string, string, str
 		return toolError(err.Error())
 	}
 	if args.CancelAll || strings.TrimSpace(args.ID) == "" {
-		n := h.Mgr.CancelAll(parentSessionID)
+		n := h.Mgr.RequestCancelAll(parentSessionID)
 		result, err := task.EncodeCancelResult(task.CancelResult{CancelAll: true, CancelledCount: n})
 		return completedTaskResult(result, err)
 	}
-	snap, err := h.Mgr.Cancel(args.ID)
+	if snap, ok := h.Mgr.Status(args.ID); !ok || snap.ParentSessionID != parentSessionID {
+		return toolError(fmt.Sprintf("task_cancel: unknown id %q", args.ID))
+	}
+	snap, err := h.Mgr.RequestCancel(args.ID)
 	if err != nil {
 		return toolError(err.Error())
 	}

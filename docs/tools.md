@@ -154,7 +154,7 @@ When `settings.agents.enabled` is true, the parent agent gets:
 | `task_list` | List jobs for this parent session |
 | `task_status` | Status for one id |
 | `task_wait` | Wait for one id or all |
-| `task_cancel` | Cancel one id or all |
+| `task_cancel` | Signal cancellation for one id or all |
 
 Default `task` waits until the child finishes and returns a JSON summary.
 `background: true` returns a handle immediately (preferred for parallel
@@ -165,12 +165,13 @@ completes with a partial summary and a note instead of status `failed`.
 
 Background jobs do not inherit cancellation from the parent turn. They keep
 running after the parent response ends and still obey their configured timeout.
-`task_cancel` and manager shutdown cancel them explicitly. The v0.0.12
-Phase 1 ledger proves that cancellation reaches the provider request and
-leaves no pending tool or job row. The UI signals `RequestCancel` without
-waiting for child cleanup. `Cancel`, `CancelAll`, and `Shutdown` wait when the
-caller needs a terminal result. When a child model has no explicit variant, the
-manager selects the first supported variant in that model's profile.
+`task_cancel` signals cancellation and returns without waiting for child
+cleanup. Follow it with `task_status` or `task_wait` to observe the terminal
+row. Manager shutdown and the `/agents` drawer use the same manager-owned
+signal path. `Cancel`, `CancelAll`, and `Shutdown` wait when the caller needs
+a terminal result. Task controls are scoped to the current parent session.
+When a child model has no explicit variant, the manager selects the first
+supported variant in that model's profile.
 
 If a tool context ends before its result is written, the agent uses a short
 independent persistence context to write `status = cancelled` and bounded

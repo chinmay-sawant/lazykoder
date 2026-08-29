@@ -676,8 +676,10 @@ func (m *Manager) List(parentSessionID string) []Snapshot {
 	return out
 }
 
-// RequestCancel signals a live job without waiting for cleanup or persistence.
-// It is safe to call repeatedly and is intended for UI event handlers.
+// RequestCancel signals a live job without waiting for worker cleanup. A
+// durable-only open job is marked cancelled immediately because it has no
+// in-memory worker to signal. It is safe to call repeatedly and is intended
+// for UI and task-tool callers that return before cleanup completes.
 func (m *Manager) RequestCancel(id string) (Snapshot, error) {
 	m.mu.Lock()
 	h, ok := m.handles[id]
@@ -687,10 +689,13 @@ func (m *Manager) RequestCancel(id string) (Snapshot, error) {
 		h.cancel()
 		return h.snapshot(), nil
 	}
-	// A durable-only job is handled by Cancel, which can perform the bounded
-	// terminal write outside the UI update path.
 	if store != nil {
-		if row, err := store.GetSubagentJob(context.Background(), id); err == nil {
+		changed, err := store.CancelSubagentJob(context.Background(), id)
+		if err != nil {
+			m.recordPersistenceError(fmt.Errorf("subagent: persist cancellation for %q: %w", id, err))
+			return Snapshot{}, err
+		}
+		if row, err := store.GetSubagentJob(context.Background(), id); err == nil && (changed || IsTerminalStatus(row.Status)) {
 			return snapshotFromRow(row), nil
 		}
 	}
@@ -852,14 +857,43 @@ func (m *Manager) requestCancelHandles(parentSessionID string) []*handle {
 	return hs
 }
 
-// RequestCancelAll signals every live non-terminal job for a parent without
-// waiting for workers or durable writes.
+// RequestCancelAll signals every non-terminal job for a parent without
+// waiting for live workers. Durable-only open rows are marked cancelled.
 func (m *Manager) RequestCancelAll(parentSessionID string) int {
 	hs := m.requestCancelHandles(parentSessionID)
 	for _, h := range hs {
 		h.cancel()
 	}
-	return len(hs)
+	count := len(hs)
+	liveIDs := make(map[string]struct{}, len(hs))
+	for _, h := range hs {
+		liveIDs[h.id] = struct{}{}
+	}
+	m.mu.Lock()
+	store := m.store
+	m.mu.Unlock()
+	if store == nil {
+		return count
+	}
+	rows, err := store.ListSubagentJobs(context.Background(), parentSessionID)
+	if err != nil {
+		m.recordPersistenceError(fmt.Errorf("subagent: list jobs for cancellation: %w", err))
+		return count
+	}
+	for _, row := range rows {
+		if _, ok := liveIDs[row.ID]; ok || IsTerminalStatus(row.Status) {
+			continue
+		}
+		changed, err := store.CancelSubagentJob(context.Background(), row.ID)
+		if err != nil {
+			m.recordPersistenceError(fmt.Errorf("subagent: persist cancellation for %q: %w", row.ID, err))
+			continue
+		}
+		if changed {
+			count++
+		}
+	}
+	return count
 }
 
 // CancelAll cancels every non-terminal job for parentSessionID and waits for

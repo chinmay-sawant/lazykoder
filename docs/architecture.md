@@ -371,8 +371,11 @@ concurrency (default 4, hard max 20), runs each child as `agent.Agent` on a
 hidden child session (`kind=subagent`), and returns only a final summary to
 the parent model. Settings live under `agents` in
 `.lazykoder/settings.json`. Depth is 1: children cannot spawn further tasks.
-The manager stores the queued job before starting its runner. A later store or
-recovery failure is surfaced through the manager and the TUI.
+The manager stores the queued job before starting its runner. `task_cancel`
+signals through the manager and returns before worker cleanup; `task_status` and
+`task_wait` report the terminal state afterward. Status, wait, and cancel are
+scoped to the current parent session. A later store or recovery failure is
+surfaced through the manager and the TUI.
 
 ## Module identity
 
