@@ -211,11 +211,20 @@ func (m Model) chatScreen() string {
 }
 
 func overlayOn(base string, width, height int, card string) string {
-	dimBg := lipgloss.Color("#121212")
+	// Semi-transparent charcoal wash behind the card. The whole background
+	// (the dark teal assistant panels and the "you" question rows you see in
+	// the screenshot) must stay visible through it, but the wash pulls focus
+	// to the question. Previously the base was rendered with Faint and the
+	// inner panel Backgrounds (#102832 for assistant) overrode the charcoal,
+	// so text behind was not uniformly charcoal when the transcript had content.
+	// Strip ANSI so the charcoal covers uniformly, then re-render with the
+	// wash. First-time empty screen (no panels) already looked correct.
+	dimBg := lipgloss.Color("#1a1a1a")
 	if theme.CurrentMode() == theme.ModeLight {
-		dimBg = lipgloss.Color("#d0d0d0")
+		dimBg = lipgloss.Color("#c8c8c8")
 	}
-	baseLines := strings.Split(lipgloss.NewStyle().Background(dimBg).Foreground(theme.ColorMute()).Faint(true).Width(max(1, width)).Render(base), "\n")
+	plainBase := ansi.Strip(base)
+	baseLines := strings.Split(lipgloss.NewStyle().Background(dimBg).Foreground(lipgloss.Color("#8a8a8a")).Width(max(1, width)).Render(plainBase), "\n")
 	for len(baseLines) < height {
 		baseLines = append(baseLines, "")
 	}
@@ -1017,12 +1026,18 @@ func (m Model) confirmOverlay() string {
 
 func (m Model) askOverlay() string {
 	_, cardW, lines, _ := m.askOverlayLines()
-	content := keepBackground(strings.Join(lines, "\n"), theme.ColorDialog())
+	// Card is a lighter charcoal than the dim #1a1a1a so it pops while the
+	// dimmed assistant/question behind remains visible through the wash.
+	cardBg := lipgloss.Color("#252525")
+	if theme.CurrentMode() == theme.ModeLight {
+		cardBg = theme.ColorDialog()
+	}
+	content := keepBackground(strings.Join(lines, "\n"), cardBg)
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(theme.ColorAccent()).
-		BorderBackground(theme.ColorDialog()).
-		Background(theme.ColorDialog()).
+		BorderBackground(cardBg).
+		Background(cardBg).
 		Padding(1, cardHorzPad).
 		Width(cardW).
 		Render(content)
