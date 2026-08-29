@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/chinmay-sawant/lazykoder/internal/db"
+	"github.com/chinmay-sawant/lazykoder/internal/settings"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/task"
 )
 
@@ -173,6 +174,51 @@ func TestCancelBeforeFinish(t *testing.T) {
 	}
 	if res.Status != string(StatusCancelled) {
 		t.Fatalf("result status = %q", res.Status)
+	}
+}
+
+func TestBackgroundSpawnSurvivesParentCancellation(t *testing.T) {
+	r := newBlockingRunner("background-finished")
+	m := NewManager(NewConfig(), r)
+	parentCtx, cancelParent := context.WithCancel(context.Background())
+	snap, err := m.Spawn(parentCtx, "ses_parent", "prt_parent", Spec{
+		Prompt:     "continue in the background",
+		Background: true,
+	})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	select {
+	case <-r.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("background runner did not start")
+	}
+	cancelParent()
+	time.Sleep(25 * time.Millisecond)
+	status, ok := m.Status(snap.ID)
+	if !ok {
+		t.Fatal("background job disappeared after parent cancellation")
+	}
+	if status.Status == string(StatusCancelled) {
+		t.Fatalf("background job was cancelled with parent: %+v", status)
+	}
+	close(r.release)
+	result, err := m.Wait(context.Background(), snap.ID)
+	if err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if result.Status != string(StatusCompleted) || result.Summary != "background-finished" {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestModelProfileUsesFirstVariantWhenDefaultIsSelected(t *testing.T) {
+	profile := ModelProfile{ID: "child-model", Variants: []string{"low", "medium"}}
+	if got := profile.variant("", ""); got != "low" {
+		t.Fatalf("default child variant = %q, want low", got)
+	}
+	if got := profile.variant("medium", ""); got != "medium" {
+		t.Fatalf("selected child variant = %q, want medium", got)
 	}
 }
 
@@ -354,20 +400,20 @@ func TestHostUnknownToolDenied(t *testing.T) {
 	if status != "denied" {
 		t.Fatalf("status=%q", status)
 	}
-	if !IsTaskTool("task") || IsTaskTool("bash") {
+	if !task.IsTaskTool("task") || task.IsTaskTool("bash") {
 		t.Fatal("IsTaskTool mismatch")
 	}
 }
 
 func TestConfigNormalize(t *testing.T) {
-	c := Config{MaxConcurrent: 100, MaxQueued: 0, Timeout: 0, DefaultRole: "nope", MaxDepth: 3, ChildMaxSteps: 0}.Normalize()
-	if c.MaxConcurrent != HardMaxConcurrent {
+	c := Config{MaxConcurrent: 100, MaxQueued: 0, Timeout: -time.Second, DefaultRole: "nope", MaxDepth: 3, ChildMaxSteps: 0}.Normalize()
+	if c.MaxConcurrent != settings.MaxMaxConcurrent {
 		t.Fatalf("MaxConcurrent=%d", c.MaxConcurrent)
 	}
-	if c.MaxQueued != DefaultMaxQueued {
+	if c.MaxQueued != settings.DefaultMaxQueued {
 		t.Fatalf("MaxQueued=%d", c.MaxQueued)
 	}
-	if c.Timeout != DefaultTimeout {
+	if c.Timeout != time.Duration(settings.DefaultAgentsTimeoutSec)*time.Second {
 		t.Fatalf("Timeout=%v", c.Timeout)
 	}
 	if c.DefaultRole != DefaultRole {
@@ -376,10 +422,10 @@ func TestConfigNormalize(t *testing.T) {
 	if c.BashConfirm != BashConfirmParent {
 		t.Fatalf("BashConfirm=%q", c.BashConfirm)
 	}
-	if c.MaxDepth != DefaultMaxDepth || DefaultMaxDepth != 1 {
+	if c.MaxDepth != settings.DefaultMaxDepth || settings.DefaultMaxDepth != 1 {
 		t.Fatalf("MaxDepth=%d, want product depth 1", c.MaxDepth)
 	}
-	if c.ChildMaxSteps != DefaultChildMaxSteps || DefaultChildMaxSteps != 1000 {
+	if c.ChildMaxSteps != settings.DefaultChildMaxSteps || settings.DefaultChildMaxSteps != 1000 {
 		t.Fatalf("ChildMaxSteps=%d, want 1000", c.ChildMaxSteps)
 	}
 }

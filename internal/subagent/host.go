@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/chinmay-sawant/lazykoder/internal/orchestrator"
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/task"
 )
@@ -16,21 +17,29 @@ import (
 type Host struct {
 	Mgr             *Manager
 	ParentSessionID string
+	plan            orchestrator.Plan
+	reviewPlan      bool
+	retried         map[string]bool
 }
 
 // NewHost wraps a Manager for tool dispatch.
 func NewHost(mgr *Manager) *Host {
-	return &Host{Mgr: mgr}
+	return &Host{Mgr: mgr, retried: make(map[string]bool)}
+}
+
+// SetPlan gives the host the current turn's bounded plan so task_wait can
+// review terminal child summaries and retry one failed assignment once.
+func (h *Host) SetPlan(plan orchestrator.Plan, review bool) {
+	h.plan = plan
+	h.reviewPlan = review
+	if h.retried == nil {
+		h.retried = make(map[string]bool)
+	}
 }
 
 // Specs returns the parent task tool advertisements (owned by tools/task).
 func (h *Host) Specs() []opencode.ToolSpec {
 	return task.Specs()
-}
-
-// IsTaskTool reports whether name is a parent task control-plane tool.
-func IsTaskTool(name string) bool {
-	return task.IsTaskTool(name)
 }
 
 // Execute dispatches a task tool. status is completed, denied, or error.
@@ -77,6 +86,7 @@ func (h *Host) execTask(ctx context.Context, parentSessionID, argsJSON, partID s
 		Description: args.Description,
 		Role:        args.Role,
 		Model:       args.Model,
+		ModelClass:  args.ModelClass,
 		Variant:     args.Variant,
 		MaxSteps:    args.MaxSteps,
 		Background:  args.Background,
@@ -136,8 +146,57 @@ func (h *Host) execWait(ctx context.Context, parentSessionID, argsJSON string) (
 	if err != nil {
 		return toolError(err.Error())
 	}
+	if h.reviewPlan && len(h.plan.Subtasks) > 0 {
+		results = h.reviewAndRespawn(ctx, parentSessionID, results)
+	}
 	result, err := task.EncodeWaitResult(task.WaitResult{Tasks: taskInfosFromResults(results)})
 	return completedTaskResult(result, err)
+}
+
+func (h *Host) reviewAndRespawn(ctx context.Context, parentSessionID string, results []Result) []Result {
+	for index, result := range results {
+		if result.Status == string(StatusCompleted) && strings.TrimSpace(result.Summary) != "" {
+			continue
+		}
+		if h.retried[result.ID] {
+			continue
+		}
+		h.retried[result.ID] = true
+		spec := retrySpec(h.plan, result)
+		if spec.Prompt == "" {
+			continue
+		}
+		snap, err := h.Mgr.Spawn(ctx, parentSessionID, "", spec)
+		if err != nil {
+			continue
+		}
+		retry, err := h.Mgr.Wait(ctx, snap.ID)
+		if err != nil {
+			continue
+		}
+		results[index] = retry
+	}
+	return results
+}
+
+func retrySpec(plan orchestrator.Plan, result Result) Spec {
+	for _, task := range plan.Subtasks {
+		if task.ID == result.Name || task.Name == result.Name {
+			return Spec{
+				Name:        result.Name + " retry",
+				Prompt:      task.Prompt + "\n\nThis is the single allowed retry. Re-check the work and finish with a concise summary.",
+				Description: task.Name,
+				Role:        task.Role,
+				ModelClass:  task.ModelClass,
+			}
+		}
+	}
+	return Spec{
+		Name:        result.Name + " retry",
+		Prompt:      "Re-check the assigned sub-agent task and finish with a concise summary.\n\nPrevious error: " + result.Err,
+		Description: result.Name,
+		Role:        result.Role,
+	}
 }
 
 func (h *Host) execCancel(parentSessionID, argsJSON string) (string, string, string, error) {

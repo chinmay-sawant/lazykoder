@@ -13,6 +13,54 @@ stored with `status = denied` and `output = "unknown tool: <name>"`.
 Allowlisted tools that are forbidden for the current role get
 `tool not allowed: <name>`.
 
+## Pluggable tools
+
+`internal/agent/toolplugin` owns the registry for compiled and discovered
+extensions. `internal/agent/tools_registry.go` keeps the built-in agent
+handlers and parent allowlists. A compiled extension can call
+`internal/tools.Register`, which delegates to the shared registry.
+
+Set `tools.allow_discovered` to `true` in `.lazykoder/settings.json` and add a
+JSON array to `<workdir>/.lazykoder/tools.json`:
+
+```json
+[
+  {
+    "name": "format-go",
+    "description": "Format one Go file",
+    "parameters": {
+      "type": "object",
+      "properties": {"file": {"type": "string"}},
+      "required": ["file"]
+    },
+    "command": "gofmt -w {file}",
+    "binaries": ["gofmt"]
+  }
+]
+```
+
+The optional global mirror is `~/.config/lazykoder/tools.json`; local names
+replace global names. Descriptors are bounded and symlink files are rejected.
+Discovery only reads and validates JSON. It never runs the command. Arguments
+are shell-quoted before substitution. At execution time the command still
+passes `policy.ClassifyWithAllowlist`, and its working directory must pass
+`workspace.Resolve`. A missing executable or a failed command becomes an
+error tool result. Discovered tools cannot replace built-in names.
+
+The `tools.enabled` map controls which registered tools are advertised to the
+model. `/tools` lists the current registry, filters by name or description,
+and toggles each entry with Enter. Escape closes the picker.
+
+Compiled tools implement the narrow contract in `internal/agent/toolplugin`:
+
+```go
+type Tool interface {
+    Spec() opencode.ToolSpec
+    Run(context.Context, string, toolplugin.Context) (string, string, string, error)
+    Title(string) string
+}
+```
+
 ## bash
 
 - Input: `{"command": "...", "workdir": "..."}`.
@@ -102,6 +150,12 @@ spawns; follow with `task_wait`). Default child step budget is 1000
 (configurable via settings `agents.child_max_steps` or per-spawn
 `max_steps`). If a child hits its step limit after doing work, the job
 completes with a partial summary and a note instead of status `failed`.
+
+Background jobs do not inherit cancellation from the parent turn. They keep
+running after the parent response ends and still obey their configured timeout.
+`task_cancel` and manager shutdown cancel them explicitly. When a child model
+has no explicit variant, the manager selects the first supported variant in
+that model's profile.
 
 Child wall-clock lifetime is **not** a `task` argument. It always comes
 from project settings `agents.default_timeout_sec` (default 600s / 10m).

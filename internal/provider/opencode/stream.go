@@ -34,6 +34,9 @@ type Delta struct {
 // onDelta is invoked for each useful chunk. A non-SSE JSON body is treated as
 // one complete response so tests and non-streaming servers still work.
 func (c *Client) ChatStream(ctx context.Context, req ChatRequest, onDelta func(Delta) error) (*ChatResponse, error) {
+	if isResponsesEndpoint(c.chatURL(req)) {
+		return c.chatResponsesStream(ctx, req, onDelta)
+	}
 	resp, err := c.postChat(ctx, req, true)
 	if err != nil {
 		return nil, err

@@ -24,7 +24,7 @@ func TestSkillsSlashDiscoversAndActivatesLocalSkill(t *testing.T) {
 	cfg.Skills.IncludeGlobal = false
 	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: workdir, Settings: &cfg})
 	var cmd tea.Cmd
-	m, cmd = m.runSlash("/skills")
+	m, cmd = m.runSlashArg("/skills", "")
 	if !m.pickerMode || m.pickerKind != pickerKindSkills || cmd == nil {
 		t.Fatalf("skills picker = mode=%v kind=%q cmd=%v", m.pickerMode, m.pickerKind, cmd != nil)
 	}
@@ -43,7 +43,7 @@ func TestSkillsSlashRespectsDisabledSetting(t *testing.T) {
 	cfg := settings.Default()
 	cfg.Skills.Enabled = false
 	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir(), Settings: &cfg})
-	next, cmd := m.runSlash("/skills")
+	next, cmd := m.runSlashArg("/skills", "")
 	if next.pickerMode || cmd == nil {
 		t.Fatalf("disabled skills opened picker: mode=%v cmd=%v", next.pickerMode, cmd != nil)
 	}

@@ -15,8 +15,10 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/chinmay-sawant/lazykoder/internal/agent"
+	"github.com/chinmay-sawant/lazykoder/internal/agent/toolplugin"
 	"github.com/chinmay-sawant/lazykoder/internal/db"
 	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
+	"github.com/chinmay-sawant/lazykoder/internal/provider"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/edit"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/markdown"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
@@ -88,7 +90,7 @@ func (m *Model) replay(sessionID string) {
 	m.items = append(m.items, res.items...)
 	m.inputHistory = append(m.inputHistory, res.history...)
 	for _, u := range res.usage {
-		m.applyUsage(u.part, u.modelID)
+		m.applyUsage(u.part, u.modelID, u.providerID)
 	}
 	for _, p := range res.compactMeter {
 		m.applyCompactMeter(p)
@@ -97,7 +99,7 @@ func (m *Model) replay(sessionID string) {
 	m.syncTranscript()
 }
 
-func (m *Model) applyUsage(p db.Part, modelID string) {
+func (m *Model) applyUsage(p db.Part, modelID, providerID string) {
 	var in, out, total int64
 	if p.TokensInput != nil {
 		in = *p.TokensInput
@@ -125,7 +127,7 @@ func (m *Model) applyUsage(p db.Part, modelID string) {
 	if p.TokensCacheRead != nil {
 		hit = *p.TokensCacheRead
 	}
-	m.addStepCost(p, modelID)
+	m.addStepCost(p, modelID, providerID)
 
 	miss := cacheMissTokens(in, hit)
 	if hit > 0 {
@@ -204,8 +206,11 @@ func estimateModelContext(items []transcriptItem) int64 {
 	return n
 }
 
-func (m *Model) addStepCost(p db.Part, modelID string) {
-	m.sessionCost += stepCostUSD(p, m.modelInfos, m.usageModelID(modelID))
+func (m *Model) addStepCost(p db.Part, modelID, providerID string) {
+	if providerID == "" {
+		providerID = m.projectSettings.EffectiveProvider()
+	}
+	m.sessionCost += stepCostUSD(p, m.modelInfos, m.usageModelID(modelID), providerID)
 }
 
 func (m *Model) recomputeSessionCost() {
@@ -251,11 +256,15 @@ func sessionUsageOf(store *db.Store, infos []modelscache.Info, sessionID string)
 		if modelID == "" {
 			modelID = sess.Model
 		}
+		providerID := msg.ProviderID
+		if providerID == "" {
+			providerID = sess.Provider
+		}
 		for _, p := range parts {
 			if p.Type != "step-finish" {
 				continue
 			}
-			out.Cost += stepCostUSD(p, infos, modelID)
+			out.Cost += stepCostUSD(p, infos, modelID, providerID)
 			var in, hit int64
 			if p.TokensInput != nil {
 				in = *p.TokensInput
@@ -274,7 +283,7 @@ func sessionUsageOf(store *db.Store, infos []modelscache.Info, sessionID string)
 	return out
 }
 
-func stepCostUSD(p db.Part, infos []modelscache.Info, modelID string) float64 {
+func stepCostUSD(p db.Part, infos []modelscache.Info, modelID, providerID string) float64 {
 	if p.Cost != nil && *p.Cost > 0 {
 		return *p.Cost
 	}
@@ -295,20 +304,49 @@ func stepCostUSD(p db.Part, infos []modelscache.Info, modelID string) float64 {
 		written = *p.TokensCacheWrite
 	}
 	if in > 0 || out > 0 || hit > 0 || written > 0 {
-		return costUSDFor(infos, modelID, in, out, hit, written)
+		return costUSDFor(infos, modelID, providerID, in, out, hit, written)
 	}
 	if total > 0 {
-		return costUSDFor(infos, modelID, 0, total, 0, 0)
+		return costUSDFor(infos, modelID, providerID, 0, total, 0, 0)
 	}
 	return 0
 }
 
-func costUSDFor(infos []modelscache.Info, modelID string, input, output, cacheRead, cacheWrite int64) float64 {
-	info, ok := modelscache.InfoOf(infos, modelID)
+func costUSDFor(infos []modelscache.Info, modelID, providerID string, input, output, cacheRead, cacheWrite int64) float64 {
+	info, ok := infoForModelProvider(infos, modelID, providerID)
 	if !ok {
 		return 0
 	}
 	return info.CostUSD(input, output, cacheRead, cacheWrite)
+}
+
+func infoForModelProvider(infos []modelscache.Info, modelID, providerID string) (modelscache.Info, bool) {
+	if providerID != "" {
+		providerID = provider.Normalize(providerID)
+	}
+	var fallback modelscache.Info
+	hasFallback := false
+	for _, info := range infos {
+		if info.ID != modelID {
+			continue
+		}
+		marked, ok := modelscache.InfoOf([]modelscache.Info{info}, modelID)
+		if !ok {
+			continue
+		}
+		rowProvider := providerIDForModelInfo(marked)
+		if providerID == "" || rowProvider == providerID {
+			return marked, true
+		}
+		if rowProvider == "" && !hasFallback {
+			fallback = marked
+			hasFallback = true
+		}
+	}
+	if hasFallback {
+		return fallback, true
+	}
+	return modelscache.Info{}, false
 }
 
 func cacheMissTokens(input, hit int64) int64 {
@@ -558,35 +596,25 @@ func itemTime(messageMS int64, partMS int64) int64 {
 	return time.Now().UnixMilli()
 }
 
-func (m Model) roleLine(label string, when int64) string {
-	style := roleStyle
-	switch label {
-	case roleYou:
-		style = userRoleStyle
-	case roleAssistant:
-		style = assistantRoleStyle
-	}
-	return m.alignMeta(style.Render(label), formatClock(when))
-}
-
-// metaBand renders the role/timestamp line for assistant turns as a
-// full-pane-wide strip painted with the assistant panel color, so the blue
-// surface runs edge to edge instead of stopping at the text column.
+// metaBand renders the role/timestamp line as a full-pane-wide strip painted
+// with the speaker's panel color, so the surface runs edge to edge.
 func (m Model) metaBand(label string, when int64) string {
 	style := roleStyle
+	background := theme.ColorAssistantPanel()
 	switch label {
 	case roleYou:
 		style = userRoleStyle
+		background = theme.ColorUserPanel()
 	case roleAssistant:
 		style = assistantRoleStyle
 	}
-	left := style.Background(theme.ColorAssistantPanel()).Render(label)
-	stamp := hintStyle.Background(theme.ColorAssistantPanel()).Render(formatClock(when))
+	left := style.Background(background).Render(label)
+	stamp := hintStyle.Background(background).Render(formatClock(when))
 	width := m.metaWidth()
 	rw := lipgloss.Width(stamp)
 	lw := lipgloss.Width(left)
 	gap := width - lw - rw
-	gapStyle := lipgloss.NewStyle().Background(theme.ColorAssistantPanel())
+	gapStyle := lipgloss.NewStyle().Background(background)
 	if gap < 1 {
 		return left + gapStyle.Render(" ") + stamp
 	}
@@ -694,9 +722,19 @@ func (m *Model) applyPart(p db.Part) {
 				part:      p,
 			})
 		}
+	case "plan":
+		if p.Text == nil {
+			return
+		}
+		m.items = append(m.items, transcriptItem{
+			kind: itemNote,
+			text: "orchestration plan\n" + *p.Text,
+			when: itemTime(0, p.TimeCreated),
+			part: p,
+		})
 	case "step-finish":
 		m.collapseLiveReasoning()
-		m.applyUsage(p, m.model)
+		m.applyUsage(p, m.model, m.projectSettings.EffectiveProvider())
 	case agent.CompactPartType:
 		m.applyCompactNotice(p)
 	}
@@ -855,12 +893,11 @@ func (m Model) renderItem(it transcriptItem, selected bool, streaming bool) stri
 func (m Model) renderItemWithToolMode(it transcriptItem, selected bool, streaming, fullToolOutput bool) string {
 	switch it.kind {
 	case itemUser:
-		// The user frame already provides a clear boundary. Add a subtle wash
-		// without wrapping it in a second border, which keeps selection and
-		// copy coordinates stable.
-		body := lipgloss.NewStyle().Background(theme.ColorUserPanel()).Render(
-			userStyle.Render(frameUserPrompt(it.text, m.contentWidth(it.when))))
-		return m.roleLine(roleYou, it.when) + "\n" + body
+		panelWidth := max(1, m.metaWidth())
+		body := userStyle.Render(frameUserPrompt(it.text, panelWidth-transcriptLinearPad))
+		body = keepBackground(body, theme.ColorUserPanel())
+		body = lipgloss.NewStyle().Background(theme.ColorUserPanel()).Width(panelWidth).Render(body)
+		return m.metaBand(roleYou, it.when) + "\n" + body
 	case itemAssistant:
 		// The panel and its role band span the full pane width. The clock
 		// lives on the band above the panel, so message text never shares a
@@ -887,6 +924,12 @@ func (m Model) renderItemWithToolMode(it transcriptItem, selected bool, streamin
 	case itemTool:
 		return m.renderToolMode(it.tool, it.part, it.collapsed, it.when, fullToolOutput)
 	case itemNote:
+		if it.part.Type == "plan" {
+			panelWidth := max(1, m.metaWidth())
+			innerWidth := max(1, panelWidth-cardHorzPad)
+			rendered := markdown.Render(it.text, innerWidth)
+			return transcriptPanel(rendered, panelWidth, theme.ColorPlanPanel(), theme.ColorPlanBorder())
+		}
 		return hintStyle.Render(it.text)
 	}
 	if selected {
@@ -933,7 +976,7 @@ func (m Model) renderToolMode(tool db.ToolCall, part db.Part, collapsed bool, wh
 		label = name + "  " + title
 	}
 	// Collapsed or open: still show +/− counts on the edit header.
-	if name == "edit" {
+	if name == "edit" || toolMetadataDiff(tool) != "" {
 		if add, del := diffStat(m.toolEditDiff(tool)); add+del > 0 {
 			label += "  " + formatDiffStat(add, del)
 		}
@@ -944,7 +987,7 @@ func (m Model) renderToolMode(tool db.ToolCall, part db.Part, collapsed bool, wh
 	bodyWidth := max(minPaneWidth, m.toolCardWidth())
 
 	// Edit tools: full-width soft green/red panel when expanded.
-	if name == "edit" {
+	if name == "edit" || toolMetadataDiff(tool) != "" {
 		return m.renderEditTool(header, tool, collapsed, bodyWidth)
 	}
 
@@ -1442,6 +1485,11 @@ func (m Model) toolCardWidth() int {
 }
 
 func toolCommand(tc db.ToolCall) string {
+	if tool, ok := toolplugin.Lookup(tc.Tool); ok {
+		if title := strings.TrimSpace(tool.Title(tc.InputJSON)); title != "" {
+			return title
+		}
+	}
 	if tc.Tool == "bash" {
 		var args struct {
 			Command string `json:"command"`

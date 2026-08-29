@@ -8,7 +8,7 @@ import (
 
 	"github.com/chinmay-sawant/lazykoder/internal/agent"
 	"github.com/chinmay-sawant/lazykoder/internal/db"
-	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
+	"github.com/chinmay-sawant/lazykoder/internal/provider"
 	"github.com/chinmay-sawant/lazykoder/internal/skills"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/question"
 )
@@ -18,8 +18,9 @@ const maxTitleRunes = 60
 
 // AgentRunner runs a child job via agent.Agent on a dedicated child session.
 type AgentRunner struct {
-	Store  *db.Store
-	Client *opencode.Client
+	Store    *db.Store
+	Client   provider.Client
+	Provider string
 }
 
 // Run creates (or resumes) a child session, runs one agent turn, and returns a summary.
@@ -66,6 +67,7 @@ func (r AgentRunner) Run(ctx context.Context, job Job) (Result, error) {
 			Title:           title,
 			Directory:       workdir,
 			Model:           job.Model,
+			Provider:        r.Provider,
 			Variant:         strPtr(job.Variant),
 			ParentSessionID: parentID,
 			Kind:            db.SessionKindSubagent,
@@ -103,13 +105,13 @@ func (r AgentRunner) Run(ctx context.Context, job Job) (Result, error) {
 	ag := agent.New(r.Store, r.Client, workdir, agent.Options{
 		Session:          &sess,
 		MaxSteps:         job.MaxSteps,
+		Provider:         r.Provider,
 		Model:            job.Model,
 		Endpoint:         job.Endpoint,
 		Variant:          job.Variant,
 		ContextWindow:    job.ContextWindow,
 		Confirm:          job.Confirm,
 		Ask:              ask,
-		Host:             childSubagentHost(job),
 		ToolNames:        job.Tools,
 		AgentName:        job.Name,
 		SkillContext:     append([]skills.Context{}, job.Skills...),
@@ -140,7 +142,7 @@ func (r AgentRunner) Run(ctx context.Context, job Job) (Result, error) {
 		}
 		// Step budget exhausted after real work is a partial success, not a crash.
 		// Parent models were treating "failed / step limit" as a hard agent crash.
-		if isStepLimitErr(err) {
+		if errors.Is(err, agent.ErrStepLimit) {
 			res.Summary = withStepLimitNote(summary, err)
 			res.Status = string(StatusCompleted)
 			return res, nil
@@ -180,10 +182,6 @@ func (r AgentRunner) finishedSummary(ctx context.Context, sessionID string) (str
 	return summary, true
 }
 
-func isStepLimitErr(err error) bool {
-	return errors.Is(err, agent.ErrStepLimit)
-}
-
 func withStepLimitNote(summary string, err error) string {
 	note := "[note: child step limit reached; results may be incomplete"
 	if err != nil {
@@ -202,14 +200,4 @@ func strPtr(s string) *string {
 		return nil
 	}
 	return &s
-}
-
-// childSubagentHost returns a nested Host only when Depth is still below
-// MaxDepth. Product MaxMaxDepth is 1, so this is always nil today. Nested
-// Host construction is reserved for when nesting ships.
-func childSubagentHost(job Job) agent.SubagentHost {
-	if job.Depth >= job.MaxDepth {
-		return nil
-	}
-	return nil
 }

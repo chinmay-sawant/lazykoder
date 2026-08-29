@@ -16,18 +16,7 @@ const slashCompactMaxWidth = 100
 // description, plus the 2-col space left for the shorthand pad.
 const slashMinNameGap = 2
 
-type slashPaletteGroup struct {
-	title string
-	names []string
-}
-
-// slashPaletteGroups is the painted order. Headings are not selectable.
-var slashPaletteGroups = []slashPaletteGroup{
-	{title: "Session", names: []string{"/new", "/resume", "/continue", "/compact"}},
-	{title: "Model", names: []string{"/model", "/variant", "/refresh"}},
-	{title: "Project", names: []string{"/agents", "/history", "/spawn", "/settings", "/skills", "/usage"}},
-	{title: "Help", names: []string{"/help"}},
-}
+var slashGroupOrder = []string{"Session", "Model", "Project", "Help"}
 
 // slashView renders a grouped command palette above the prompt.
 func (m Model) slashView() string {
@@ -55,48 +44,26 @@ func (m Model) slashView() string {
 	if len(m.slashItems) == 0 {
 		body.WriteString(descSt.Render("no matching command"))
 	} else {
-		byName := make(map[string]slashCmd, len(m.slashItems))
-		for _, cmd := range m.slashItems {
-			byName[cmd.name] = cmd
-		}
-		seen := make(map[string]bool, len(m.slashItems))
-		for gi, g := range slashPaletteGroups {
-			var groupItems []slashCmd
-			for _, name := range g.names {
-				cmd, ok := byName[name]
-				if !ok {
-					continue
-				}
-				groupItems = append(groupItems, cmd)
-				seen[name] = true
-			}
+		for gi, group := range slashGroupOrder {
+			groupItems := slashCommandsInGroup(m.slashItems, group)
 			if len(groupItems) == 0 {
 				continue
 			}
-			if gi > 0 || body.Len() > 0 {
+			if !compact && (gi > 0 || body.Len() > 0) {
 				body.WriteString("\n")
 			}
 			if compact && len(groupItems) == 1 {
 				cmd := groupItems[0]
-				body.WriteString(groupSt.Render(g.title))
+				body.WriteString(groupSt.Render(group))
 				body.WriteString("  ")
 				body.WriteString(slashCommandRow(cmd, cmd.name == selName, compact, cardW, nameW, drawerSelectedStyle, nameSt, descSt))
 				continue
 			}
-			body.WriteString(groupSt.Render(g.title))
+			body.WriteString(groupSt.Render(group))
 			for _, cmd := range groupItems {
 				body.WriteString("\n")
 				body.WriteString(slashCommandRow(cmd, cmd.name == selName, compact, cardW, nameW, drawerSelectedStyle, nameSt, descSt))
 			}
-		}
-		for _, cmd := range m.slashItems {
-			if seen[cmd.name] {
-				continue
-			}
-			if body.Len() > 0 {
-				body.WriteString("\n")
-			}
-			body.WriteString(slashCommandRow(cmd, cmd.name == selName, compact, cardW, nameW, drawerSelectedStyle, nameSt, descSt))
 		}
 	}
 
@@ -105,6 +72,16 @@ func (m Model) slashView() string {
 		foot = selDesc
 	}
 	return drawerChrome("commands", selName, body.String(), foot, cardW)
+}
+
+func slashCommandsInGroup(commands []slashCmd, group string) []slashCmd {
+	items := make([]slashCmd, 0, len(commands))
+	for _, cmd := range commands {
+		if cmd.group == group {
+			items = append(items, cmd)
+		}
+	}
+	return items
 }
 
 func slashCommandRow(cmd slashCmd, selected, compact bool, cardW, nameW int, sel, nameSt, descSt lipgloss.Style) string {
@@ -188,11 +165,6 @@ func (m Model) updateSlashKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 	return m, nil
 }
 
-// runSlash executes a chosen slash command.
-func (m Model) runSlash(name string) (Model, tea.Cmd) {
-	return m.runSlashArg(name, "")
-}
-
 func (m Model) runSlashArg(name, extra string) (Model, tea.Cmd) {
 	switch name {
 	case "/new":
@@ -201,6 +173,8 @@ func (m Model) runSlashArg(name, extra string) (Model, tea.Cmd) {
 		return m.openSessionPicker(), nil
 	case "/model":
 		return m.openModelSearch(), nil
+	case "/provider":
+		return m.openProviderPicker(), nil
 	case "/variant":
 		return m.openVariantPicker(), nil
 	case "/refresh":
@@ -209,18 +183,30 @@ func (m Model) runSlashArg(name, extra string) (Model, tea.Cmd) {
 		return m.openUsageModal(), m.fetchUsage()
 	case "/status":
 		return m.openStatusDrawer(), nil
+	case "/diff":
+		return m, m.checkWorktreeForDiff()
 	case "/skills":
 		if !m.projectSettings.EffectiveSkills().Enabled {
 			m.copyNotice = "skills disabled in settings"
 			return m, clearCopyNotice()
 		}
 		return m.openSkillsPicker(extra)
+	case "/tools", "/tool":
+		if len(m.projectSettings.EffectiveTools().Enabled) == 0 {
+			m.copyNotice = "tools disabled in settings"
+			return m, clearCopyNotice()
+		}
+		return m.openToolsPicker(extra)
+	case "/roles", "/role":
+		return m.openRolesPicker(extra)
 	case "/settings", "/slot":
 		return m.openSettings(), m.maybeFetchUsage()
 	case "/agents", "/subs", "/subagents":
 		return m.openSubagentPicker(), nil
 	case "/history":
 		return m.openMemoryHistory(), nil
+	case "/memory":
+		return m.openMemoryContext(extra), nil
 	case "/spawn", "/agent":
 		return m.openSubagentSpawnForm()
 	case "/continue":
@@ -287,29 +273,14 @@ func (m Model) syncSlash(value string) Model {
 	return m
 }
 
-// filterSlashItems returns matching commands in palette-group order.
+// filterSlashItems returns matching commands in their canonical order.
 func filterSlashItems(partial string) []slashCmd {
-	byName := make(map[string]slashCmd, len(slashCommands))
-	for _, cmd := range slashCommands {
-		byName[cmd.name] = cmd
-	}
 	var out []slashCmd
-	seen := make(map[string]bool, len(slashCommands))
-	for _, g := range slashPaletteGroups {
-		for _, name := range g.names {
-			cmd, ok := byName[name]
-			if !ok || !matchesSlashPartial(cmd, partial) {
-				continue
-			}
-			out = append(out, cmd)
-			seen[name] = true
-		}
-	}
 	for _, cmd := range slashCommands {
 		if cmd.name == "/status" && partial == "" {
 			continue
 		}
-		if seen[cmd.name] || !matchesSlashPartial(cmd, partial) {
+		if !matchesSlashPartial(cmd, partial) {
 			continue
 		}
 		out = append(out, cmd)

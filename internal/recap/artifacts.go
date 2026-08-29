@@ -68,8 +68,8 @@ type MaterializeInput struct {
 // synced and renamed from a temporary sibling; a later failure cleans up files
 // from this invocation so callers never receive a partial manifest.
 func Materialize(ctx context.Context, workdir string, input MaterializeInput) (ArtifactManifest, error) {
-	if ctx == nil {
-		ctx = context.Background()
+	if err := requireContext(ctx); err != nil {
+		return ArtifactManifest{}, err
 	}
 	root, err := filepath.Abs(workdir)
 	if err != nil {

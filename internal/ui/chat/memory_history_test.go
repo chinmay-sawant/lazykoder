@@ -175,8 +175,7 @@ func TestMemoryHistoryDetailDragCopiesEvidence(t *testing.T) {
 	m = next.(Model)
 	next, _ = m.Update(tea.MouseMotionMsg(tea.Mouse{X: 40, Y: bodyTop + 14, Button: tea.MouseLeft}))
 	m = next.(Model)
-	next, cmd := m.Update(tea.MouseReleaseMsg(tea.Mouse{X: 40, Y: bodyTop + 14, Button: tea.MouseLeft}))
-	m = next.(Model)
+	_, cmd := m.Update(tea.MouseReleaseMsg(tea.Mouse{X: 40, Y: bodyTop + 14, Button: tea.MouseLeft}))
 	if !copyCmdIncludes(cmd, "keep the history drawer useful") {
 		t.Fatal("drag selection did not copy memory history detail")
 	}
@@ -210,7 +209,7 @@ last_message_seq: 0
   first_seen_utc: "2026-08-23T10:00:00Z"
   last_seen_utc: "2026-08-23T10:00:00Z"
 `
-	if err := os.WriteFile(filepath.Join(workdir, "knowledge-base", "memories.md"), []byte(malformed), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workdir, "knowledge-base", "memories.md"), []byte(malformed), 0o600); err != nil {
 		t.Fatalf("write malformed memory document: %v", err)
 	}
 

@@ -4,6 +4,28 @@ The interface is a Bubble Tea v2 program (alt screen). The chat screen stays
 visible under confirm, ask, slash, and help overlays. The model and session
 pickers are centered cards.
 
+The active provider comes from `provider.active` in
+`.lazykoder/settings.json`. OpenCode is the default. `/model` shows available
+OpenCode, Grok, and Codex models in one drawer. `/memory` shows the exact bounded context
+for the next parent turn and toggles injection for the current session.
+`/history` shows current-chat memory entries with their update status. `/tools`
+discovers and toggles registered tools, and `/roles` discovers and selects a
+child role.
+`/provider` shows the persisted selected or not-selected state and the
+provider authentication state. API-key providers show `key set` or `key
+missing`. Codex and Grok show `checking sign-in`, `signed in`, `sign in
+required`, or `CLI missing`. Selecting a signed-out Codex provider hands the
+terminal to `codex login`; selecting Grok runs `grok login --device-auth` and
+prints the device-login URL and code. Provider-owned sessions remain outside
+`.lazykoder/` and persist across lazykoder restarts.
+
+For Codex, `/model` reads the current signed-in account catalog from the
+installed Codex app server when lazykoder starts, when the provider is selected,
+or when `/refresh` runs. `gpt-5.6-luna` with `low` reasoning is the default
+when that account catalog supports it. Otherwise lazykoder uses the account
+default. For Grok, the same refresh points run `grok models`, which reads the
+CLI-owned signed-in catalog and adds its current model rows under `Grok`.
+
 ## Chat view
 
 - Header: `lazykoder`, the session title (or `new session`), and the project
@@ -63,7 +85,9 @@ pickers are centered cards.
   come from GET /models plus the live models.dev OpenCode catalog, then
   are stored in `.lazykoder/models.json`. That file is the source of
   truth for the picker. `/variant` shows whatever variants are stored
-  for the current model, including `max` when the catalog lists it.
+  for the current model, including `max` when the catalog lists it. Grok rows
+  expose `low`, `medium`, `high`, and `xhigh`, then send the selected effort to
+  the authenticated Grok CLI.
   Every model row keeps `cache_write_per_million` (0 when the provider
   has no write price) and an `endpoint` (the chat-completions URL to
   call). Free OpenCode models come from the Zen models list on
@@ -163,7 +187,10 @@ draft in the input box (**edit**). Actions:
 | click a collapsed tool header | expand that tool card (click again to collapse) |
 | `ctrl+s` | open the session picker (idle only) |
 | `/resume` | same as `ctrl+s` |
+| `/provider` | open the parent provider picker |
 | `/model` | open the model picker |
+| `/tools` | filter and toggle registered or allowed discovered tools |
+| `/roles` | filter and select a registered child role |
 | `/agents` | open the sub-agent list and logs (aliases `/subs`) |
 | `/status` | open the status details and visibility drawer |
 | click `subs:N` | same as `/agents` when sub-agents exist for this session |
@@ -266,11 +293,11 @@ chat underneath.
 ## Model picker
 
 `/model` or a click on the model status opens a full-width drawer above
-the prompt, the same place as the `/` command list. The drawer shows
-more rows than the slash menu so more models stay visible, including
-free OpenCode models. Each row shows the provider on the right
-(`opencode go` or `opencode zen`). Navigation: `j`/`k` or arrows;
-`enter` or a click selects, `esc`/`q` cancels. `/` enters model
+the prompt, the same place as the `/` command list. The drawer groups rows
+under `OpenCode` and `Codex`. The headings are not selectable. Each row keeps
+its provider label on the right, such as `opencode go`, `opencode zen`, or
+`codex`. Navigation: `j`/`k` or arrows; `enter` or a click selects,
+`esc`/`q` cancels. `/` enters model
 filtering (also by provider) and `r` refreshes the model list.
 Typing `/model` (or `/mode` then enter) opens the drawer with a
 trailing space so you can type a search right away. `/model ope`
@@ -281,7 +308,8 @@ model box.
 
 `/variant` opens the same card for the current model's reasoning variants
 from `models.json`. The choice is stored in `sessions.variant` and sent
-as `reasoning_effort` on later turns.
+as `reasoning_effort` on later turns, including Grok's `--reasoning-effort`
+CLI option.
 
 ## Project settings
 
@@ -296,8 +324,6 @@ and keyboard hint rows keep the card's opaque neutral-charcoal background.
 | theme | `dark` or `light` application palette. Switching it redraws the current chat and keeps the card open. Dark is the default. |
 | new-session model | model for new sessions (default `deepseek-v4-flash`) |
 | new-session variant | default reasoning effort (`default` / low / medium / high / max) |
-| child model override | model every child inherits (empty = inherit parent) |
-| explore model | model for explore-role children (empty = inherit) |
 | step limit | on/off for the per-turn tool-step budget |
 | parent max steps | tool-calling rounds per user turn when the limit is on (1-1000, default 16) |
 | auto-compact | on/off for same-model percent preflight (default on) |
@@ -310,6 +336,9 @@ and keyboard hint rows keep the card's opaque neutral-charcoal background.
 | skills enabled | on/off for discovery, activation, and request-time injection (default on) |
 | skill settings | discovery toggles and automatic-match limit; body/context caps remain JSON controls |
 | sub-agents | on/off for parent `task` tools |
+| child model override | model every child inherits; overrides planner model classes (empty = inherit parent) |
+| child model variant | reasoning variant for the configured child model (default = provider default) |
+| explore model | model for explore-role children; overrides the common child model (empty = inherit) |
 | default role | `explore` / `plan` / `general` when `task` omits role |
 | max concurrent | concurrent child agents (1-20, default 4) |
 | max queued | spawn queue size (default 40, cap 100) |
@@ -320,13 +349,21 @@ and keyboard hint rows keep the card's opaque neutral-charcoal background.
 | parent bash allowlist | on/off; parent-only, children are not filtered |
 | allowed executables | chip/count editor for the parent allowlist |
 
+Click the value area of a model row to open the shared model drawer. This
+includes the new-session, child override, explore, and recap model rows. The
+chevrons still cycle a row in place. Child and explore rows include `inherit`
+as an option. Click the child model variant row to open the variant drawer for
+the selected child model.
+
 On terminals at least 42 rows high, the settings card also displays the
 latest OpenCode Go rolling, weekly, and monthly usage percentages. On a
 shorter terminal, use `/usage` for the same information. Opening `/settings`
 loads usage when it has not already been fetched; `/usage` can refresh it.
 
 At 24 rows, the settings card keeps its header, footer, and focused row on
-screen. Use `j` and `k` to move through the remaining rows.
+screen. Use `j` and `k` or the arrow keys to move through controls in their
+painted section order. Hidden detailed skill rows are skipped until the card
+has enough height to display them.
 
 When sub-agents are running, the footer may show `subs:N/M` (active / max
 concurrent). Cancelling the parent turn also cancels child jobs.
@@ -379,8 +416,45 @@ The persisted `skills` settings group contains `enabled`, `auto_detect`,
 `max_body_bytes`, and `max_context_bytes`.
 
 When the step limit is off the agent still has a large safety bound so a
-runaway loop cannot run forever. `/model` and `/variant` still change only
-the **current session**; the settings card is the project default.
+runaway loop cannot run forever. `/model` and `/variant` change the current
+session. Selecting a model from another provider group also saves that parent
+provider and model as the project default. The settings card can change the
+defaults directly.
+
+When a successful parent turn leaves a dirty worktree, a **Diff drawer**
+appears above the composer for 90 seconds (same trigger as the previous
+button: zero tool errors plus a non-empty worktree per the checker seam
+injected from `main.go`). Run `/diff` to open the same drawer manually. A
+clean manual check shows `no changes`. The drawer mirrors the `/model`
+channel: it uses `drawer.go:drawerChrome` and `drawerRowLine` so header, meta,
+body, and hint match the model drawer. The header shows `Diff`, the branch,
+and the dirty count. The meta shows the file count. The body lists changed
+files with `+added -removed` counts (binary files show a placeholder, renames are collapsed to the
+new path, rows are sorted and truncated like the model list with the `▸`
+selection marker). The right side of the header carries a collapse control
+`[x]`; click it or press `esc` to collapse. The drawer auto-hides after 90
+seconds if not interacted with; any click or key inside resets the timer.
+Selecting a file by click opens all of its changes in the expanded code view.
+`enter` on a selected file does the same. The expanded view keeps each change
+section visible with horizontal separators between sections, a right-side
+scrollbar when the code overflows, and the existing line-numbered diff. Its
+header shows the file path, `+added -removed` summary, file position such as
+`2 of 10 files`, and the selected change position such as `change 2 of 4`.
+Press `enter` or `escape` in the code
+view to return to the separated change list. Up/Down or `j`/`k` selects a
+change there, and Enter or clicking a change expands it. In code view, Up/Down
+and the mouse wheel scroll the actual diff. Left/Right, or the popup's
+previous/next controls, switch files and refresh the path, summary, count,
+change list, and diff. Down from the final file focuses the `commit and push`
+action row; Up returns focus to the final file so Enter opens its diff. Enter on
+the action row starts the explicit commit flow. If the app has not created a
+chat session yet, activation creates one first. The action reuses the same
+one-shot agent
+turn as the button era (status, diff, recent log, conventional-commit
+instruction) and executes `git add -A && git commit && git push` via the
+existing policy gate; failures render an alert row. Click `[x]` in the popup
+or drawer header to close the current view. No new git commands run in the
+view layer outside the injected checker seam and the policy-gated turn.
 
 ## Continue
 

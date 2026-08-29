@@ -2,6 +2,7 @@ package chat
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -10,8 +11,8 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
+	"github.com/chinmay-sawant/lazykoder/internal/roles"
 	"github.com/chinmay-sawant/lazykoder/internal/settings"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
@@ -21,8 +22,6 @@ const (
 	settingsRowTheme = iota
 	settingsRowModel
 	settingsRowVariant
-	settingsRowChildModel
-	settingsRowExploreModel
 	settingsRowRecapEnabled
 	settingsRowRecapModel
 	settingsRowRecapAfterChats
@@ -34,11 +33,15 @@ const (
 	settingsRowSkillsGlobal
 	settingsRowSkillsRemember
 	settingsRowSkillsMaxMatches
+	settingsRowTools
 	settingsRowLimit
 	settingsRowSteps
 	settingsRowCompactAuto
 	settingsRowCompactPercent
 	settingsRowAgentsEnabled
+	settingsRowChildModel
+	settingsRowChildVariant
+	settingsRowExploreModel
 	settingsRowAgentsRole
 	settingsRowAgentsConcurrent
 	settingsRowAgentsQueued
@@ -95,6 +98,63 @@ const (
 	settingsLineRow
 )
 
+type settingsPickerTarget uint8
+
+const (
+	settingsPickerNone settingsPickerTarget = iota
+	settingsPickerDefaultModel
+	settingsPickerDefaultVariant
+	settingsPickerChildModel
+	settingsPickerChildVariant
+	settingsPickerExploreModel
+	settingsPickerRecapModel
+	settingsPickerTools
+	settingsPickerRole
+)
+
+type settingsRowDefinition struct {
+	id    int
+	label string
+}
+
+// settingsRowDefinitions owns the identity and label of every selectable row.
+// Navigation is derived from painted rows so conditional skill controls cannot
+// drift from the visible order.
+var settingsRowDefinitions = [...]settingsRowDefinition{
+	{id: settingsRowTheme, label: "theme"},
+	{id: settingsRowModel, label: "new-session model"},
+	{id: settingsRowVariant, label: "new-session variant"},
+	{id: settingsRowRecapEnabled, label: "recaps enabled"},
+	{id: settingsRowRecapModel, label: "recap model"},
+	{id: settingsRowRecapAfterChats, label: "recap after chats"},
+	{id: settingsRowRetryMaxRetries, label: "api retries"},
+	{id: settingsRowRetryDelay, label: "retry delay"},
+	{id: settingsRowSkillsEnabled, label: "skills enabled"},
+	{id: settingsRowSkillsAutoDetect, label: "skills auto-detect"},
+	{id: settingsRowSkillsLocal, label: "skills local source"},
+	{id: settingsRowSkillsGlobal, label: "skills global source"},
+	{id: settingsRowSkillsRemember, label: "remember skill references"},
+	{id: settingsRowSkillsMaxMatches, label: "skill auto matches"},
+	{id: settingsRowTools, label: "enabled tools"},
+	{id: settingsRowLimit, label: "step limit"},
+	{id: settingsRowSteps, label: "parent max steps"},
+	{id: settingsRowCompactAuto, label: "auto-compact"},
+	{id: settingsRowCompactPercent, label: "compact at"},
+	{id: settingsRowAgentsEnabled, label: "sub-agents"},
+	{id: settingsRowChildModel, label: "child model override"},
+	{id: settingsRowChildVariant, label: "child model variant"},
+	{id: settingsRowExploreModel, label: "explore model"},
+	{id: settingsRowAgentsRole, label: "default role"},
+	{id: settingsRowAgentsConcurrent, label: "max concurrent"},
+	{id: settingsRowAgentsQueued, label: "max queued"},
+	{id: settingsRowAgentsChildSteps, label: "child max steps"},
+	{id: settingsRowAgentsTimeout, label: "child timeout"},
+	{id: settingsRowAgentsWriters, label: "parallel writers"},
+	{id: settingsRowBashConfirm, label: "child bash confirms"},
+	{id: settingsRowAllowlistEnabled, label: "parent bash allowlist"},
+	{id: settingsRowAllowlist, label: "allowed executables"},
+}
+
 // openSettings opens the full-screen settings card (same layout family as
 // /resume and /help: centered bordered card over the chat). It marks usage as
 // loading when the plan usage has not been loaded yet; the caller kicks off
@@ -114,8 +174,7 @@ func (m Model) closeSettings() Model {
 	m = m.clearFocus(focusSettings)
 	m.settingsCursor = 0
 	m.settingsHover = -1
-	m.settingsPickDefault = false
-	m.settingsPickRecap = false
+	m.settingsPickerTarget = settingsPickerNone
 	m.settingsEdit = false
 	m.settingsEditValue = ""
 	return m
@@ -129,8 +188,8 @@ func (m Model) settingsScreen() string {
 
 // settingsCardView is the bordered settings card (resume / help style).
 func (m Model) settingsCardView() string {
+	innerW := m.settingsInnerWidth()
 	cardW := m.overlayWidth()
-	innerW := max(minPaneWidth, cardW-cardBorder-2*settingsCardHorzPad)
 
 	title := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorAccent()).Render("SETTINGS")
 	closeBtn := m.settingsCloseLabel()
@@ -192,6 +251,63 @@ func (m Model) settingsCardView() string {
 		Padding(settingsCardVertPad, settingsCardHorzPad).
 		Width(cardW).
 		Render(content)
+}
+
+func (m Model) settingsInnerWidth() int {
+	cardW := m.overlayWidth()
+	return max(minPaneWidth, cardW-cardBorder-2*settingsCardHorzPad)
+}
+
+// settingsNavigationRows returns only the controls currently painted. The
+// compact card intentionally hides detailed skill rows, so they must not be
+// reachable by keyboard until the card has room to show them.
+func (m Model) settingsNavigationRows() []int {
+	seen := make(map[int]bool)
+	rows := make([]int, 0, len(settingsRowDefinitions))
+	for _, line := range m.settingsPaintLines(m.settingsInnerWidth()) {
+		if line.kind != settingsLineRow || line.row < 0 || seen[line.row] {
+			continue
+		}
+		seen[line.row] = true
+		rows = append(rows, line.row)
+	}
+	return rows
+}
+
+func (m Model) moveSettingsCursor(delta int) Model {
+	if delta == 0 {
+		return m
+	}
+	rows := m.settingsNavigationRows()
+	if len(rows) == 0 {
+		return m
+	}
+	index := indexOfInt(rows, m.settingsCursor)
+	if index < 0 {
+		index = 0
+		if delta < 0 {
+			index = len(rows) - 1
+		}
+	} else {
+		index += delta
+		if index < 0 {
+			index = 0
+		}
+		if index >= len(rows) {
+			index = len(rows) - 1
+		}
+	}
+	m.settingsCursor = rows[index]
+	return m
+}
+
+func indexOfInt(list []int, want int) int {
+	for index, value := range list {
+		if value == want {
+			return index
+		}
+	}
+	return -1
 }
 
 func (m Model) settingsCardMinInnerHeight() int {
@@ -265,6 +381,10 @@ func (m Model) settingsPaintLines(innerW int) []settingsPaintLine {
 	if exploreVal == "" {
 		exploreVal = "inherit"
 	}
+	childVariantVal := m.projectSettings.Agents.ModelVariant
+	if childVariantVal == "" {
+		childVariantVal = "default"
+	}
 	recap := m.projectSettings.EffectiveRecap()
 	skillCfg := m.projectSettings.EffectiveSkills()
 	recapModelVal := recap.Model
@@ -307,9 +427,6 @@ func (m Model) settingsPaintLines(innerW int) []settingsPaintLine {
 	out = append(out,
 		m.settingsPaintRow(settingsRowModel, "◂ "+modelVal+" ▸", innerW, false),
 		m.settingsPaintRow(settingsRowVariant, "◂ "+variantVal+" ▸", innerW, false),
-		m.settingsPaintRow(settingsRowChildModel, "◂ "+childVal+" ▸", innerW, false),
-		m.settingsPaintRow(settingsRowExploreModel, "◂ "+exploreVal+" ▸", innerW, false),
-		settingsPaintLine{kind: settingsLineHint, row: -1, text: "live /model and /variant do not change these defaults"},
 		settingsPaintLine{kind: settingsLineHeader, row: -1, text: "recaps"},
 		m.settingsPaintRow(settingsRowRecapEnabled, "["+boolOn(recap.Enabled)+"]", innerW, false),
 		m.settingsPaintRow(settingsRowRecapModel, "◂ "+recapModelVal+" ▸", innerW, false),
@@ -320,9 +437,12 @@ func (m Model) settingsPaintLines(innerW int) []settingsPaintLine {
 		settingsPaintLine{kind: settingsLineHeader, row: -1, text: "compaction"},
 		m.settingsPaintRow(settingsRowCompactAuto, "["+boolOn(m.projectSettings.Compaction.Auto)+"]", innerW, false),
 		m.settingsPaintRow(settingsRowCompactPercent, fmt.Sprintf("◂ %d%% ▸", m.projectSettings.EffectiveCompaction().Percent), innerW, !m.projectSettings.Compaction.Auto),
-		settingsPaintLine{kind: settingsLineHint, row: -1, text: "auto-compact when used tokens exceed this % of the model window"},
+		m.settingsPaintRow(settingsRowTools, fmt.Sprintf("◂ %d enabled, discovered %s ▸", len(m.projectSettings.EffectiveTools().Enabled), boolOn(m.projectSettings.EffectiveTools().AllowDiscovered)), innerW, false),
 		settingsPaintLine{kind: settingsLineHeader, row: -1, text: "sub-agents"},
 		m.settingsPaintRow(settingsRowAgentsEnabled, "["+agentsOn+"]", innerW, false),
+		m.settingsPaintRow(settingsRowChildModel, "◂ "+childVal+" ▸", innerW, false),
+		m.settingsPaintRow(settingsRowChildVariant, "◂ "+childVariantVal+" ▸", innerW, false),
+		m.settingsPaintRow(settingsRowExploreModel, "◂ "+exploreVal+" ▸", innerW, false),
 		m.settingsPaintRow(settingsRowAgentsRole, "◂ "+roleVal+" ▸", innerW, false),
 		m.settingsPaintRow(settingsRowAgentsConcurrent, fmt.Sprintf("◂ %d ▸", m.projectSettings.Agents.MaxConcurrent), innerW, false),
 		m.settingsPaintRow(settingsRowAgentsQueued, fmt.Sprintf("◂ %d ▸", m.projectSettings.Agents.MaxQueued), innerW, false),
@@ -410,70 +530,10 @@ func (m Model) settingsPaintRow(row int, value string, innerW int, dim bool) set
 }
 
 func settingsRowLabel(row int) string {
-	switch row {
-	case settingsRowTheme:
-		return "theme"
-	case settingsRowModel:
-		return "new-session model"
-	case settingsRowVariant:
-		return "new-session variant"
-	case settingsRowChildModel:
-		return "child model override"
-	case settingsRowExploreModel:
-		return "explore model"
-	case settingsRowRecapEnabled:
-		return "recaps enabled"
-	case settingsRowRecapModel:
-		return "recap model"
-	case settingsRowRecapAfterChats:
-		return "recap after chats"
-	case settingsRowRetryMaxRetries:
-		return "api retries"
-	case settingsRowRetryDelay:
-		return "retry delay"
-	case settingsRowSkillsEnabled:
-		return "skills enabled"
-	case settingsRowSkillsAutoDetect:
-		return "skills auto-detect"
-	case settingsRowSkillsLocal:
-		return "skills local source"
-	case settingsRowSkillsGlobal:
-		return "skills global source"
-	case settingsRowSkillsRemember:
-		return "remember skill references"
-	case settingsRowSkillsMaxMatches:
-		return "skill auto matches"
-	case settingsRowLimit:
-		return "step limit"
-	case settingsRowSteps:
-		return "parent max steps"
-	case settingsRowCompactAuto:
-		return "auto-compact"
-	case settingsRowCompactPercent:
-		return "compact at"
-	case settingsRowAgentsEnabled:
-		return "sub-agents"
-	case settingsRowAgentsRole:
-		return "default role"
-	case settingsRowAgentsConcurrent:
-		return "max concurrent"
-	case settingsRowAgentsQueued:
-		return "max queued"
-	case settingsRowAgentsChildSteps:
-		return "child max steps"
-	case settingsRowAgentsTimeout:
-		return "child timeout"
-	case settingsRowAgentsWriters:
-		return "parallel writers"
-	case settingsRowBashConfirm:
-		return "child bash confirms"
-	case settingsRowAllowlistEnabled:
-		return "parent bash allowlist"
-	case settingsRowAllowlist:
-		return "allowed executables"
-	default:
+	if row < 0 || row >= len(settingsRowDefinitions) {
 		return ""
 	}
+	return settingsRowDefinitions[row].label
 }
 
 func formatSettingsTimeout(sec int) string {
@@ -558,15 +618,9 @@ func (m Model) updateSettingsKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 	case tea.KeyEscape, 'q', 'Q', 'x', 'X':
 		return m.closeSettings(), nil
 	case 'j', tea.KeyDown:
-		if m.settingsCursor < settingsRowCount-1 {
-			m.settingsCursor++
-		}
-		return m, nil
+		return m.moveSettingsCursor(1), nil
 	case 'k', tea.KeyUp:
-		if m.settingsCursor > 0 {
-			m.settingsCursor--
-		}
-		return m, nil
+		return m.moveSettingsCursor(-1), nil
 	case tea.KeyLeft, 'h', 'H':
 		return m.adjustSettings(-1), nil
 	case tea.KeyRight, 'l', 'L':
@@ -584,11 +638,9 @@ func (m Model) activateSettingsRow() (Model, tea.Cmd) {
 	case settingsRowTheme:
 		return m.cycleTheme(1), nil
 	case settingsRowModel:
-		m.settingsPickDefault = true
-		m.settingsMode = false
-		return m.openKindPicker(pickerKindModel), nil
+		return m.openSettingsModelPicker(settingsPickerDefaultModel), nil
 	case settingsRowVariant:
-		m.settingsPickDefault = true
+		m.settingsPickerTarget = settingsPickerDefaultVariant
 		m.settingsMode = false
 		// Seed live model so the variant list matches the default model.
 		if m.projectSettings.Model.Default != "" {
@@ -596,16 +648,15 @@ func (m Model) activateSettingsRow() (Model, tea.Cmd) {
 		}
 		return m.openKindPicker(pickerKindVariant), nil
 	case settingsRowChildModel:
-		return m.cycleChildModel(1), nil
+		return m.openSettingsModelPicker(settingsPickerChildModel), nil
+	case settingsRowChildVariant:
+		return m.openSettingsChildVariantPicker(), nil
 	case settingsRowExploreModel:
-		return m.cycleExploreModel(1), nil
+		return m.openSettingsModelPicker(settingsPickerExploreModel), nil
 	case settingsRowRecapEnabled:
 		return m.setRecapEnabled(!m.projectSettings.EffectiveRecap().Enabled), nil
 	case settingsRowRecapModel:
-		m.settingsPickDefault = false
-		m.settingsPickRecap = true
-		m.settingsMode = false
-		return m.openKindPicker(pickerKindModel), nil
+		return m.openSettingsModelPicker(settingsPickerRecapModel), nil
 	case settingsRowRecapAfterChats:
 		return m.openSettingInputForm("Recap after chats", "Successful chats before a recap", strconv.Itoa(m.projectSettings.EffectiveRecap().AfterChats), validateRecapAfterChats, func(mod Model, val string) (Model, tea.Cmd) {
 			v, _ := strconv.Atoi(val)
@@ -636,6 +687,10 @@ func (m Model) activateSettingsRow() (Model, tea.Cmd) {
 			v, _ := strconv.Atoi(val)
 			return mod.setSkillsMaxMatches(v), nil
 		})
+	case settingsRowTools:
+		m.settingsPickerTarget = settingsPickerTools
+		m.settingsMode = false
+		return m.openKindPicker(pickerKindTools), nil
 	case settingsRowLimit:
 		return m.setLimitEnabled(!m.projectSettings.Slot.LimitEnabled), nil
 	case settingsRowSteps:
@@ -648,14 +703,22 @@ func (m Model) activateSettingsRow() (Model, tea.Cmd) {
 	case settingsRowCompactAuto:
 		return m.setCompactAuto(!m.projectSettings.Compaction.Auto), nil
 	case settingsRowCompactPercent:
-		return m.openSettingInputForm("Compaction Context %", "Percentage of context window (10-90)", strconv.Itoa(m.projectSettings.EffectiveCompaction().Percent), validatePercentSetting, func(mod Model, val string) (Model, tea.Cmd) {
-			v, _ := strconv.Atoi(val)
-			return mod.setCompactPercent(v), nil
-		})
+		return m.openSettingInputForm(
+			"Compaction Context %",
+			fmt.Sprintf("Percentage of context window (%d-%d)", settings.MinCompactPercent, settings.MaxCompactPercent),
+			strconv.Itoa(m.projectSettings.EffectiveCompaction().Percent),
+			validatePercentSetting,
+			func(mod Model, val string) (Model, tea.Cmd) {
+				v, _ := strconv.Atoi(val)
+				return mod.setCompactPercent(v), nil
+			},
+		)
 	case settingsRowAgentsEnabled:
 		return m.setAgentsEnabled(!m.projectSettings.Agents.Enabled), nil
 	case settingsRowAgentsRole:
-		return m.cycleAgentsRole(1), nil
+		m.settingsPickerTarget = settingsPickerRole
+		m.settingsMode = false
+		return m.openKindPicker(pickerKindRoles), nil
 	case settingsRowAgentsConcurrent:
 		return m.openSettingInputForm("Max Concurrent Agents", "Max parallel sub-agents", strconv.Itoa(m.projectSettings.Agents.MaxConcurrent), validateIntSetting, func(mod Model, val string) (Model, tea.Cmd) {
 			v, _ := strconv.Atoi(val)
@@ -672,7 +735,7 @@ func (m Model) activateSettingsRow() (Model, tea.Cmd) {
 			return mod.setAgentsChildSteps(v), nil
 		})
 	case settingsRowAgentsTimeout:
-		return m.openSettingInputForm("Agent Timeout (sec)", "Child agent execution timeout in seconds", strconv.Itoa(m.projectSettings.Agents.DefaultTimeoutSec), validateIntSetting, func(mod Model, val string) (Model, tea.Cmd) {
+		return m.openSettingInputForm("Agent Timeout (sec)", "Child agent execution timeout in seconds; 0 disables it", strconv.Itoa(m.projectSettings.Agents.DefaultTimeoutSec), validateAgentTimeoutSetting, func(mod Model, val string) (Model, tea.Cmd) {
 			v, _ := strconv.Atoi(val)
 			return mod.setAgentsTimeout(v), nil
 		})
@@ -697,6 +760,18 @@ func (m Model) activateSettingsRow() (Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m Model) openSettingsModelPicker(target settingsPickerTarget) Model {
+	m.settingsPickerTarget = target
+	m.settingsMode = false
+	return m.openKindPicker(pickerKindModel)
+}
+
+func (m Model) openSettingsChildVariantPicker() Model {
+	m.settingsPickerTarget = settingsPickerChildVariant
+	m.settingsMode = false
+	return m.openKindPicker(pickerKindVariant)
+}
+
 func validateIntSetting(s string) error {
 	v, err := strconv.Atoi(strings.TrimSpace(s))
 	if err != nil || v < 1 {
@@ -707,8 +782,16 @@ func validateIntSetting(s string) error {
 
 func validatePercentSetting(s string) error {
 	v, err := strconv.Atoi(strings.TrimSpace(s))
-	if err != nil || v < 10 || v > 90 {
-		return fmt.Errorf("must be between 10 and 90")
+	if err != nil || v < settings.MinCompactPercent || v > settings.MaxCompactPercent {
+		return fmt.Errorf("must be between %d and %d", settings.MinCompactPercent, settings.MaxCompactPercent)
+	}
+	return nil
+}
+
+func validateAgentTimeoutSetting(s string) error {
+	v, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil || v < 0 {
+		return fmt.Errorf("must be zero or a positive integer")
 	}
 	return nil
 }
@@ -750,6 +833,11 @@ func (m Model) setAllowlistEnabled(on bool) Model {
 	return m.persistSettings()
 }
 
+func (m Model) setToolsDiscovered(on bool) Model {
+	m.projectSettings.Tools.AllowDiscovered = on
+	return m.persistSettings()
+}
+
 func (m Model) adjustSettings(delta int) Model {
 	switch m.settingsCursor {
 	case settingsRowTheme:
@@ -760,6 +848,8 @@ func (m Model) adjustSettings(delta int) Model {
 		return m.cycleDefaultVariant(delta)
 	case settingsRowChildModel:
 		return m.cycleChildModel(delta)
+	case settingsRowChildVariant:
+		return m.cycleChildVariant(delta)
 	case settingsRowExploreModel:
 		return m.cycleExploreModel(delta)
 	case settingsRowRecapEnabled:
@@ -801,6 +891,10 @@ func (m Model) adjustSettings(delta int) Model {
 		}
 	case settingsRowSkillsMaxMatches:
 		return m.setSkillsMaxMatches(m.projectSettings.EffectiveSkills().MaxAutoMatches + delta)
+	case settingsRowTools:
+		if delta != 0 {
+			return m.setToolsDiscovered(delta > 0)
+		}
 	case settingsRowLimit:
 		if delta > 0 {
 			return m.setLimitEnabled(true)
@@ -899,6 +993,8 @@ func (m Model) toggleSettingsRow() Model {
 		return m.cycleDefaultVariant(1)
 	case settingsRowChildModel:
 		return m.cycleChildModel(1)
+	case settingsRowChildVariant:
+		return m.cycleChildVariant(1)
 	case settingsRowExploreModel:
 		return m.cycleExploreModel(1)
 	case settingsRowRecapEnabled:
@@ -921,6 +1017,8 @@ func (m Model) toggleSettingsRow() Model {
 		return m.setSkillsRemember(!m.projectSettings.EffectiveSkills().Remember)
 	case settingsRowSkillsMaxMatches:
 		return m.setSkillsMaxMatches(m.projectSettings.EffectiveSkills().MaxAutoMatches + 1)
+	case settingsRowTools:
+		return m.setToolsDiscovered(!m.projectSettings.EffectiveTools().AllowDiscovered)
 	}
 	return m
 }
@@ -931,10 +1029,13 @@ func (m Model) cycleDefaultModel(delta int) Model {
 		list = []string{settings.DefaultModelID}
 	}
 	cur := m.projectSettings.Model.Default
+	if cur == "" && m.client != nil {
+		cur = m.client.Model()
+	}
 	if cur == "" {
 		cur = settings.DefaultModelID
 	}
-	idx := indexOfString(list, cur)
+	idx := slices.Index(list, cur)
 	if idx < 0 {
 		idx = 0
 	}
@@ -948,7 +1049,7 @@ func (m Model) cycleDefaultModel(delta int) Model {
 func (m Model) cycleDefaultVariant(delta int) Model {
 	list := m.defaultVariantChoices()
 	cur := m.projectSettings.Model.Variant
-	idx := indexOfString(list, cur)
+	idx := slices.Index(list, cur)
 	if idx < 0 {
 		idx = 0
 	}
@@ -968,7 +1069,7 @@ func (m Model) cycleRecapModel(delta int) Model {
 	if cur == "" {
 		cur = settings.DefaultModelID
 	}
-	idx := indexOfString(list, cur)
+	idx := slices.Index(list, cur)
 	if idx < 0 {
 		idx = 0
 	}
@@ -995,7 +1096,7 @@ func (m Model) inheritModelChoices() []string {
 
 func (m Model) cycleChildModel(delta int) Model {
 	list := m.inheritModelChoices()
-	idx := indexOfString(list, m.projectSettings.Agents.ModelOverride)
+	idx := slices.Index(list, m.projectSettings.Agents.ModelOverride)
 	if idx < 0 {
 		idx = 0
 	}
@@ -1003,13 +1104,26 @@ func (m Model) cycleChildModel(delta int) Model {
 	if idx < 0 {
 		idx += len(list)
 	}
-	m.projectSettings.Agents.ModelOverride = list[idx]
-	return m.rebuildSubMgr().persistSettings()
+	return m.setChildModel(list[idx])
+}
+
+func (m Model) cycleChildVariant(delta int) Model {
+	list := m.childVariantChoices()
+	cur := m.projectSettings.Agents.ModelVariant
+	idx := slices.Index(list, cur)
+	if idx < 0 {
+		idx = 0
+	}
+	idx = (idx + delta) % len(list)
+	if idx < 0 {
+		idx += len(list)
+	}
+	return m.setChildVariant(list[idx])
 }
 
 func (m Model) cycleExploreModel(delta int) Model {
 	list := m.inheritModelChoices()
-	idx := indexOfString(list, m.projectSettings.Agents.ExploreModel)
+	idx := slices.Index(list, m.projectSettings.Agents.ExploreModel)
 	if idx < 0 {
 		idx = 0
 	}
@@ -1017,14 +1131,31 @@ func (m Model) cycleExploreModel(delta int) Model {
 	if idx < 0 {
 		idx += len(list)
 	}
-	m.projectSettings.Agents.ExploreModel = list[idx]
+	return m.setExploreModel(list[idx])
+}
+
+func (m Model) setChildModel(id string) Model {
+	m.projectSettings.Agents.ModelOverride = strings.TrimSpace(id)
+	return m.rebuildSubMgr().persistSettings()
+}
+
+func (m Model) setChildVariant(variant string) Model {
+	m.projectSettings.Agents.ModelVariant = strings.TrimSpace(variant)
+	return m.rebuildSubMgr().persistSettings()
+}
+
+func (m Model) setExploreModel(id string) Model {
+	m.projectSettings.Agents.ExploreModel = strings.TrimSpace(id)
 	return m.rebuildSubMgr().persistSettings()
 }
 
 func (m Model) cycleAgentsRole(delta int) Model {
-	list := []string{"explore", "plan", "general"}
+	list := roles.IDs()
+	if len(list) == 0 {
+		return m
+	}
 	cur := m.projectSettings.Agents.DefaultRole
-	idx := indexOfString(list, cur)
+	idx := slices.Index(list, cur)
 	if idx < 0 {
 		idx = 0
 	}
@@ -1039,7 +1170,7 @@ func (m Model) cycleAgentsRole(delta int) Model {
 func (m Model) cycleBashConfirm(delta int) Model {
 	list := []string{"parent", "deny"}
 	cur := m.projectSettings.Agents.BashConfirm
-	idx := indexOfString(list, cur)
+	idx := slices.Index(list, cur)
 	if idx < 0 {
 		idx = 0
 	}
@@ -1052,14 +1183,22 @@ func (m Model) cycleBashConfirm(delta int) Model {
 }
 
 func (m Model) defaultVariantChoices() []string {
+	return m.variantChoicesFor(m.modelLabel(), m.projectSettings.EffectiveProvider())
+}
+
+func (m Model) childVariantChoices() []string {
+	cfg := m.projectSettings
+	return m.variantChoicesFor(childModel(cfg), cfg.EffectiveOrchestrator().Provider)
+}
+
+func (m Model) variantChoicesFor(modelID, providerID string) []string {
 	// Empty string first = provider default.
 	out := []string{""}
 	seen := map[string]bool{"": true}
-	modelID := m.projectSettings.Model.Default
 	if modelID == "" {
 		modelID = settings.DefaultModelID
 	}
-	if info, ok := modelscache.InfoOf(m.modelInfos, modelID); ok {
+	if info, ok := m.modelInfoForProvider(modelID, providerID); ok {
 		for _, v := range info.Variants {
 			v = strings.TrimSpace(v)
 			if v == "" || seen[v] {
@@ -1077,15 +1216,6 @@ func (m Model) defaultVariantChoices() []string {
 		out = append(out, v)
 	}
 	return out
-}
-
-func indexOfString(list []string, want string) int {
-	for i, s := range list {
-		if s == want {
-			return i
-		}
-	}
-	return -1
 }
 
 func (m Model) cycleTheme(delta int) Model {
@@ -1115,7 +1245,7 @@ func (m Model) setDefaultModel(id string) Model {
 		id = settings.DefaultModelID
 	}
 	m.projectSettings.Model.Default = id
-	if !modelscache.HasVariant(m.modelInfos, id, m.projectSettings.Model.Variant) {
+	if !m.modelHasVariant(id, m.projectSettings.Model.Variant) {
 		m.projectSettings.Model.Variant = ""
 	}
 	// Apply to the live chat when there is no session yet, or the live
@@ -1501,12 +1631,31 @@ func (m Model) settingsHit(x, y int, button tea.MouseButton) (Model, tea.Cmd, bo
 		} else if inc {
 			return m.cycleChildModel(1), nil, true
 		}
+		if button == tea.MouseLeft {
+			next, cmd := m.activateSettingsRow()
+			return next, cmd, true
+		}
 		return m.cycleChildModel(1), nil, true
+	case settingsRowChildVariant:
+		if dec, inc := hitStepChevrons(line, x); dec {
+			return m.cycleChildVariant(-1), nil, true
+		} else if inc {
+			return m.cycleChildVariant(1), nil, true
+		}
+		if button == tea.MouseLeft {
+			next, cmd := m.activateSettingsRow()
+			return next, cmd, true
+		}
+		return m.cycleChildVariant(1), nil, true
 	case settingsRowExploreModel:
 		if dec, inc := hitStepChevrons(line, x); dec {
 			return m.cycleExploreModel(-1), nil, true
 		} else if inc {
 			return m.cycleExploreModel(1), nil, true
+		}
+		if button == tea.MouseLeft {
+			next, cmd := m.activateSettingsRow()
+			return next, cmd, true
 		}
 		return m.cycleExploreModel(1), nil, true
 	case settingsRowRecapEnabled:
@@ -1576,6 +1725,12 @@ func (m Model) settingsHit(x, y int, button tea.MouseButton) (Model, tea.Cmd, bo
 			return m.setSkillsMaxMatches(current + 1), nil, true
 		}
 		return m.setSkillsMaxMatches(current + 1), nil, true
+	case settingsRowTools:
+		if button == tea.MouseLeft {
+			next, cmd := m.activateSettingsRow()
+			return next, cmd, true
+		}
+		return m.setToolsDiscovered(!m.projectSettings.EffectiveTools().AllowDiscovered), nil, true
 	case settingsRowLimit:
 		return m.setLimitEnabled(!m.projectSettings.Slot.LimitEnabled), nil, true
 	case settingsRowCompactAuto:

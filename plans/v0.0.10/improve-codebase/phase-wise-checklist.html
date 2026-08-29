@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>lazykoder v0.0.10 improve-codebase review</title>
+  <style>
+    :root {
+      --ink: #18211f;
+      --muted: #66706c;
+      --paper: #f7f4ed;
+      --card: #fffdf8;
+      --line: #d9d7ce;
+      --blue: #255f85;
+      --blue-soft: #e5f0f5;
+      --amber: #9b5d13;
+      --amber-soft: #fff0d7;
+      --green: #34745c;
+      --green-soft: #e3f1e9;
+      --red: #a23b35;
+      --red-soft: #f8e5e1;
+      --shadow: 0 14px 38px rgba(25, 37, 35, .08);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font-family: Georgia, "Times New Roman", serif;
+      line-height: 1.5;
+    }
+    main { max-width: 1180px; margin: 0 auto; padding: 48px 24px 72px; }
+    .eyebrow {
+      color: var(--blue);
+      font: 700 12px/1.2 Arial, sans-serif;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+    }
+    h1 { max-width: 820px; margin: 12px 0 10px; font-size: clamp(38px, 6vw, 72px); line-height: .98; letter-spacing: -.045em; }
+    h2 { margin: 0 0 14px; font-size: 28px; letter-spacing: -.025em; }
+    h3 { margin: 0 0 8px; font-size: 20px; line-height: 1.12; }
+    p { margin: 0 0 12px; }
+    .dek { max-width: 760px; color: var(--muted); font-size: 19px; }
+    .meta { margin-top: 22px; color: var(--muted); font: 13px/1.5 Arial, sans-serif; }
+    .rule { height: 1px; margin: 34px 0; background: var(--line); }
+    .summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 18px 0 38px; }
+    .stat, .panel, .finding, .refused { background: var(--card); border: 1px solid var(--line); box-shadow: var(--shadow); }
+    .stat { padding: 18px; }
+    .stat strong { display: block; font-size: 34px; line-height: 1; }
+    .stat span { display: block; margin-top: 8px; color: var(--muted); font: 12px Arial, sans-serif; text-transform: uppercase; letter-spacing: .08em; }
+    .panel { padding: 24px; margin: 22px 0; }
+    .panel p, .panel li { max-width: 850px; }
+    ul { margin: 8px 0 0; padding-left: 21px; }
+    li { margin: 6px 0; }
+    .legend { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+    .badge { display: inline-flex; align-items: center; padding: 5px 9px; border-radius: 999px; font: 700 11px Arial, sans-serif; letter-spacing: .06em; text-transform: uppercase; }
+    .p1 { color: var(--amber); background: var(--amber-soft); }
+    .ext { color: var(--blue); background: var(--blue-soft); }
+    .prac { color: var(--green); background: var(--green-soft); }
+    .open { color: var(--green); background: var(--green-soft); }
+    .finding { margin: 18px 0; padding: 24px; border-left: 5px solid var(--blue); }
+    .finding.practical { border-left-color: var(--green); }
+    .finding-head { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; }
+    .location { margin: 8px 0 18px; color: var(--muted); font: 12px/1.45 Arial, sans-serif; }
+    .finding-grid { display: grid; grid-template-columns: 1.1fr .9fr; gap: 22px; }
+    .label { margin: 18px 0 5px; color: var(--muted); font: 700 11px Arial, sans-serif; letter-spacing: .1em; text-transform: uppercase; }
+    .label:first-child { margin-top: 0; }
+    .diagram { display: grid; gap: 10px; align-content: start; }
+    .diagram-title { color: var(--muted); font: 700 11px Arial, sans-serif; letter-spacing: .1em; text-transform: uppercase; }
+    .flow { display: grid; grid-template-columns: 1fr auto 1fr; gap: 8px; align-items: center; }
+    .box { min-height: 92px; padding: 14px; border: 1px solid var(--line); background: #faf8f2; font-size: 15px; }
+    .box strong { display: block; margin-bottom: 5px; font-size: 16px; }
+    .box.after { border-color: #9bb6c2; background: var(--blue-soft); }
+    .arrow { color: var(--blue); font: 700 24px Arial, sans-serif; }
+    code { padding: 1px 4px; background: #eceae2; border-radius: 3px; font: 12px/1.3 "SFMono-Regular", Consolas, monospace; }
+    pre { overflow-x: auto; margin: 10px 0 0; padding: 14px; color: #eef5f3; background: #1e2927; font: 12px/1.5 "SFMono-Regular", Consolas, monospace; }
+    .checklist { display: grid; gap: 8px; margin-top: 14px; }
+    .check { padding: 11px 13px; border: 1px solid var(--line); background: var(--card); font: 14px/1.4 Arial, sans-serif; }
+    .check::before { content: "[x]"; margin-right: 10px; color: var(--green); font-weight: 700; }
+    .refused { padding: 22px; border-left: 5px solid var(--muted); }
+    footer { margin-top: 38px; color: var(--muted); font: 12px/1.5 Arial, sans-serif; }
+    @media (max-width: 820px) {
+      .summary { grid-template-columns: repeat(2, 1fr); }
+      .finding-grid { grid-template-columns: 1fr; }
+      .finding-head { display: block; }
+    }
+    @media (max-width: 480px) {
+      main { padding: 30px 15px 50px; }
+      .summary { grid-template-columns: 1fr 1fr; gap: 8px; }
+      .stat { padding: 13px; }
+      .stat strong { font-size: 27px; }
+      .flow { grid-template-columns: 1fr; }
+      .arrow { transform: rotate(90deg); justify-self: center; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="eyebrow">lazykoder / v0.0.10 / implemented</div>
+    <h1>Improve the seams before the next provider wave.</h1>
+    <p class="dek">Five code-backed P1 findings on model capabilities, settings controls, tools, and cancellation contracts are implemented and tested.</p>
+    <p class="meta">Reviewed and fixed 2026-08-24. No commit or push was performed.</p>
+
+    <div class="summary">
+      <div class="stat"><strong>5</strong><span>active findings</span></div>
+      <div class="stat"><strong>0</strong><span>P0 findings</span></div>
+      <div class="stat"><strong>5</strong><span>P1 findings</span></div>
+      <div class="stat"><strong>2</strong><span>refused lookalikes</span></div>
+    </div>
+
+    <section class="panel">
+      <h2>Review map</h2>
+      <p>The module graph is healthy enough that this review does not recommend a new coordinator or plugin framework. The pressure is at narrower seams where one fact is repeated and can drift.</p>
+      <div class="legend">
+        <span class="badge ext">extension seam</span>
+        <span class="badge prac">Go practice</span>
+        <span class="badge p1">P1</span>
+        <span class="badge open">implemented row</span>
+      </div>
+      <div class="flow" style="margin-top:18px">
+        <div class="box"><strong>Current ownership</strong>Catalog IDs, settings switches, tool maps, and nil-context fallbacks repeat facts in separate places.</div>
+        <div class="arrow">&#8594;</div>
+        <div class="box after"><strong>Target ownership</strong>Catalog metadata, row definitions, tool registrations, and explicit context contracts absorb the change.</div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Findings</h2>
+
+      <article class="finding">
+        <div class="finding-head"><h3>EXT-01: Catalog model metadata does not own protocol routing</h3><span class="badge p1">P1 / defect</span></div>
+        <div class="location">internal/provider/opencode/client.go:77-88, 119-129; internal/modelscache/catalog.go:101-105</div>
+        <div class="finding-grid">
+          <div>
+            <div class="label">Evidence</div>
+            <pre>if isResponsesModel(id) {
+    return Route{Endpoint: ResponsesURL(base), Provider: ProviderGo}
+}
+
+var responsesModels = map[string]struct{}{
+    "gpt-5.6-luna": {},
+}</pre>
+            <div class="label">Cost</div>
+            <p>A new Responses-capable model needs a source edit or it can be sent through the wrong request shape.</p>
+            <div class="label">Change</div>
+            <p>Make live and cached catalog protocol metadata own route selection. Keep fallback routing only for records with no protocol metadata.</p>
+            <div class="label">Proof</div>
+            <p>Route a synthetic future model with Responses metadata without adding its ID to source.</p>
+          </div>
+          <div class="diagram"><div class="diagram-title">Deep module candidate</div><div class="flow"><div class="box"><strong>Today</strong>Model ID heuristic<br><code>responsesModels</code></div><div class="arrow">&#8594;</div><div class="box after"><strong>Proposed</strong>Catalog protocol field<br>drives endpoint</div></div><p><span class="label">Not</span> A provider plugin registry or another heuristic table.</p></div>
+        </div>
+      </article>
+
+      <article class="finding">
+        <div class="finding-head"><h3>EXT-02: Settings controls have parallel registries</h3><span class="badge p1">P1 / friction</span></div>
+        <div class="location">internal/ui/chat/settings.go:97-130, 345-433, 506-570, 670-785, 1489-1505</div>
+        <div class="finding-grid">
+          <div>
+            <div class="label">Evidence</div>
+            <pre>var settingsNavigationOrder = [...]int{ ... }
+
+func (m Model) settingsPaintLines(innerW int) []settingsPaintLine {
+    // rows are appended in a second order
+}
+
+func settingsRowLabel(row int) string { ... }
+func (m Model) activateSettingsRow() (Model, tea.Cmd) { ... }</pre>
+            <div class="label">Cost</div>
+            <p>A visible row can be absent from keyboard activation, adjustment, or mouse mapping. Recent arrow-navigation repairs make this extension friction concrete.</p>
+            <div class="label">Change</div>
+            <p>Use one internal row definition table for visibility, labels, values, activation, adjustment, and hit testing.</p>
+            <div class="label">Proof</div>
+            <p>Registry coverage test plus a conditional skill-row navigation test.</p>
+          </div>
+          <div class="diagram"><div class="diagram-title">Deep module candidate</div><div class="flow"><div class="box"><strong>Today</strong>Five row maps<br>must stay aligned</div><div class="arrow">&#8594;</div><div class="box after"><strong>Proposed</strong>One row definition<br>derives every path</div></div><p><span class="label">Not</span> A generic UI framework or second settings system.</p></div>
+        </div>
+      </article>
+
+      <article class="finding">
+        <div class="finding-head"><h3>EXT-03: Settings form validation disagrees with settings bounds</h3><span class="badge p1">P1 / defect</span></div>
+        <div class="location">internal/settings/settings.go:56-59; internal/ui/chat/settings.go:736-801, 1331-1339</div>
+        <div class="finding-grid">
+          <div>
+            <div class="label">Evidence</div>
+            <pre>MinCompactPercent = 5
+MaxCompactPercent = 99
+
+if err != nil || v &lt; 10 || v &gt; 90 {
+    return fmt.Errorf("must be between 10 and 90")
+}</pre>
+            <div class="label">Cost</div>
+            <p>Arrow controls allow values that the form refuses. The documented zero timeout sentinel is also rejected by the shared positive-integer validator.</p>
+            <div class="label">Change</div>
+            <p>Keep numeric bounds and sentinel semantics in <code>internal/settings</code>. Derive UI validation and help text from that contract.</p>
+            <div class="label">Proof</div>
+            <p>Test compact percentage edges and agent timeout zero through both form and arrow paths.</p>
+          </div>
+          <div class="diagram"><div class="diagram-title">Contract candidate</div><div class="flow"><div class="box"><strong>Today</strong>Settings package says 5-99<br>UI form says 10-90</div><div class="arrow">&#8594;</div><div class="box after"><strong>Proposed</strong>One bound and sentinel<br>contract</div></div><p><span class="label">Depends on</span> EXT-02 for row-owned field metadata.</p></div>
+        </div>
+      </article>
+
+      <article class="finding">
+        <div class="finding-head"><h3>EXT-04: Tool advertisement and execution use separate registries</h3><span class="badge p1">P1 / friction</span></div>
+        <div class="location">internal/agent/tools_registry.go:39-45, 178-209; internal/agent/tools_exec.go:34-45, 231-243</div>
+        <div class="finding-grid">
+          <div>
+            <div class="label">Evidence</div>
+            <pre>var allBaseToolSpecs = map[string]opencode.ToolSpec{ ... }
+var baseToolRunners = map[string]baseToolRunner{ ... }
+
+if run, ok := baseToolRunners[tc.Name]; ok {
+    return run(a, ctx, events, partID, title, tc)
+}
+out := "unknown tool: " + tc.Name</pre>
+            <div class="label">Cost</div>
+            <p>A partial tool edit can advertise a tool that always returns <code>unknown tool</code>, or implement a tool that the model never sees.</p>
+            <div class="label">Change</div>
+            <p>Use one registration record for name, spec, and runner. Derive advertisement and dispatch from it.</p>
+            <div class="label">Proof</div>
+            <p>Parity and dispatch tests cover every base tool and explicitly exclude host-owned task tools.</p>
+          </div>
+          <div class="diagram"><div class="diagram-title">Deep module candidate</div><div class="flow"><div class="box"><strong>Today</strong>Spec map plus runner map<br>partial edits compile</div><div class="arrow">&#8594;</div><div class="box after"><strong>Proposed</strong>Registration owns<br>both directions</div></div><p><span class="label">Not</span> Reflection or a plugin system.</p></div>
+        </div>
+      </article>
+
+      <article class="finding practical">
+        <div class="finding-head"><h3>PRAC-01: Recap entries replace nil contexts with Background</h3><span class="badge p1">P1 / defect</span></div>
+        <div class="location">internal/recap/snapshot.go:87-97; internal/recap/worker.go:53-66; internal/recap/memory_run.go:32-39; internal/recap/memory.go:1061-1066</div>
+        <div class="finding-grid">
+          <div>
+            <div class="label">Evidence</div>
+            <pre>if ctx == nil {
+    ctx = context.Background()
+}
+sess, err := store.GetSession(ctx, sessionID)</pre>
+            <div class="label">Cost</div>
+            <p>Malformed callers can silently lose cancellation while database, file, or provider work continues after the owning turn is gone.</p>
+            <div class="label">Change</div>
+            <p>Define one recap nil-context sentinel and reject nil at cancellation-aware entry points. Keep explicit background roots only in deliberate UI roots.</p>
+            <div class="label">Proof</div>
+            <p>Use <code>errors.Is</code> nil-context tests and a cancellation test proving downstream work does not start.</p>
+          </div>
+          <div class="diagram"><div class="diagram-title">Boundary candidate</div><div class="flow"><div class="box"><strong>Today</strong>nil becomes uncancellable<br>at several entries</div><div class="arrow">&#8594;</div><div class="box after"><strong>Proposed</strong>nil is explicit error<br>cancellation stays owned</div></div><p><span class="label">Not</span> Context stored on worker structs.</p></div>
+        </div>
+      </article>
+    </section>
+
+    <section class="panel">
+      <h2>Phase ledger</h2>
+      <div class="checklist">
+        <div class="check"><strong>EXT-01:</strong> catalog protocol metadata owns route selection.</div>
+        <div class="check"><strong>EXT-02:</strong> one settings row definition drives painted navigation and labels.</div>
+        <div class="check"><strong>EXT-03:</strong> settings form and arrow paths share bounds and sentinels.</div>
+        <div class="check"><strong>EXT-04:</strong> tool specs and runners pass a registration parity check.</div>
+        <div class="check"><strong>PRAC-01:</strong> recap rejects nil contexts and preserves cancellation ownership.</div>
+      </div>
+      <p style="margin-top:18px;color:var(--muted)">All five implementation rows are complete. A real-terminal visual check remains for the human operator.</p>
+    </section>
+
+    <section class="refused">
+      <h2>Refused lookalikes</h2>
+      <ul>
+        <li>Do not split <code>internal/ui/chat</code> only because it is large. It is the intentional Bubble Tea coordinator, and no failed alternate adapter was found.</li>
+        <li>Do not add a provider plugin registry. The current provider descriptors, factory selection, and auth routing are a concrete seam; a plugin framework would add indirection without a second implementation boundary.</li>
+      </ul>
+    </section>
+
+    <footer>Canonical Markdown ledger: <code>plans/v0.0.10/improve-codebase/phase-wise-checklist.md</code>. The HTML is a rendered companion, not a separate status source.</footer>
+  </main>
+</body>
+</html>

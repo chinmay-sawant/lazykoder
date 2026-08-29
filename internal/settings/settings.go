@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chinmay-sawant/lazykoder/internal/agent/toolplugin"
+	"github.com/chinmay-sawant/lazykoder/internal/provider"
 	"github.com/chinmay-sawant/lazykoder/internal/roles"
 )
 
@@ -50,8 +52,8 @@ const (
 	// MaxMaxDepth caps sub-agent nesting depth. Product depth is 1 until
 	// nested Host ships; do not advertise editable depth above 1.
 	MaxMaxDepth = 1
-	// maxMaxQueued caps the sub-agent queue size.
-	maxMaxQueued = 100
+	// MaxMaxQueued caps the sub-agent queue size.
+	MaxMaxQueued = 100
 	// MinCompactPercent is the lowest selectable auto-compact threshold.
 	MinCompactPercent = 5
 	// MaxCompactPercent is the highest selectable auto-compact threshold.
@@ -75,6 +77,10 @@ const (
 	MinRetryDelaySeconds = 0
 	// MaxRetryDelaySeconds caps the configured retry delay.
 	MaxRetryDelaySeconds = 300
+	// DefaultMaxDiscoveredTools caps file-loaded shell tools.
+	DefaultMaxDiscoveredTools = 32
+	// MaxMaxDiscoveredTools is the upper bound for file-loaded shell tools.
+	MaxMaxDiscoveredTools = 128
 	// DefaultSkillMaxAutoMatches limits automatic skill context injection.
 	DefaultSkillMaxAutoMatches = 2
 	// MinSkillMaxAutoMatches is the smallest automatic skill match count.
@@ -119,6 +125,22 @@ type Model struct {
 	Variant string `json:"variant"`
 }
 
+// Provider selects the active chat provider for the parent agent.
+type Provider struct {
+	Active string `json:"active"`
+}
+
+// Orchestrator controls hidden decomposition and role model classes.
+type Orchestrator struct {
+	Enabled          bool              `json:"enabled"`
+	Review           bool              `json:"review"`
+	Provider         string            `json:"provider"`
+	ModelClassByRole map[string]string `json:"model_class_by_role,omitempty"`
+	ExploreClass     string            `json:"explore_class,omitempty"`
+	PlanClass        string            `json:"plan_class,omitempty"`
+	GeneralClass     string            `json:"general_class,omitempty"`
+}
+
 // Appearance holds visual preferences for the TUI.
 type Appearance struct {
 	// Theme is "dark" or "light". Unknown values fall back to dark.
@@ -134,6 +156,7 @@ type Agents struct {
 	DefaultTimeoutSec    int    `json:"default_timeout_sec"`
 	ChildMaxSteps        int    `json:"child_max_steps"`
 	ModelOverride        string `json:"model_override"`
+	ModelVariant         string `json:"model_variant"`
 	ExploreModel         string `json:"explore_model"`
 	BashConfirm          string `json:"bash_confirm"` // "parent" or "deny"
 	BashAllowlistEnabled bool   `json:"bash_allowlist_enabled"`
@@ -185,16 +208,26 @@ type Skills struct {
 	MaxContextBytes int  `json:"max_context_bytes"`
 }
 
+// Tools controls built-in and declaratively discovered tool availability.
+type Tools struct {
+	Enabled         map[string]bool `json:"enabled"`
+	AllowDiscovered bool            `json:"allow_discovered"`
+	MaxDiscovered   int             `json:"max_discovered"`
+}
+
 // Settings is the on-disk project config under .lazykoder/settings.json.
 type Settings struct {
-	Appearance Appearance `json:"appearance"`
-	Slot       Slot       `json:"slot"`
-	Model      Model      `json:"model"`
-	Agents     Agents     `json:"agents"`
-	Compaction Compaction `json:"compaction"`
-	Recap      Recap      `json:"recap"`
-	Retry      Retry      `json:"retry"`
-	Skills     Skills     `json:"skills"`
+	Appearance   Appearance   `json:"appearance"`
+	Slot         Slot         `json:"slot"`
+	Model        Model        `json:"model"`
+	Provider     Provider     `json:"provider"`
+	Orchestrator Orchestrator `json:"orchestrator"`
+	Agents       Agents       `json:"agents"`
+	Compaction   Compaction   `json:"compaction"`
+	Recap        Recap        `json:"recap"`
+	Retry        Retry        `json:"retry"`
+	Skills       Skills       `json:"skills"`
+	Tools        Tools        `json:"tools"`
 }
 
 // Default returns the built-in defaults.
@@ -208,6 +241,20 @@ func Default() Settings {
 		Model: Model{
 			Default: DefaultModelID,
 			Variant: "",
+		},
+		Provider: Provider{Active: "opencode"},
+		Orchestrator: Orchestrator{
+			Enabled:      true,
+			Review:       true,
+			Provider:     provider.IDOpenCode,
+			ExploreClass: "flash",
+			PlanClass:    "pro",
+			GeneralClass: "pro",
+			ModelClassByRole: map[string]string{
+				roles.Explore: "flash",
+				roles.Plan:    "pro",
+				roles.General: "pro",
+			},
 		},
 		Agents: Agents{
 			Enabled:              true,
@@ -245,6 +292,13 @@ func Default() Settings {
 			MaxAutoMatches:  DefaultSkillMaxAutoMatches,
 			MaxBodyBytes:    DefaultSkillMaxBodyBytes,
 			MaxContextBytes: DefaultSkillMaxContextBytes,
+		},
+		Tools: Tools{
+			Enabled: map[string]bool{
+				"bash": true, "read": true, "write": true, "edit": true,
+				"grep": true, "webfetch": true, "question": true, "todowrite": true,
+			},
+			MaxDiscovered: DefaultMaxDiscoveredTools,
 		},
 	}
 }
@@ -286,9 +340,20 @@ func (s Settings) EffectiveMaxSteps() int {
 	return s.Slot.MaxSteps
 }
 
-// EffectiveModel is the default model id (never empty after normalize).
+// EffectiveModel is the default model id. It is empty when the selected
+// provider owns a live default model selection.
 func (s Settings) EffectiveModel() string {
 	return s.normalized().Model.Default
+}
+
+// EffectiveProvider returns the canonical active provider name.
+func (s Settings) EffectiveProvider() string {
+	return provider.Normalize(s.normalized().Provider.Active)
+}
+
+// EffectiveOrchestrator returns normalized orchestration settings.
+func (s Settings) EffectiveOrchestrator() Orchestrator {
+	return s.normalized().Orchestrator
 }
 
 // EffectiveVariant is the default reasoning variant (may be empty).
@@ -326,6 +391,11 @@ func (s Settings) EffectiveSkills() Skills {
 	return s.normalized().Skills
 }
 
+// EffectiveTools returns normalized tool settings with unknown IDs removed.
+func (s Settings) EffectiveTools() Tools {
+	return s.normalized().Tools
+}
+
 // EffectiveTimeout is the sub-agent timeout duration.
 // Zero DefaultTimeoutSec means no timeout from settings.
 func (a Agents) EffectiveTimeout() time.Duration {
@@ -333,11 +403,6 @@ func (a Agents) EffectiveTimeout() time.Duration {
 		return 0
 	}
 	return time.Duration(a.DefaultTimeoutSec) * time.Second
-}
-
-// ToolsForRole returns the tool allow-list for a sub-agent role.
-func (a Agents) ToolsForRole(role string) []string {
-	return roles.Tools(role)
 }
 
 func (s Settings) normalized() Settings {
@@ -348,16 +413,22 @@ func (s Settings) normalized() Settings {
 	if s.Slot.MaxSteps > MaxMaxSteps {
 		s.Slot.MaxSteps = MaxMaxSteps
 	}
+	s.Provider.Active = provider.Normalize(s.Provider.Active)
+	if _, ok := provider.DescriptorFor(s.Provider.Active); !ok {
+		s.Provider.Active = provider.IDOpenCode
+	}
 	s.Model.Default = strings.TrimSpace(s.Model.Default)
 	if s.Model.Default == "" {
-		s.Model.Default = DefaultModelID
+		s.Model.Default = provider.DefaultModel(s.Provider.Active)
 	}
 	s.Model.Variant = strings.TrimSpace(s.Model.Variant)
+	s.Orchestrator = s.Orchestrator.normalized()
 	s.Agents = s.Agents.normalized()
 	s.Compaction = s.Compaction.normalized()
 	s.Recap = s.Recap.normalized()
 	s.Retry = s.Retry.normalized()
 	s.Skills = s.Skills.normalized()
+	s.Tools = s.Tools.normalized()
 	return s
 }
 
@@ -440,8 +511,8 @@ func (a Agents) normalized() Agents {
 	if a.MaxQueued < 1 {
 		a.MaxQueued = DefaultMaxQueued
 	}
-	if a.MaxQueued > maxMaxQueued {
-		a.MaxQueued = maxMaxQueued
+	if a.MaxQueued > MaxMaxQueued {
+		a.MaxQueued = MaxMaxQueued
 	}
 	if a.MaxQueued < a.MaxConcurrent {
 		a.MaxQueued = a.MaxConcurrent
@@ -462,6 +533,9 @@ func (a Agents) normalized() Agents {
 		a.ChildMaxSteps = MaxMaxSteps
 	}
 	a.BashConfirm = strings.TrimSpace(a.BashConfirm)
+	a.ModelOverride = strings.TrimSpace(a.ModelOverride)
+	a.ModelVariant = strings.TrimSpace(a.ModelVariant)
+	a.ExploreModel = strings.TrimSpace(a.ExploreModel)
 	var cleanAllowlist []string
 	if a.BashAllowlist != nil {
 		cleanAllowlist = make([]string, 0, len(a.BashAllowlist))
@@ -480,9 +554,7 @@ func (a Agents) normalized() Agents {
 		a.BashConfirm = "parent"
 	}
 	a.DefaultRole = strings.TrimSpace(a.DefaultRole)
-	switch a.DefaultRole {
-	case "explore", "plan", "general":
-	default:
+	if !roles.IsKnown(a.DefaultRole) {
 		a.DefaultRole = "explore"
 	}
 	return a
@@ -498,13 +570,19 @@ func NormalizeAfterLoad(s Settings, raw []byte) Settings {
 	if !jsonHasKey(raw, "slot", "limit_enabled") {
 		s.Slot.LimitEnabled = true
 	}
-	if s.Model.Default == "" {
+	if s.Model.Default == "" && s.Provider.Active != provider.IDCodex {
 		s.Model.Default = DefaultModelID
 	}
 	if !jsonHasKey(raw, "agents") {
 		s.Agents = Default().Agents
 	} else if !jsonHasKey(raw, "agents", "enabled") {
 		s.Agents.Enabled = true
+	}
+	if !jsonHasKey(raw, "provider") {
+		s.Provider = Default().Provider
+	}
+	if !jsonHasKey(raw, "orchestrator") {
+		s.Orchestrator = Default().Orchestrator
 	}
 	if !jsonHasKey(raw, "compaction") {
 		s.Compaction = Default().Compaction
@@ -535,7 +613,69 @@ func NormalizeAfterLoad(s Settings, raw []byte) Settings {
 	if !jsonHasKey(raw, "skills") {
 		s.Skills = Default().Skills
 	}
+	if !jsonHasKey(raw, "tools") {
+		s.Tools = Default().Tools
+	}
 	return s.normalized()
+}
+
+func (o Orchestrator) normalized() Orchestrator {
+	o.Provider = provider.Normalize(o.Provider)
+	if _, ok := provider.DescriptorFor(o.Provider); !ok {
+		o.Provider = provider.IDOpenCode
+	}
+	if o.ExploreClass == "" {
+		o.ExploreClass = o.ModelClassByRole[roles.Explore]
+	}
+	if o.PlanClass == "" {
+		o.PlanClass = o.ModelClassByRole[roles.Plan]
+	}
+	if o.GeneralClass == "" {
+		o.GeneralClass = o.ModelClassByRole[roles.General]
+	}
+	o.ExploreClass = strings.TrimSpace(strings.ToLower(o.ExploreClass))
+	o.PlanClass = strings.TrimSpace(strings.ToLower(o.PlanClass))
+	o.GeneralClass = strings.TrimSpace(strings.ToLower(o.GeneralClass))
+	if o.ExploreClass == "" {
+		o.ExploreClass = "flash"
+	}
+	if o.PlanClass == "" {
+		o.PlanClass = "pro"
+	}
+	if o.GeneralClass == "" {
+		o.GeneralClass = "pro"
+	}
+	classes := make(map[string]string, len(o.ModelClassByRole))
+	for role, class := range o.ModelClassByRole {
+		role = strings.ToLower(strings.TrimSpace(role))
+		class = strings.TrimSpace(strings.ToLower(class))
+		if role == "" || class == "" || !roles.IsKnown(role) {
+			continue
+		}
+		classes[role] = class
+	}
+	classes[roles.Explore] = o.ExploreClass
+	classes[roles.Plan] = o.PlanClass
+	classes[roles.General] = o.GeneralClass
+	o.ModelClassByRole = classes
+	return o
+}
+
+func (t Tools) normalized() Tools {
+	if t.Enabled == nil {
+		t.Enabled = Default().Tools.Enabled
+	}
+	enabled := make(map[string]bool, len(t.Enabled))
+	for _, id := range toolplugin.IDs() {
+		if t.Enabled[id] && (t.AllowDiscovered || !toolplugin.IsDiscovered(id)) {
+			enabled[id] = true
+		}
+	}
+	t.Enabled = enabled
+	if t.MaxDiscovered <= 0 || t.MaxDiscovered > MaxMaxDiscoveredTools {
+		t.MaxDiscovered = DefaultMaxDiscoveredTools
+	}
+	return t
 }
 
 func jsonHasKey(raw []byte, path ...string) bool {

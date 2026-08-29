@@ -159,8 +159,13 @@ func (m *Manager) Spawn(ctx context.Context, parentSessionID, parentPartID strin
 		name = id
 	}
 
-	// Derive from parent ctx when present so turn cancel cascades; still apply wall timeout.
+	// Foreground jobs follow the parent turn. Background jobs are explicitly
+	// detached so a completed parent turn does not cancel work the user asked
+	// to continue, while Manager.Cancel and Shutdown still stop them.
 	base := ctx
+	if spec.Background {
+		base = context.WithoutCancel(ctx)
+	}
 	if base == nil {
 		base = context.Background()
 	}
@@ -337,10 +342,28 @@ func rowWithStatus(row db.SubagentJob, status, summary, errText string) db.Subag
 
 func (m *Manager) buildJob(id, parentSessionID, parentPartID, name, role string, spec Spec, timeout time.Duration, rt Runtime, childSessionID string, resume bool) Job {
 	cfg := m.cfg
-	model := firstNonEmpty(spec.Model, cfg.Model, rt.Model, opencode.DefaultModelID)
-	if role == RoleExplore && cfg.ExploreModel != "" {
-		model = firstNonEmpty(spec.Model, cfg.ExploreModel, model)
+	model := strings.TrimSpace(spec.Model)
+	if model == "" {
+		if roleModel := strings.TrimSpace(cfg.ModelByRole[role]); roleModel != "" {
+			model = roleModel
+		}
+		if model == "" && role == RoleExplore {
+			model = strings.TrimSpace(cfg.ExploreModel)
+		}
+		if model == "" {
+			model = cfg.Model
+		}
+		if model == "" {
+			class := strings.TrimSpace(spec.ModelClass)
+			if class == "" {
+				if descriptor, ok := roles.DescriptorFor(role); ok {
+					class = descriptor.DefaultModelClass
+				}
+			}
+			model = resolveClass(class, role, cfg, rt)
+		}
 	}
+	model = firstNonEmpty(model, rt.Model, opencode.DefaultModelID)
 	profile := rt.profile(model)
 	maxSteps := spec.MaxSteps
 	if maxSteps < 1 {
@@ -380,6 +403,39 @@ func (m *Manager) buildJob(id, parentSessionID, parentPartID, name, role string,
 	}
 }
 
+func resolveClass(class, role string, cfg Config, rt Runtime) string {
+	class = strings.ToLower(strings.TrimSpace(class))
+	if class == "" {
+		return ""
+	}
+	for _, profile := range rt.Profiles {
+		id := strings.ToLower(profile.ID)
+		if strings.Contains(id, class) {
+			return profile.ID
+		}
+	}
+	if configured := strings.TrimSpace(cfg.ModelClassByRole[role]); configured == class {
+		if model := strings.TrimSpace(cfg.ModelByRole[role]); model != "" {
+			return model
+		}
+	}
+	switch role {
+	case RoleExplore:
+		if cfg.ExploreClass == class {
+			return cfg.ExploreModel
+		}
+	case RolePlan:
+		if cfg.PlanClass == class {
+			return cfg.Model
+		}
+	case RoleGeneral:
+		if cfg.GeneralClass == class {
+			return cfg.Model
+		}
+	}
+	return ""
+}
+
 func (rt Runtime) profile(model string) ModelProfile {
 	for _, profile := range rt.Profiles {
 		if profile.ID == model {
@@ -405,6 +461,11 @@ func (profile ModelProfile) variant(candidates ...string) string {
 			}
 		}
 	}
+	for _, supported := range profile.Variants {
+		if variant := strings.TrimSpace(supported); variant != "" {
+			return variant
+		}
+	}
 	return ""
 }
 
@@ -425,7 +486,8 @@ func (m *Manager) execute(jobCtx context.Context, h *handle, job Job, role strin
 	defer func() { <-m.sem }()
 
 	// Optional single-writer lock for general role (cancelable wait).
-	if role == RoleGeneral && !m.cfg.AllowParallelWriters {
+	descriptor, known := roles.DescriptorFor(role)
+	if known && descriptor.SingleWriter && !m.cfg.AllowParallelWriters {
 		if err := m.acquireWriter(jobCtx); err != nil {
 			m.finish(h, terminalFromCtx(jobCtx, Result{
 				ID: job.ID, Name: job.Name, Role: job.Role,
@@ -515,7 +577,8 @@ func (m *Manager) finish(h *handle, res Result) {
 	h.snap.FinishedAt = now
 	h.mu.Unlock()
 	_ = m.persistHandle(h)
-	// Bump parent session so resume lists show activity.
+	// Keep parent activity fresh for age labels and the child drawer. History
+	// ordering uses the conversation timestamp and does not move the parent.
 	m.mu.Lock()
 	store := m.store
 	parentID := h.snapshot().ParentSessionID

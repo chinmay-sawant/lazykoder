@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 )
@@ -51,9 +52,14 @@ type liveProvider struct {
 
 type liveModel struct {
 	ID               string             `json:"id"`
+	Endpoint         string             `json:"endpoint"`
+	APIFormat        string             `json:"api_format"`
+	Protocol         string             `json:"protocol"`
+	API              string             `json:"api"`
 	Limit            liveLimit          `json:"limit"`
 	Cost             *liveCost          `json:"cost"`
 	ReasoningOptions []liveReasonOption `json:"reasoning_options"`
+	Status           string             `json:"status"`
 }
 
 type liveLimit struct {
@@ -92,15 +98,31 @@ func ParseModelsDev(raw []byte) (map[string]Info, error) {
 			if id == "" {
 				continue
 			}
+			if strings.EqualFold(strings.TrimSpace(m.Status), "deprecated") {
+				continue
+			}
 			out[id] = liveInfo(id, m, key)
 		}
 	}
 	return out, nil
 }
 
+var deprecatedModelIDs = map[string]struct{}{
+	"deepseek-v4-flash-free": {},
+}
+
+// IsDeprecatedModelID reports whether id is retained in provider listings but
+// upstream has marked it unavailable. The Zen models endpoint still advertises
+// the id even after models.dev marks it deprecated, so callers should drop it
+// from the picker rather than routing requests to it.
+func IsDeprecatedModelID(id string) bool {
+	_, ok := deprecatedModelIDs[id]
+	return ok
+}
+
 func liveInfo(id string, m liveModel, provider string) Info {
 	info := Info{ID: id, Context: m.Limit.Context, Variants: effortVariants(m.ReasoningOptions)}
-	if route, ok := opencode.RouteForCatalogProvider(opencode.DefaultBaseURL, provider); ok {
+	if route, ok := liveRoute(m, provider, id); ok {
 		info.Endpoint = route.Endpoint
 		info.Provider = route.Provider
 	}
@@ -117,6 +139,40 @@ func liveInfo(id string, m liveModel, provider string) Info {
 		info.Free = true
 	}
 	return info
+}
+
+func liveRoute(model liveModel, provider, id string) (opencode.Route, bool) {
+	if model.Endpoint != "" || model.APIFormat != "" || model.Protocol != "" || model.API != "" {
+		base := opencode.DefaultBaseURL
+		defaultRoute, ok := opencode.RouteForCatalogModel(base, provider, id)
+		if !ok {
+			return opencode.Route{}, false
+		}
+		if provider == "opencode" {
+			base, ok = opencode.ZenBaseURL(base)
+			if !ok {
+				return opencode.Route{}, false
+			}
+		}
+		route := opencode.RouteForModelMetadata(
+			base,
+			id,
+			model.Endpoint,
+			firstNonEmpty(model.APIFormat, model.Protocol, model.API),
+		)
+		route.Provider = defaultRoute.Provider
+		return route, true
+	}
+	return opencode.RouteForCatalogModel(opencode.DefaultBaseURL, provider, id)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func effortVariants(opts []liveReasonOption) []string {
@@ -190,4 +246,69 @@ func ApplyLive(infos []Info, live map[string]Info) []Info {
 		out[i] = MergeLive(info, live)
 	}
 	return out
+}
+
+// FilterDeprecated removes ids that are still listed by the provider but are
+// known to be unavailable upstream (see IsDeprecatedModelID). Callers should
+// run this after merging Zen and live catalog rows and before persisting.
+func FilterDeprecated(infos []Info) []Info {
+	if len(infos) == 0 {
+		return infos
+	}
+	out := make([]Info, 0, len(infos))
+	for _, info := range infos {
+		if IsDeprecatedModelID(info.ID) {
+			continue
+		}
+		out = append(out, info)
+	}
+	return out
+}
+
+// PreserveSpecializedEndpoints keeps a previously discovered protocol route
+// when a refreshed catalog only returns the generic chat route. Provider
+// metadata remains authoritative when it supplies a specialized route.
+func PreserveSpecializedEndpoints(infos, fallback []Info) []Info {
+	previous := make(map[string]Info, len(fallback))
+	specialized := make(map[string]Info, len(fallback))
+	for _, info := range fallback {
+		previous[mergeKey(info)] = info
+		if isResponsesEndpoint(info.Endpoint) {
+			specialized[providerModelKey(info)] = info
+		}
+	}
+	out := make([]Info, len(infos))
+	copy(out, infos)
+	for index, info := range out {
+		old, ok := previous[mergeKey(info)]
+		if !ok {
+			old, ok = specialized[providerModelKey(info)]
+		}
+		if !ok {
+			continue
+		}
+		if info.Endpoint == "" || isGenericChatEndpoint(info.Endpoint) && isResponsesEndpoint(old.Endpoint) {
+			out[index].Endpoint = old.Endpoint
+		}
+		if out[index].Provider == "" {
+			out[index].Provider = old.Provider
+		}
+	}
+	return out
+}
+
+func isGenericChatEndpoint(endpoint string) bool {
+	return strings.HasSuffix(strings.TrimSuffix(endpoint, "/"), "/chat/completions")
+}
+
+func isResponsesEndpoint(endpoint string) bool {
+	return strings.HasSuffix(strings.TrimSuffix(endpoint, "/"), "/responses")
+}
+
+func providerModelKey(info Info) string {
+	providerID := CanonicalProvider(info)
+	if providerID == "" {
+		providerID = info.Provider
+	}
+	return providerID + "\x00" + info.ID
 }

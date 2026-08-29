@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
+	"github.com/chinmay-sawant/lazykoder/internal/roles"
 )
 
 // Tool names advertised to the model.
@@ -35,6 +36,7 @@ type TaskArgs struct {
 	Description string `json:"description"`
 	Role        string `json:"role"`
 	Model       string `json:"model"`
+	ModelClass  string `json:"model_class"`
 	Variant     string `json:"variant"`
 	MaxSteps    int    `json:"max_steps"`
 	Background  bool   `json:"background"`
@@ -152,6 +154,10 @@ func specTask() opencode.ToolSpec {
 					"type":        "string",
 					"description": "Optional model override",
 				},
+				"model_class": map[string]any{
+					"type":        "string",
+					"description": "Optional strength class from the orchestration plan: flash or pro",
+				},
 				"variant": map[string]any{
 					"type":        "string",
 					"description": "Optional reasoning variant",
@@ -250,16 +256,14 @@ func IsTaskTool(name string) bool {
 // NormalizeRole returns a canonical role, or empty when s is not a known role.
 // Empty input defaults to RoleExplore (matches settings/subagent defaults).
 func NormalizeRole(s string) string {
-	switch strings.ToLower(strings.TrimSpace(s)) {
-	case RoleExplore, "":
-		return RoleExplore
-	case RolePlan:
-		return RolePlan
-	case RoleGeneral:
-		return RoleGeneral
-	default:
-		return ""
+	s = strings.ToLower(strings.TrimSpace(s))
+	if s == "" {
+		return roles.Explore
 	}
+	if roles.IsKnown(s) {
+		return s
+	}
+	return ""
 }
 
 // ParseTaskArgs unmarshals and validates task (spawn) arguments.
@@ -281,7 +285,7 @@ func ParseTaskArgs(raw []byte) (TaskArgs, error) {
 	} else {
 		role := NormalizeRole(a.Role)
 		if role == "" {
-			return TaskArgs{}, fmt.Errorf("task: invalid role %q (want explore, plan, or general)", a.Role)
+			return TaskArgs{}, fmt.Errorf("task: invalid role %q (want one of %s)", a.Role, strings.Join(roles.IDs(), ", "))
 		}
 		a.Role = role
 	}

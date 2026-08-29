@@ -196,6 +196,6 @@ func containsStatusSegment(segments []string, want string) bool {
 }
 
 func (m Model) runSlashStatus() Model {
-	m, _ = m.runSlash("/status")
+	m, _ = m.runSlashArg("/status", "")
 	return m
 }

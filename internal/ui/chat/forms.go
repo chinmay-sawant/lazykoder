@@ -18,7 +18,7 @@ const (
 	spawnFormSelectHeight = 4
 	spawnFormMaxWidth     = 72
 	settingFormMaxWidth   = 60
-	formOverlayMaxWidth   = 76
+	formOverlayMaxWidth   = 106
 )
 
 type formHost struct {
@@ -233,7 +233,6 @@ func (m Model) updateFormKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 		return m.clearFocus(focusForm), nil
 	}
-
 	return m.updateFormMsg(key)
 }
 
@@ -266,6 +265,9 @@ func (m Model) updateFormMsg(msg tea.Msg) (Model, tea.Cmd) {
 func (m Model) formOverlay() string {
 	if m.formHost == nil || m.formHost.form == nil {
 		return ""
+	}
+	if m.formHost.kind == "add-provider" {
+		return m.addProviderOverlayView()
 	}
 	cardW := max(minPaneWidth, min(formOverlayMaxWidth, m.overlayWidth()))
 	innerW := max(1, cardW-cardBorder-cardBorderPad)

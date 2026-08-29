@@ -24,8 +24,9 @@ type projectOpts struct {
 }
 
 type usageApply struct {
-	part    db.Part
-	modelID string
+	part       db.Part
+	modelID    string
+	providerID string
 }
 
 type projectResult struct {
@@ -86,6 +87,14 @@ func projectSession(store *db.Store, sessionID string, opts projectOpts) (projec
 					kind: itemReasoning, text: *p.Text, collapsed: opts.CollapseReasoning,
 					when: itemTime(msg.TimeCreated, p.TimeCreated), part: p,
 				})
+			case "plan":
+				if p.Text == nil {
+					continue
+				}
+				out.items = append(out.items, transcriptItem{
+					kind: itemNote, text: "orchestration plan\n" + *p.Text,
+					when: itemTime(msg.TimeCreated, p.TimeCreated), part: p,
+				})
 			case "tool":
 				tool := db.ToolCall{PartID: p.ID}
 				if stored, ok := graph.ToolCallsByPart[p.ID]; ok {
@@ -110,7 +119,11 @@ func projectSession(store *db.Store, sessionID string, opts projectOpts) (projec
 				})
 			case "step-finish":
 				if opts.CollectUsage {
-					out.usage = append(out.usage, usageApply{part: p, modelID: msg.ModelID})
+					out.usage = append(out.usage, usageApply{
+						part:       p,
+						modelID:    msg.ModelID,
+						providerID: msg.ProviderID,
+					})
 				}
 			case agent.CompactPartType:
 				if opts.IncludeCompactNotes {

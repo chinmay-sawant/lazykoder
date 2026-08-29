@@ -22,6 +22,7 @@ the readable reference; keep the two in sync when adding or editing a tip.
 - `/new` starts a fresh session
 - `/resume` or `ctrl+s` continues a past session
 - `/model` switches the chat model
+- `/diff` opens the current worktree diff drawer
 - `/variant` sets the reasoning effort
 - `/settings` opens project defaults (model, agents, compaction, retries, safety)
 - `/agents` opens the sub-agent drawer and logs

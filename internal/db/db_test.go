@@ -49,6 +49,34 @@ WHERE type = 'table' AND name IN ('sessions', 'messages', 'parts', 'tool_calls',
 	}
 }
 
+func TestSessionActivityMigrationBackfillsZeroValues(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	sess, err := s.CreateSession(ctx, Session{Directory: "/work", TimeCreated: 10, TimeUpdated: 20})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE sessions SET time_active = 0 WHERE id = ?`, sess.ID); err != nil {
+		t.Fatalf("zero time_active: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM schema_migrations WHERE version = ?`, migrationSessionActive); err != nil {
+		t.Fatalf("rewind migration: %v", err)
+	}
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	got, err := s.GetSession(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if got.TimeActive != got.TimeUpdated {
+		t.Fatalf("time_active = %d, want backfilled time_updated %d", got.TimeActive, got.TimeUpdated)
+	}
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatalf("second Migrate: %v", err)
+	}
+}
+
 func TestRecapRecordLifecycleAndOrdering(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
@@ -225,7 +253,7 @@ func TestPersistAndReopen(t *testing.T) {
 	if sess.Provider != "opencode-go" || sess.Model != "" || sess.Status != "active" {
 		t.Fatalf("defaults not applied: %+v", sess)
 	}
-	if sess.TimeCreated == 0 || sess.TimeUpdated == 0 {
+	if sess.TimeCreated == 0 || sess.TimeUpdated == 0 || sess.TimeActive == 0 {
 		t.Fatalf("timestamps not filled: %+v", sess)
 	}
 
@@ -532,7 +560,7 @@ func TestListSessionsByDirOrder(t *testing.T) {
 		t.Fatalf("got %d sessions, want 2", len(sessions))
 	}
 	if sessions[0].ID != second.ID || sessions[1].ID != first.ID {
-		t.Fatalf("not ordered by time_updated DESC: %+v", sessions)
+		t.Fatalf("not ordered by time_active DESC: %+v", sessions)
 	}
 }
 
@@ -633,6 +661,25 @@ func TestUpdateSessionModel(t *testing.T) {
 	}
 }
 
+func TestUpdateSessionProvider(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	sess, err := s.CreateSession(ctx, Session{Directory: "/a"})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if err := s.UpdateSessionProvider(ctx, sess.ID, "codex"); err != nil {
+		t.Fatalf("UpdateSessionProvider: %v", err)
+	}
+	got, err := s.GetSession(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if got.Provider != "codex" {
+		t.Fatalf("provider = %q, want codex", got.Provider)
+	}
+}
+
 func TestInsertMessageBumpsSessionTimeUpdated(t *testing.T) {
 	ctx := context.Background()
 	s := openTestStore(t)
@@ -669,6 +716,9 @@ func TestInsertMessageBumpsSessionTimeUpdated(t *testing.T) {
 	if got.TimeUpdated <= sess.TimeUpdated {
 		t.Errorf("time_updated not bumped: %d <= %d", got.TimeUpdated, sess.TimeUpdated)
 	}
+	if got.TimeActive < msg.TimeCreated {
+		t.Errorf("time_active = %d, want >= message time %d", got.TimeActive, msg.TimeCreated)
+	}
 }
 
 func TestTouchSessionBumpsTimeUpdated(t *testing.T) {
@@ -691,6 +741,46 @@ func TestTouchSessionBumpsTimeUpdated(t *testing.T) {
 	}
 	if got.TimeUpdated <= 50 {
 		t.Errorf("time_updated not bumped: %d", got.TimeUpdated)
+	}
+	if got.TimeActive != 50 {
+		t.Errorf("time_active changed during background touch: %d", got.TimeActive)
+	}
+}
+
+func TestListSessionsByDirIgnoresBackgroundActivityForOrdering(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	active, err := s.CreateSession(ctx, Session{
+		Title: "active-chat", Directory: "/a", TimeCreated: 1_000, TimeUpdated: 1_000,
+	})
+	if err != nil {
+		t.Fatalf("CreateSession active: %v", err)
+	}
+	background, err := s.CreateSession(ctx, Session{
+		Title: "background-chat", Directory: "/a", TimeCreated: 2_000, TimeUpdated: 2_000,
+	})
+	if err != nil {
+		t.Fatalf("CreateSession background: %v", err)
+	}
+	if _, err := s.InsertMessage(ctx, Message{
+		SessionID: active.ID, Role: "user", TimeCreated: 3_000,
+	}); err != nil {
+		t.Fatalf("InsertMessage active: %v", err)
+	}
+	time.Sleep(2 * time.Millisecond)
+	if err := s.TouchSession(ctx, background.ID); err != nil {
+		t.Fatalf("TouchSession background: %v", err)
+	}
+
+	sessions, err := s.ListSessionsByDir(ctx, "/a")
+	if err != nil {
+		t.Fatalf("ListSessionsByDir: %v", err)
+	}
+	if len(sessions) != 2 {
+		t.Fatalf("got %d sessions, want 2", len(sessions))
+	}
+	if sessions[0].ID != active.ID {
+		t.Fatalf("background activity reordered history: first=%q, want active %q", sessions[0].ID, active.ID)
 	}
 }
 
@@ -762,6 +852,12 @@ func TestLegacyStatusSegmentsExpandOnMigration(t *testing.T) {
 	}
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM schema_migrations WHERE version = ?`, migrationMemories); err != nil {
 		t.Fatalf("rewind memory migration: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM schema_migrations WHERE version = ?`, migrationMemoryTimings); err != nil {
+		t.Fatalf("rewind memory timing migration: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM schema_migrations WHERE version = ?`, migrationSessionActive); err != nil {
+		t.Fatalf("rewind session activity migration: %v", err)
 	}
 	if err := s.Migrate(ctx); err != nil {
 		t.Fatalf("Migrate: %v", err)
@@ -940,6 +1036,45 @@ func TestListChildSessionsHiddenFromMain(t *testing.T) {
 	}
 	if len(kids) != 1 || kids[0].ID != child.ID {
 		t.Fatalf("kids = %+v", kids)
+	}
+}
+
+func TestListChildSessionsKeepsActivityOrdering(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	parent, err := s.CreateSession(ctx, Session{Directory: "/work", Title: "parent"})
+	if err != nil {
+		t.Fatalf("parent: %v", err)
+	}
+	parentID := parent.ID
+	first, err := s.CreateSession(ctx, Session{
+		Directory: "/work", Title: "first", ParentSessionID: &parentID,
+		Kind: SessionKindSubagent, TimeCreated: 1_000, TimeUpdated: 1_000,
+	})
+	if err != nil {
+		t.Fatalf("first child: %v", err)
+	}
+	second, err := s.CreateSession(ctx, Session{
+		Directory: "/work", Title: "second", ParentSessionID: &parentID,
+		Kind: SessionKindSubagent, TimeCreated: 2_000, TimeUpdated: 2_000,
+	})
+	if err != nil {
+		t.Fatalf("second child: %v", err)
+	}
+	if _, err := s.InsertMessage(ctx, Message{SessionID: first.ID, Role: "assistant", TimeCreated: 3_000}); err != nil {
+		t.Fatalf("first child message: %v", err)
+	}
+	time.Sleep(2 * time.Millisecond)
+	if err := s.TouchSession(ctx, second.ID); err != nil {
+		t.Fatalf("second child activity: %v", err)
+	}
+
+	kids, err := s.ListChildSessions(ctx, parent.ID)
+	if err != nil {
+		t.Fatalf("ListChildSessions: %v", err)
+	}
+	if len(kids) != 2 || kids[0].ID != second.ID || kids[1].ID != first.ID {
+		t.Fatalf("children not ordered by activity: %+v", kids)
 	}
 }
 

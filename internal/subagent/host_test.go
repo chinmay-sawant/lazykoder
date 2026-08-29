@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chinmay-sawant/lazykoder/internal/roles"
 	"github.com/chinmay-sawant/lazykoder/internal/settings"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/task"
 )
@@ -31,6 +32,25 @@ func TestTaskSpecOmitsTimeoutFields(t *testing.T) {
 		return
 	}
 	t.Fatal("task tool not found in Host.Specs")
+}
+
+func TestConfigFromSettingsUsesChildModelVariant(t *testing.T) {
+	cfg := settings.Default()
+	cfg.Agents.ModelVariant = "high"
+
+	got := ConfigFromSettings(cfg)
+	if got.Variant != "high" {
+		t.Fatalf("child config variant = %q, want high", got.Variant)
+	}
+}
+
+func TestConfigFromSettingsPreservesDisabledTimeout(t *testing.T) {
+	cfg := settings.Default()
+	cfg.Agents.DefaultTimeoutSec = 0
+
+	if got := ConfigFromSettings(cfg).Timeout; got != 0 {
+		t.Fatalf("timeout = %v, want disabled", got)
+	}
 }
 
 // captureRunner records Job fields the manager applied.
@@ -224,6 +244,69 @@ func TestSnapshotReportsResolvedChildModel(t *testing.T) {
 	}
 }
 
+func TestOrchestrationModelClassHonorsConfiguredChildModels(t *testing.T) {
+	tests := []struct {
+		name         string
+		role         string
+		modelClass   string
+		configured   string
+		planClass    string
+		exploreClass string
+	}{
+		{
+			name:       "plan",
+			role:       RolePlan,
+			modelClass: "pro",
+			configured: "settings-child-model",
+			planClass:  "pro",
+		},
+		{
+			name:         "explore",
+			role:         RoleExplore,
+			modelClass:   "flash",
+			configured:   "settings-explore-model",
+			exploreClass: "flash",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			r := &captureRunner{release: make(chan struct{})}
+			close(r.release)
+			cfg := NewConfig()
+			cfg.Model = test.configured
+			cfg.ExploreModel = ""
+			cfg.PlanClass = test.planClass
+			cfg.ExploreClass = test.exploreClass
+			if test.role == RoleExplore {
+				cfg.ExploreModel = test.configured
+				cfg.Model = "other-common-child-model"
+			}
+			m := NewManager(cfg, r)
+			m.SetRuntime(Runtime{
+				Workdir: t.TempDir(),
+				Model:   "deepseek-v4-flash",
+				Profiles: []ModelProfile{
+					{ID: "deepseek-v4-flash"},
+					{ID: "deepseek-v4-pro"},
+				},
+			})
+			snap, err := m.Spawn(context.Background(), "ses_parent", "prt_1", Spec{
+				Prompt:     "inspect the project",
+				Role:       test.role,
+				ModelClass: test.modelClass,
+				Background: true,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if snap.Model != test.configured {
+				t.Fatalf("snapshot model = %q, want configured model %q", snap.Model, test.configured)
+			}
+		})
+	}
+}
+
 func TestBuildJobUsesSelectedChildModelProfile(t *testing.T) {
 	r := &captureRunner{release: make(chan struct{})}
 	close(r.release)
@@ -278,7 +361,7 @@ func TestManagerUsesSharedRoleCapabilities(t *testing.T) {
 				ran := r.ran
 				r.mu.Unlock()
 				if ran {
-					want := (settings.Agents{}).ToolsForRole(role)
+					want := roles.Tools(role)
 					if strings.Join(got, ",") != strings.Join(want, ",") {
 						t.Fatalf("Job.Tools = %v, settings tools = %v", got, want)
 					}

@@ -11,7 +11,6 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
 	"github.com/chinmay-sawant/lazykoder/internal/tips"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
@@ -72,6 +71,8 @@ func (m Model) frame() string {
 	// Full-screen cards keep the historical paint order (sessions before log
 	// before settings...). Overlays stack on chat; key routing uses currentFocus.
 	switch {
+	case m.commitDiffDetailMode:
+		return m.commitDiffDetailScreen()
 	case m.sessionPickerMode:
 		return m.sessionPickerScreen()
 	case m.subagentLogMode:
@@ -89,6 +90,8 @@ func (m Model) frame() string {
 		return m.settingsScreen()
 	case m.usageMode:
 		return m.usageScreen()
+	case m.providerDeleteMode:
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, m.providerDeleteView())
 	case m.helpMode:
 		return m.helpScreen()
 	}
@@ -169,6 +172,10 @@ func (m Model) chatScreen() string {
 		bottom.WriteString("\n")
 		bottom.WriteString(m.subagentDrawerView())
 	}
+	if m.commitDrawerVisible() {
+		bottom.WriteString("\n")
+		bottom.WriteString(m.commitDrawerView(m.width))
+	}
 	if m.statusMode {
 		bottom.WriteString("\n")
 		bottom.WriteString(m.statusDrawerView())
@@ -210,7 +217,20 @@ func (m Model) chatScreen() string {
 }
 
 func overlayOn(base string, width, height int, card string) string {
-	baseLines := strings.Split(lipgloss.NewStyle().Faint(true).Width(max(1, width)).Render(base), "\n")
+	// Semi-transparent charcoal wash behind the card. The whole background
+	// (the dark teal assistant panels and the "you" question rows you see in
+	// the screenshot) must stay visible through it, but the wash pulls focus
+	// to the question. Previously the base was rendered with Faint and the
+	// inner panel Backgrounds (#102832 for assistant) overrode the charcoal,
+	// so text behind was not uniformly charcoal when the transcript had content.
+	// Strip ANSI so the charcoal covers uniformly, then re-render with the
+	// wash. First-time empty screen (no panels) already looked correct.
+	dimBg := lipgloss.Color("#1a1a1a")
+	if theme.CurrentMode() == theme.ModeLight {
+		dimBg = lipgloss.Color("#c8c8c8")
+	}
+	plainBase := ansi.Strip(base)
+	baseLines := strings.Split(lipgloss.NewStyle().Background(dimBg).Foreground(lipgloss.Color("#8a8a8a")).Width(max(1, width)).Render(plainBase), "\n")
 	for len(baseLines) < height {
 		baseLines = append(baseLines, "")
 	}
@@ -391,6 +411,9 @@ func (m Model) composerTop() int {
 	if m.subagentPickerMode && !m.subagentLogMode {
 		top += 1 + lipgloss.Height(m.subagentDrawerView())
 	}
+	if m.commitDrawerVisible() {
+		top += 1 + lipgloss.Height(m.commitDrawerView(m.width))
+	}
 	if m.statusMode {
 		top += 1 + lipgloss.Height(m.statusDrawerView())
 	}
@@ -434,8 +457,7 @@ func (m Model) promptLine() string {
 		}
 		text = withScrollbar(text, contentW, h, percent, true)
 	}
-	body := lipgloss.JoinVertical(lipgloss.Left, text, m.composerFooter(contentW))
-	body = keepBackground(body, theme.ColorComposer())
+	text = keepBackground(text, theme.ColorComposer())
 	// The composer uses a dedicated input surface above the neutral black
 	// canvas. Its border carries state: it throbs with the shared pulse while
 	// the agent works, holds a dim accent glow while the user edits, and stays
@@ -447,13 +469,58 @@ func (m Model) promptLine() string {
 	case m.promptEditing():
 		border = theme.PulseAccent(composerFocusGlow)
 	}
-	return lipgloss.NewStyle().
+	boxed := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(border).
 		BorderBackground(theme.ColorComposer()).
 		Background(theme.ColorComposer()).
 		Width(max(minPaneWidth, m.width)).
-		Render(body)
+		Render(text)
+	return embedComposerBorderLabels(boxed, m.composerFooter(contentW), border)
+}
+
+func embedComposerBorderLabels(boxed, footer string, border color.Color) string {
+	lines := strings.Split(boxed, "\n")
+	if len(lines) == 0 {
+		return boxed
+	}
+	plain := ansi.Strip(footer)
+	plain = strings.TrimSpace(plain)
+	if plain == "" {
+		return boxed
+	}
+	// Render label with transparent/muted look on the border: faint + muted fg, border bg.
+	label := lipgloss.NewStyle().Foreground(theme.ColorMute()).Faint(true).Background(theme.ColorComposer()).Render(" " + plain + " ")
+	labelPlain := " " + plain + " "
+	labelW := lipgloss.Width(labelPlain)
+	idx := len(lines) - 1
+	bottom := lines[idx]
+	bw := lipgloss.Width(ansi.Strip(bottom))
+
+	left := 1
+	if left+labelW > bw-1 {
+		left = max(1, bw-labelW-1)
+	}
+	// Splice display-aware: replace runes in the stripped bottom, then re-apply border color.
+	stripped := ansi.Strip(bottom)
+	runes := []rune(stripped)
+	// Find display columns: for rounded border, width == rune count (all single width).
+	// Replace slice [left : left+labelW] with labelPlain runes
+	for i, r := range []rune(labelPlain) {
+		pos := left + i
+		if pos >= 0 && pos < len(runes) {
+			runes[pos] = r
+		}
+	}
+	_ = string(runes)
+	// Re-style bottom border with border color, but keep label faint/muted via embedded ANSI.
+	// Build colored bottom: border color for border chars, label already has its own ANSI.
+	borderStyle := lipgloss.NewStyle().Foreground(border).Background(theme.ColorComposer())
+	// Split newBottomPlain around label to color border parts separately
+	before := string(runes[:left])
+	after := string(runes[left+labelW:])
+	lines[idx] = borderStyle.Render(before) + label + borderStyle.Render(after)
+	return strings.Join(lines, "\n")
 }
 
 func (m Model) composerFooter(width int) string {
@@ -476,7 +543,7 @@ func (m Model) composerFooter(width int) string {
 }
 
 func (m Model) footerPieces() (tokens, cache, cost, tps string) {
-	window := modelscache.ContextOf(m.modelInfos, m.modelLabel())
+	window := m.modelContext(m.modelLabel())
 	if m.statusSegmentEnabled("tokens") {
 		switch {
 		case m.tokensUsed > 0 && window > 0:
@@ -742,6 +809,9 @@ func (m Model) transcriptRenderHeight() int {
 	if m.subagentPickerMode && !m.subagentLogMode {
 		fixedRows += 1 + lipgloss.Height(m.subagentDrawerView())
 	}
+	if m.commitDrawerVisible() {
+		fixedRows += 1 + lipgloss.Height(m.commitDrawerView(m.width))
+	}
 	if m.statusMode {
 		fixedRows += 1 + lipgloss.Height(m.statusDrawerView())
 	}
@@ -820,6 +890,7 @@ func (m Model) helpOverlay() string {
 		{"/settings", "project defaults"},
 		{"/agents", "sub-agents + logs"},
 		{"/status", "status details and visibility"},
+		{"/provider", "switch chat provider"},
 		{"/model", "switch live model"},
 		{"/variant", "reasoning effort"},
 		{"/refresh", "reload models.json"},
@@ -964,12 +1035,18 @@ func (m Model) confirmOverlay() string {
 
 func (m Model) askOverlay() string {
 	_, cardW, lines, _ := m.askOverlayLines()
-	content := keepBackground(strings.Join(lines, "\n"), theme.ColorSurface())
+	// Card is a lighter charcoal than the dim #1a1a1a so it pops while the
+	// dimmed assistant/question behind remains visible through the wash.
+	cardBg := lipgloss.Color("#252525")
+	if theme.CurrentMode() == theme.ModeLight {
+		cardBg = theme.ColorDialog()
+	}
+	content := keepBackground(strings.Join(lines, "\n"), cardBg)
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(theme.ColorBorder()).
-		BorderBackground(theme.ColorSurface()).
-		Background(theme.ColorSurface()).
+		BorderForeground(theme.ColorAccent()).
+		BorderBackground(cardBg).
+		Background(cardBg).
 		Padding(1, cardHorzPad).
 		Width(cardW).
 		Render(content)
@@ -1018,7 +1095,30 @@ func (m Model) askOverlayLines() (innerW, cardW int, lines []string, spans []ask
 		}
 		spans = append(spans, askOptionSpan{index: i, start: start, end: len(lines)})
 	}
-	appendText("j/k select  •  enter confirm  •  esc cancel", hintStyle)
+	// Hard-coded custom answer affordance so the user is never trapped by the
+	// LLM's enumerated choices. Selecting it opens a free-form input.
+	customIdx := len(m.askQuestion.Options)
+	customLabel := "✏️  Type your own answer..."
+	start := len(lines)
+	prefix := fmt.Sprintf("  %d. ", customIdx+1)
+	style := hintStyle
+	if customIdx == m.askCursor {
+		prefix = fmt.Sprintf("▸ %d. ", customIdx+1)
+		style = lipgloss.NewStyle().Bold(true).Foreground(theme.ColorAccent())
+	}
+	continuation := strings.Repeat(" ", lipgloss.Width(prefix))
+	textW := max(1, innerW-lipgloss.Width(prefix))
+	wrapped := wrapAskText(customLabel, textW)
+	for j, line := range wrapped {
+		if j == 0 {
+			line = prefix + line
+		} else {
+			line = continuation + line
+		}
+		lines = append(lines, style.Width(innerW).MaxWidth(innerW).Render(line))
+	}
+	spans = append(spans, askOptionSpan{index: customIdx, start: start, end: len(lines)})
+	appendText("j/k select  •  enter confirm  •  esc cancel  •  custom writes to LLM", hintStyle)
 	return innerW, cardW, lines, spans
 }
 

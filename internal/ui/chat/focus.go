@@ -20,6 +20,7 @@ const (
 	focusSubagentLog
 	focusSlash
 	focusForm
+	focusProviderDelete
 )
 
 // setFocus enters k. Full-screen and primary drawers clear sibling
@@ -29,14 +30,17 @@ func (m Model) setFocus(k focusKind) Model {
 	switch k {
 	case focusForm:
 		m.formMode = true
+		m.providerDeleteMode = false
 		return m
 	case focusConfirm:
 		m.confirmMode = true
 		m.askMode = false
+		m.providerDeleteMode = false
 		return m
 	case focusAsk:
 		m.askMode = true
 		m.confirmMode = false
+		m.providerDeleteMode = false
 		return m
 	case focusFilePicker:
 		m.filePickerMode = true
@@ -46,16 +50,22 @@ func (m Model) setFocus(k focusKind) Model {
 		return m
 	case focusSlash:
 		m.slashMode = true
+		m.providerDeleteMode = false
+		return m
+	case focusProviderDelete:
+		m.providerDeleteMode = true
 		return m
 	case focusNone:
 		m.confirmMode = false
 		m.askMode = false
 		m.formMode = false
+		m.providerDeleteMode = false
 		return m
 	}
 	if k != focusSubagents && k != focusSubagentLog {
 		m.memoryHistoryMode = false
 		m.memoryHistoryDetailMode = false
+		m.memoryContextMode = false
 	}
 
 	m.slashMode = false
@@ -72,6 +82,8 @@ func (m Model) setFocus(k focusKind) Model {
 	m.subagentPickerMode = false
 	m.subagentLogMode = false
 	m.formMode = false
+	m.providerDeleteMode = false
+	m.providerDeleteTarget = ""
 
 	switch k {
 	case focusHelp:
@@ -98,9 +110,13 @@ func (m Model) setFocus(k focusKind) Model {
 // clearFocus drops only k (or subagent pair). Other modes stay put.
 func (m Model) clearFocus(k focusKind) Model {
 	switch k {
+	case focusProviderDelete:
+		m.providerDeleteMode = false
+		m.providerDeleteTarget = ""
 	case focusForm:
 		m.formMode = false
 		m.formHost = nil
+		m.addProviderData = nil
 	case focusConfirm:
 		m.confirmMode = false
 	case focusAsk:
@@ -129,6 +145,7 @@ func (m Model) clearFocus(k focusKind) Model {
 		m.subagentDrawerCompact = false
 		m.memoryHistoryMode = false
 		m.memoryHistoryDetailMode = false
+		m.memoryContextMode = false
 	case focusSlash:
 		m.slashMode = false
 		m.slashCursor = 0
@@ -140,6 +157,8 @@ func (m Model) clearFocus(k focusKind) Model {
 // Update key cascade and frame() full-screen branches.
 func (m Model) currentFocus() focusKind {
 	switch {
+	case m.providerDeleteMode:
+		return focusProviderDelete
 	case m.formMode:
 		return focusForm
 	case m.confirmMode:

@@ -10,13 +10,30 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/chinmay-sawant/lazykoder/internal/agent"
+	"github.com/chinmay-sawant/lazykoder/internal/agent/toolplugin"
 	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
+	"github.com/chinmay-sawant/lazykoder/internal/provider"
+	"github.com/chinmay-sawant/lazykoder/internal/roles"
+	"github.com/chinmay-sawant/lazykoder/internal/settings"
 	"github.com/chinmay-sawant/lazykoder/internal/skills"
+	toolcatalog "github.com/chinmay-sawant/lazykoder/internal/tools"
+	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
 
 // pickerRowMinLeftW is the minimum width left for the model label when a
 // provider/status column is shown on the same picker row.
 const pickerRowMinLeftW = 4
+
+type pickerLine struct {
+	itemIndex int
+	provider  string
+}
+
+type modelChoice struct {
+	id       string
+	provider string
+	info     modelscache.Info
+}
 
 func (m Model) pickerVPHeight() int {
 	reserved := lipgloss.Height(m.headerView()) + 1 + lipgloss.Height(m.promptLine()) + pickerDrawerChrome + 1
@@ -25,7 +42,7 @@ func (m Model) pickerVPHeight() int {
 	}
 	reserved += minPaneHeight
 	available := max(minPaneHeight, m.height-reserved)
-	return min(max(minPaneHeight, len(m.pickerItems)), min(pickerMaxRows, available))
+	return min(max(minPaneHeight, len(m.pickerLines())), min(pickerMaxRows, available))
 }
 
 func (m Model) pickerDrawerWidth() int {
@@ -41,12 +58,21 @@ func (m Model) pickerView() string {
 		kind = "reasoning"
 	} else if m.pickerKind == pickerKindSkills {
 		kind = "skills"
+	} else if m.pickerKind == pickerKindProvider {
+		kind = "providers"
+	} else if m.pickerKind == pickerKindTools {
+		kind = "tools"
+	} else if m.pickerKind == pickerKindRoles {
+		kind = "roles"
 	}
 	meta := m.pickerSelectedLabel()
+	// For provider picker, keep meta as selected label; the delete affordance
+	// is rendered right-aligned on the header line via custom header logic below
+	// so it appears top-right besides the close hint, matching the help [x] pattern.
 
 	vpH := m.pickerVPHeight()
 	body := ""
-	if m.modelsErr != "" && m.pickerKind != pickerKindVariant && m.pickerKind != pickerKindSkills {
+	if m.modelsErr != "" && m.pickerKind != pickerKindVariant && m.pickerKind != pickerKindSkills && m.pickerKind != pickerKindProvider && m.pickerKind != pickerKindTools && m.pickerKind != pickerKindRoles {
 		body = errStyle.Render("models unavailable: " + m.modelsErr)
 	} else if len(m.pickerItems) == 0 {
 		if m.pickerKind == pickerKindVariant {
@@ -57,6 +83,12 @@ func (m Model) pickerView() string {
 			}
 		} else if m.pickerKind == pickerKindSkills && len(m.pickerSkillItems) == 0 {
 			body = hintStyle.Render("no skills discovered")
+		} else if m.pickerKind == pickerKindProvider {
+			body = hintStyle.Render("no providers available")
+		} else if m.pickerKind == pickerKindTools {
+			body = hintStyle.Render("no tools discovered")
+		} else if m.pickerKind == pickerKindRoles {
+			body = hintStyle.Render("no roles discovered")
 		} else if len(m.models) == 0 {
 			body = hintStyle.Render("no models loaded")
 		} else {
@@ -74,6 +106,12 @@ func (m Model) pickerView() string {
 		filter = "enter select  •  esc cancel  •  sent as reasoning_effort"
 	case pickerKindSkills:
 		filter = "filter /  •  enter activate  •  esc cancel"
+	case pickerKindProvider:
+		filter = "filter /  •  enter select  •  del delete  •  esc cancel"
+	case pickerKindTools:
+		filter = "filter /  •  enter toggle  •  esc cancel"
+	case pickerKindRoles:
+		filter = "filter /  •  enter select  •  esc cancel"
 	}
 	if m.pickerFromPrompt {
 		filter = "type to search  •  enter select  •  esc cancel"
@@ -82,32 +120,279 @@ func (m Model) pickerView() string {
 	} else if m.pickerFilter != "" {
 		filter = "filter: " + m.pickerFilter + "  •  enter select"
 	}
+	if m.pickerKind == pickerKindProvider && m.pickerProviderDeletable() {
+		// Render header with [del] right-aligned, similar to help overlay [x]
+		leftHead := ""
+		if kind != "" {
+			leftHead = drawerHeaderTitleStyle.Render(kind)
+		}
+		if kind != "" && meta != "" {
+			leftHead += hintStyle.Render("  ·  ")
+		}
+		if meta != "" {
+			leftHead += drawerHeaderMetaStyle.Render(meta)
+		}
+		rightHead := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("9")).Render("[del]")
+		// Use errStyle-like red for delete affordance
+		gap := cardW - lipgloss.Width(leftHead) - lipgloss.Width(rightHead)
+		if gap < 1 {
+			// Truncate left if needed
+			leftHead = truncateRunes(leftHead, max(1, cardW-lipgloss.Width(rightHead)-1))
+			gap = cardW - lipgloss.Width(leftHead) - lipgloss.Width(rightHead)
+			if gap < 1 {
+				gap = 1
+			}
+		}
+		head := leftHead + strings.Repeat(" ", gap) + rightHead
+		if lipgloss.Width(head) > cardW {
+			head = truncateRunes(head, cardW)
+		}
+		var parts []string
+		parts = append(parts, head)
+		if body != "" {
+			parts = append(parts, body)
+		}
+		if filter != "" {
+			foot := hintStyle.Width(cardW).Render(truncateRunes(filter, cardW))
+			parts = append(parts, foot)
+		}
+		content := keepBackground(strings.Join(parts, "\n"), theme.ColorSurface())
+		return lipgloss.NewStyle().Background(theme.ColorSurface()).Width(cardW).MaxWidth(cardW).Render(content)
+	}
 	return drawerChrome(kind, meta, body, filter, cardW)
+}
+
+func (m Model) pickerProviderDeletable() bool {
+	if m.pickerKind != pickerKindProvider || len(m.pickerItems) == 0 {
+		return false
+	}
+	if m.pickerCursor < 0 || m.pickerCursor >= len(m.pickerItems) {
+		return false
+	}
+	id := m.pickerItems[m.pickerCursor]
+	if id == "__add_new_provider__" || strings.TrimSpace(id) == "" {
+		return false
+	}
+	// Only show delete when the provider exists in the registry
+	if _, ok := provider.DescriptorFor(id); !ok {
+		return false
+	}
+	return true
 }
 
 // pickerContent renders the filtered model list with the cursor marker.
 func (m Model) pickerContent(width int) string {
 	var b strings.Builder
-	for i, id := range m.pickerItems {
-		if i > 0 {
+	for lineNumber, line := range m.pickerLines() {
+		if lineNumber > 0 {
 			b.WriteString("\n")
 		}
-		line := m.pickerRow(id, i == m.pickerCursor, width)
-		if i == m.pickerCursor {
-			b.WriteString(drawerSelectedStyle.MaxWidth(width).Width(width).Render(line))
+		if line.itemIndex < 0 {
+			b.WriteString(drawerHeaderTitleStyle.Render(modelProviderLabel(line.provider)))
 			continue
 		}
-		b.WriteString(drawerNormalStyle.Render(line))
+		id := m.pickerItems[line.itemIndex]
+		selected := line.itemIndex == m.pickerCursor
+		row := m.pickerRow(id, m.modelProviderAt(line.itemIndex), selected, width)
+		if selected {
+			b.WriteString(drawerSelectedStyle.MaxWidth(width).Width(width).Render(row))
+			continue
+		}
+		b.WriteString(drawerNormalStyle.Render(row))
 	}
 	return b.String()
 }
 
-func (m Model) pickerRow(id string, selected bool, width int) string {
+// pickerLines adds non-selectable provider headings only to the model picker.
+// Keyboard cursors stay item-based so navigation remains stable while mouse
+// hit-testing maps visual rows back to the same selectable item index.
+func (m Model) pickerLines() []pickerLine {
+	if m.pickerKind != pickerKindModel {
+		lines := make([]pickerLine, len(m.pickerItems))
+		for index := range m.pickerItems {
+			lines[index] = pickerLine{itemIndex: index}
+		}
+		return lines
+	}
+	byProvider := make(map[string][]int, len(modelPickerProviderIDs()))
+	var unclassified []int
+	for index := range m.pickerItems {
+		providerID := m.modelProviderAt(index)
+		if providerID == "" {
+			unclassified = append(unclassified, index)
+			continue
+		}
+		byProvider[providerID] = append(byProvider[providerID], index)
+	}
+	lines := make([]pickerLine, 0, len(m.pickerItems)+len(byProvider))
+	for _, providerID := range modelPickerProviderIDs() {
+		items := byProvider[providerID]
+		if len(items) == 0 {
+			continue
+		}
+		lines = append(lines, pickerLine{itemIndex: -1, provider: providerID})
+		for _, itemIndex := range items {
+			lines = append(lines, pickerLine{itemIndex: itemIndex})
+		}
+	}
+	for _, itemIndex := range unclassified {
+		lines = append(lines, pickerLine{itemIndex: itemIndex})
+	}
+	return lines
+}
+
+func (m Model) pickerCursorLine() int {
+	for lineNumber, line := range m.pickerLines() {
+		if line.itemIndex == m.pickerCursor {
+			return lineNumber
+		}
+	}
+	return 0
+}
+
+func (m Model) modelProviderAt(index int) string {
+	if m.pickerKind == pickerKindModel && index >= 0 && index < len(m.pickerProviderIDs) {
+		return m.pickerProviderIDs[index]
+	}
+	if index < 0 || index >= len(m.pickerItems) {
+		return ""
+	}
+	return m.modelProviderID(m.pickerItems[index])
+}
+
+func (m Model) modelProviderID(id string) string {
+	info, ok := modelscache.InfoOf(m.modelInfos, id)
+	if !ok {
+		return ""
+	}
+	return providerIDForModelInfo(info)
+}
+
+func (m Model) selectedModelInfo(id string) (modelscache.Info, bool) {
+	return m.modelInfoForProvider(id, m.projectSettings.EffectiveProvider())
+}
+
+func (m Model) modelContext(id string) int {
+	info, ok := m.selectedModelInfo(id)
+	if !ok {
+		return 0
+	}
+	return info.Context
+}
+
+func (m Model) modelHasVariant(id, variant string) bool {
+	if variant == "" {
+		return false
+	}
+	info, ok := m.selectedModelInfo(id)
+	if !ok {
+		return false
+	}
+	for _, candidate := range info.Variants {
+		if candidate == variant {
+			return true
+		}
+	}
+	return false
+}
+
+func (m Model) effectiveVariantFor(model, providerID, selected string) string {
+	if variant := strings.TrimSpace(selected); variant != "" {
+		return variant
+	}
+	if info, ok := m.modelInfoForProvider(model, providerID); ok {
+		for _, candidate := range info.Variants {
+			if variant := strings.TrimSpace(candidate); variant != "" {
+				return variant
+			}
+		}
+	}
+	if m.client != nil && model == m.client.Model() {
+		return clientDefaultVariant(m.client)
+	}
+	return ""
+}
+
+func (m Model) modelChoices() []modelChoice {
+	choices := make([]modelChoice, 0, len(m.modelInfos))
+	knownIDs := make(map[string]struct{}, len(m.models))
+	for _, id := range m.models {
+		knownIDs[id] = struct{}{}
+	}
+	for _, info := range m.modelInfos {
+		if _, ok := knownIDs[info.ID]; !ok {
+			continue
+		}
+		marked, ok := modelscache.InfoOf([]modelscache.Info{info}, info.ID)
+		if !ok {
+			continue
+		}
+		choices = append(choices, modelChoice{
+			id:       info.ID,
+			provider: providerIDForModelInfo(marked),
+			info:     marked,
+		})
+	}
+	for _, id := range m.models {
+		found := false
+		for _, choice := range choices {
+			if choice.id == id {
+				found = true
+				break
+			}
+		}
+		if !found {
+			choices = append(choices, modelChoice{id: id})
+		}
+	}
+	return choices
+}
+
+func (m Model) modelInfoForProvider(id, providerID string) (modelscache.Info, bool) {
+	for _, info := range m.modelInfos {
+		if info.ID != id {
+			continue
+		}
+		marked, ok := modelscache.InfoOf([]modelscache.Info{info}, id)
+		if !ok {
+			continue
+		}
+		rowProvider := providerIDForModelInfo(marked)
+		if providerID == "" || rowProvider == providerID || rowProvider == "" {
+			return marked, true
+		}
+	}
+	return modelscache.Info{}, false
+}
+
+func providerIDForModelInfo(info modelscache.Info) string {
+	return modelscache.CanonicalProvider(info)
+}
+
+func modelInfosForProvider(infos []modelscache.Info, providerID string) []modelscache.Info {
+	out := make([]modelscache.Info, 0, len(infos))
+	for _, info := range infos {
+		if providerIDForModelInfo(info) == providerID {
+			out = append(out, info)
+		}
+	}
+	return out
+}
+
+func modelProviderLabel(id string) string {
+	descriptor, ok := provider.DescriptorFor(id)
+	if !ok {
+		return id
+	}
+	return descriptor.Label
+}
+
+func (m Model) pickerRow(id, providerID string, selected bool, width int) string {
 	prefix := "  "
 	if selected {
 		prefix = "▸ "
 	}
-	left := prefix + m.pickerItemLabel(id)
+	left := prefix + m.pickerItemLabelForProvider(id, providerID)
 	if m.pickerKind == pickerKindVariant {
 		return left
 	}
@@ -120,10 +405,43 @@ func (m Model) pickerRow(id string, selected bool, width int) string {
 		}
 		return left
 	}
-	right := modelscache.ProviderOf(m.modelInfos, id)
+	if m.pickerKind == pickerKindTools {
+		mark := "off"
+		if m.projectSettings.EffectiveTools().Enabled[id] {
+			mark = "on"
+		}
+		return pickerRowWithRight(left, mark, width)
+	}
+	if m.pickerKind == pickerKindRoles {
+		if role, ok := roles.DescriptorFor(id); ok {
+			return pickerRowWithRight(left, fmt.Sprintf("%d tools", len(role.Tools)), width)
+		}
+		return left
+	}
+	if m.pickerKind == pickerKindProvider {
+		if id == "__add_new_provider__" {
+			return pickerRowWithRight(left+"  + Add New Provider", "", width)
+		}
+		descriptor, ok := provider.DescriptorFor(id)
+		if !ok {
+			return left
+		}
+		return pickerRowWithRight(left, m.providerPickerStatus(descriptor.ID), width)
+	}
+	right := ""
+	if info, ok := m.modelInfoForProvider(id, providerID); ok {
+		right = info.Provider
+	}
+	if right == "" {
+		right = modelProviderLabel(providerID)
+	}
 	if right == "" {
 		return left
 	}
+	return pickerRowWithRight(left, right, width)
+}
+
+func pickerRowWithRight(left, right string, width int) string {
 	gap := width - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 1 {
 		left = truncateRunes(left, max(pickerRowMinLeftW, width-lipgloss.Width(right)-1))
@@ -133,6 +451,14 @@ func (m Model) pickerRow(id string, selected bool, width int) string {
 		gap = 1
 	}
 	return left + strings.Repeat(" ", gap) + right
+}
+
+func (m Model) providerPickerStatus(id string) string {
+	selection := "not selected"
+	if m.projectSettings.EffectiveProvider() == id {
+		selection = "selected"
+	}
+	return selection + " • " + m.providerStatus(id).Label
 }
 
 func (m Model) resizePicker() Model {
@@ -145,6 +471,9 @@ func (m Model) resizePicker() Model {
 func (m Model) updatePickerKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 	if key.Mod.Contains(tea.ModCtrl) && key.Code == 'c' {
 		return m.closeDone(), tea.Quit
+	}
+	if delta := pickerVerticalDelta(key); delta != 0 {
+		return m.movePickerCursor(delta), nil
 	}
 	if m.pickerFromPrompt {
 		return m.updatePromptPickerKey(key)
@@ -171,7 +500,15 @@ func (m Model) updatePickerKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 	case 'q', 'Q', 'x', 'X':
 		m = m.closePicker()
 		return m, nil
+	case tea.KeyDelete, tea.KeyBackspace:
+		if m.pickerKind == pickerKindProvider && m.pickerProviderDeletable() {
+			return m.requestProviderDelete()
+		}
+		return m, nil
 	case 'r', 'R':
+		if m.pickerKind == pickerKindProvider {
+			return m, nil
+		}
 		m = m.closePicker()
 		return m, m.refreshModels
 	case tea.KeyEscape:
@@ -182,17 +519,11 @@ func (m Model) updatePickerKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyEnter:
 		return m.selectPickerItem(m.pickerCursor)
-	case 'j', tea.KeyDown:
-		if m.pickerCursor < len(m.pickerItems)-1 {
-			m.pickerCursor++
-			m = m.refreshPickerCursor()
-		}
+	case 'j':
+		m = m.movePickerCursor(1)
 		return m, nil
-	case 'k', tea.KeyUp:
-		if m.pickerCursor > 0 {
-			m.pickerCursor--
-			m = m.refreshPickerCursor()
-		}
+	case 'k':
+		m = m.movePickerCursor(-1)
 		return m, nil
 	case tea.KeyPgDown:
 		m.pickerVp.PageDown()
@@ -214,18 +545,6 @@ func (m Model) updatePromptPickerKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyEnter:
 		return m.selectPickerItem(m.pickerCursor)
-	case tea.KeyDown:
-		if m.pickerCursor < len(m.pickerItems)-1 {
-			m.pickerCursor++
-			m = m.refreshPickerCursor()
-		}
-		return m, nil
-	case tea.KeyUp:
-		if m.pickerCursor > 0 {
-			m.pickerCursor--
-			m = m.refreshPickerCursor()
-		}
-		return m, nil
 	case tea.KeyPgDown:
 		m.pickerVp.PageDown()
 		return m, nil
@@ -252,25 +571,84 @@ func (m Model) updatePromptPickerKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 	return m, nil
 }
 
+func pickerVerticalDelta(key tea.KeyPressMsg) int {
+	switch key.Code {
+	case tea.KeyDown, tea.KeyKpDown:
+		return 1
+	case tea.KeyUp, tea.KeyKpUp:
+		return -1
+	default:
+		return 0
+	}
+}
+
+func (m Model) movePickerCursor(delta int) Model {
+	if delta == 0 || len(m.pickerItems) == 0 {
+		return m
+	}
+	next := m.pickerCursor + delta
+	if next < 0 {
+		next = 0
+	}
+	if next >= len(m.pickerItems) {
+		next = len(m.pickerItems) - 1
+	}
+	if next == m.pickerCursor {
+		return m
+	}
+	m.pickerCursor = next
+	return m.refreshPickerCursor()
+}
+
 func (m Model) selectPickerItem(idx int) (Model, tea.Cmd) {
 	if !m.pickerBuilt || idx < 0 || idx >= len(m.pickerItems) {
 		return m, nil
 	}
-	if m.settingsPickDefault {
+	switch m.settingsPickerTarget {
+	case settingsPickerChildVariant:
+		m = m.setChildVariant(m.pickerItems[idx])
+	case settingsPickerDefaultModel, settingsPickerDefaultVariant:
 		if m.pickerKind == pickerKindVariant {
 			m = m.setDefaultVariant(m.pickerItems[idx])
 		} else {
 			m = m.setDefaultModel(m.pickerItems[idx])
 		}
-		m = m.finishPickerSelection()
-		m.settingsPickDefault = false
-		return m.openSettings(), nil
-	}
-	if m.settingsPickRecap {
+	case settingsPickerRecapModel:
 		m = m.setRecapModel(m.pickerItems[idx])
-		m = m.finishPickerSelection()
-		m.settingsPickRecap = false
-		return m.openSettings(), nil
+	case settingsPickerChildModel, settingsPickerExploreModel:
+		selected := strings.TrimSpace(m.pickerItems[idx])
+		if m.settingsPickerTarget == settingsPickerChildModel {
+			m = m.setChildModel(selected)
+		} else {
+			m = m.setExploreModel(selected)
+		}
+	case settingsPickerRole:
+		role, ok := roles.DescriptorFor(m.pickerItems[idx])
+		if !ok {
+			return m, nil
+		}
+		m.projectSettings.Agents.DefaultRole = role.ID
+		m = m.rebuildSubMgr().persistSettings()
+	default:
+		goto normalSelection
+	}
+	m = m.finishPickerSelection()
+	return m.openSettings(), nil
+
+normalSelection:
+	if m.pickerKind == pickerKindTools {
+		m = m.toggleTool(m.pickerItems[idx])
+		m.copyNotice = "tool " + m.pickerItems[idx] + " " + toolSettingState(m.projectSettings, m.pickerItems[idx])
+		return m.finishPickerSelection(), clearCopyNotice()
+	}
+	if m.pickerKind == pickerKindRoles {
+		if role, ok := roles.DescriptorFor(m.pickerItems[idx]); ok {
+			m.projectSettings.Agents.DefaultRole = role.ID
+			m = m.persistSettings()
+			m.copyNotice = "default role: " + role.Label
+			return m.finishPickerSelection(), clearCopyNotice()
+		}
+		return m.finishPickerSelection(), nil
 	}
 	if m.pickerKind == pickerKindSkills {
 		for _, skill := range m.pickerSkillItems {
@@ -283,19 +661,57 @@ func (m Model) selectPickerItem(idx int) (Model, tea.Cmd) {
 		}
 		return m.finishPickerSelection(), nil
 	}
+	if m.pickerKind == pickerKindProvider {
+		if m.pickerItems[idx] == "__add_new_provider__" {
+			m = m.closePicker()
+			return m.openAddProviderDialog()
+		}
+		descriptor, ok := provider.DescriptorFor(m.pickerItems[idx])
+		if !ok {
+			return m, nil
+		}
+		if !descriptor.Supported {
+			m.err = descriptor.Label + " is not wired yet; choose OpenCode or OpenAI"
+			return m.finishPickerSelection(), nil
+		}
+		return m.selectProvider(descriptor)
+	}
 	if m.pickerKind == pickerKindVariant {
 		m.variant = m.pickerItems[idx]
 		m.syncSessionVariant()
 		m = m.finishPickerSelection()
 		return m, m.persistVariant()
 	}
+	selected := m.pickerItems[idx]
 	prev := m.model
-	prevWindow := int64(modelscache.ContextOf(m.modelInfos, prev))
-	m.model = m.pickerItems[idx]
-	if !modelscache.HasVariant(m.modelInfos, m.model, m.variant) {
+	prevWindow := int64(m.modelContext(prev))
+	providerID := m.modelProviderAt(idx)
+	providerChanged := providerID != "" && providerID != m.projectSettings.EffectiveProvider()
+	if providerChanged {
+		descriptor, ok := provider.DescriptorFor(providerID)
+		if !ok {
+			return m, nil
+		}
+		m = m.configureProvider(descriptor)
+		if m.err != "" {
+			return m.finishPickerSelection(), nil
+		}
+	}
+	m.model = selected
+	if !m.modelHasVariant(m.model, m.variant) {
 		m.variant = ""
 	}
+	if providerChanged {
+		if configured, ok := m.modelDefaults[providerID]; ok && configured.model == m.model &&
+			m.modelHasVariant(m.model, configured.variant) {
+			m.variant = configured.variant
+		}
+		m.projectSettings.Model.Default = m.model
+		m.projectSettings.Model.Variant = m.variant
+		m = m.persistSettings()
+	}
 	m.syncSessionModel()
+	m.syncSessionProvider()
 	m.syncSessionVariant()
 	m = m.refreshCompactHint(prev, prevWindow)
 	m = m.finishPickerSelection()
@@ -311,14 +727,28 @@ func (m Model) finishPickerSelection() Model {
 	return m.closePicker()
 }
 
+func (m Model) toggleTool(id string) Model {
+	if m.projectSettings.Tools.Enabled == nil {
+		m.projectSettings.Tools.Enabled = make(map[string]bool)
+	}
+	m.projectSettings.Tools.Enabled[id] = !m.projectSettings.Tools.Enabled[id]
+	return m.persistSettings()
+}
+
+func toolSettingState(s settings.Settings, id string) string {
+	if s.EffectiveTools().Enabled[id] {
+		return "enabled"
+	}
+	return "disabled"
+}
+
 func (m Model) closePicker() Model {
-	reopenSettings := m.settingsPickDefault || m.settingsPickRecap
+	reopenSettings := m.settingsPickerTarget != settingsPickerNone
 	m = m.clearFocus(focusPicker)
 	m.pickerKind = pickerKindModel
 	m.pickerSkillItems = nil
 	m.dragOn = false
-	m.settingsPickDefault = false
-	m.settingsPickRecap = false
+	m.settingsPickerTarget = settingsPickerNone
 	if reopenSettings {
 		return m.openSettings()
 	}
@@ -330,13 +760,14 @@ func (m Model) refreshPickerCursor() Model {
 	if m.pickerCursor == 0 {
 		m.pickerVp.GotoTop()
 	} else {
-		m.pickerVp.EnsureVisible(m.pickerCursor, 0, 1)
+		m.pickerVp.EnsureVisible(m.pickerCursorLine(), 0, 1)
 	}
 	return m
 }
 
 func (m *Model) applyFilter() {
 	m.pickerItems = nil
+	m.pickerProviderIDs = nil
 	needle := strings.ToLower(m.pickerFilter)
 	if m.pickerKind == pickerKindSkills {
 		for _, skill := range m.pickerSkillItems {
@@ -352,9 +783,58 @@ func (m *Model) applyFilter() {
 		m.pickerVp.SetContent(m.pickerContent(m.pickerVp.Width()))
 		return
 	}
-	for _, id := range m.pickerSource() {
-		if modelMatchesFilter(id, modelscache.ProviderOf(m.modelInfos, id), needle) {
-			m.pickerItems = append(m.pickerItems, id)
+	if m.pickerKind == pickerKindTools || m.pickerKind == pickerKindRoles {
+		for _, id := range m.pickerSource() {
+			haystack := id
+			if m.pickerKind == pickerKindTools {
+				if tool, ok := toolplugin.Lookup(id); ok {
+					spec := tool.Spec()
+					haystack += " " + spec.Description
+				}
+			} else if role, ok := roles.DescriptorFor(id); ok {
+				haystack += " " + role.Label + " " + role.Prompt
+			}
+			if modelMatchesFilter(haystack, "", needle) {
+				m.pickerItems = append(m.pickerItems, id)
+			}
+		}
+		if m.pickerCursor >= len(m.pickerItems) {
+			m.pickerCursor = max(0, len(m.pickerItems)-1)
+		}
+		m.pickerVp.SetHeight(m.pickerVPHeight())
+		m.pickerVp.SetContent(m.pickerContent(m.pickerVp.Width()))
+		return
+	}
+	if m.pickerKind == pickerKindModel {
+		for _, choice := range m.modelPickerChoices() {
+			providerLabel := choice.info.Provider
+			if providerLabel == "" {
+				providerLabel = modelProviderLabel(choice.provider)
+			}
+			if !modelMatchesFilter(choice.id, providerLabel, needle) {
+				continue
+			}
+			m.pickerItems = append(m.pickerItems, choice.id)
+			m.pickerProviderIDs = append(m.pickerProviderIDs, choice.provider)
+		}
+	} else {
+		for _, id := range m.pickerSource() {
+			if m.pickerKind == pickerKindProvider {
+				descriptor, ok := provider.DescriptorFor(id)
+				if !ok || !modelMatchesFilter(id, descriptor.Label+" "+descriptor.EnvKey, needle) {
+					continue
+				}
+				m.pickerItems = append(m.pickerItems, id)
+				continue
+			}
+			if modelMatchesFilter(id, modelscache.ProviderOf(m.modelInfos, id), needle) {
+				m.pickerItems = append(m.pickerItems, id)
+			}
+		}
+		if m.pickerKind == pickerKindProvider {
+			if needle == "" || strings.Contains(strings.ToLower("+ Add New Provider"), needle) {
+				m.pickerItems = append(m.pickerItems, "__add_new_provider__")
+			}
 		}
 	}
 	if m.pickerCursor >= len(m.pickerItems) {
@@ -365,7 +845,7 @@ func (m *Model) applyFilter() {
 	if m.pickerCursor == 0 {
 		m.pickerVp.GotoTop()
 	} else {
-		m.pickerVp.EnsureVisible(m.pickerCursor, 0, 1)
+		m.pickerVp.EnsureVisible(m.pickerCursorLine(), 0, 1)
 	}
 }
 
@@ -396,6 +876,10 @@ func (m Model) openVariantPicker() Model {
 	return m.openKindPicker(pickerKindVariant)
 }
 
+func (m Model) openProviderPicker() Model {
+	return m.openKindPicker(pickerKindProvider)
+}
+
 func (m Model) openSkillsPicker(query string) (Model, tea.Cmd) {
 	m = m.openKindPicker(pickerKindSkills)
 	m.pickerFilter = strings.TrimSpace(query)
@@ -407,6 +891,28 @@ func (m Model) openSkillsPicker(query string) (Model, tea.Cmd) {
 	return m, m.scanSkills
 }
 
+func (m Model) openToolsPicker(query string) (Model, tea.Cmd) {
+	m = m.openKindPicker(pickerKindTools)
+	m.pickerFilter = strings.TrimSpace(query)
+	if m.pickerFilter != "" {
+		m.applyFilter()
+	}
+	m.toolsScanning = true
+	m.activity = "scanning approved tools"
+	return m, m.scanTools
+}
+
+func (m Model) openRolesPicker(query string) (Model, tea.Cmd) {
+	m = m.openKindPicker(pickerKindRoles)
+	m.pickerFilter = strings.TrimSpace(query)
+	if m.pickerFilter != "" {
+		m.applyFilter()
+	}
+	m.rolesScanning = true
+	m.activity = "scanning approved roles"
+	return m, m.scanRoles
+}
+
 func (m Model) scanSkills() tea.Msg {
 	cfg := m.projectSettings.EffectiveSkills()
 	opts := skills.DefaultOptions(m.workdir)
@@ -416,6 +922,17 @@ func (m Model) scanSkills() tea.Msg {
 	opts.MaxBody = cfg.MaxBodyBytes
 	catalog, err := skills.Discover(context.Background(), opts)
 	return skillsMsg{catalog: catalog, err: err}
+}
+
+func (m Model) scanTools() tea.Msg {
+	cfg := m.projectSettings.EffectiveTools()
+	catalog, err := toolcatalog.Load(m.workdir, true, cfg.AllowDiscovered, cfg.MaxDiscovered)
+	return toolsMsg{catalog: catalog, err: err}
+}
+
+func (m Model) scanRoles() tea.Msg {
+	catalog, err := roles.Load(m.workdir)
+	return rolesMsg{catalog: catalog, err: err}
 }
 
 func (m Model) openKindPicker(kind string) Model {
@@ -430,11 +947,16 @@ func (m Model) openKindPicker(kind string) Model {
 	m.pickerCursor = 0
 	m.applyFilter()
 	current := m.pickerSelectedValue()
+	activeProvider := m.projectSettings.EffectiveProvider()
 	for i, id := range m.pickerItems {
-		if id == current {
-			m.pickerCursor = i
-			break
+		if id != current {
+			continue
 		}
+		if kind == pickerKindModel && !m.settingsModelPickerUsesInherit() && m.modelProviderAt(i) != activeProvider {
+			continue
+		}
+		m.pickerCursor = i
+		break
 	}
 	m.pickerVp.SetContent(m.pickerContent(m.pickerVp.Width()))
 	if m.pickerCursor == 0 {
@@ -455,13 +977,43 @@ func (m Model) pickerSource() []string {
 		return out
 	}
 	if m.pickerKind == pickerKindVariant {
-		info, ok := modelscache.InfoOf(m.modelInfos, m.modelLabel())
+		modelID, providerID := m.variantPickerModel()
+		info, ok := m.modelInfoForProvider(modelID, providerID)
 		if !ok {
 			return nil
 		}
 		return info.Variants
 	}
+	if m.pickerKind == pickerKindProvider {
+		return provider.IDs()
+	}
+	if m.pickerKind == pickerKindTools {
+		return toolplugin.IDsFor(m.projectSettings.EffectiveTools().AllowDiscovered)
+	}
+	if m.pickerKind == pickerKindRoles {
+		return roles.IDs()
+	}
 	return m.models
+}
+
+func (m Model) variantPickerModel() (string, string) {
+	if m.settingsPickerTarget == settingsPickerChildVariant {
+		cfg := m.projectSettings
+		return childModel(cfg), cfg.EffectiveOrchestrator().Provider
+	}
+	return m.modelLabel(), m.projectSettings.EffectiveProvider()
+}
+
+func (m Model) modelPickerChoices() []modelChoice {
+	choices := m.modelChoices()
+	if !m.settingsModelPickerUsesInherit() {
+		return choices
+	}
+	return append([]modelChoice{{id: ""}}, choices...)
+}
+
+func (m Model) settingsModelPickerUsesInherit() bool {
+	return m.settingsPickerTarget == settingsPickerChildModel || m.settingsPickerTarget == settingsPickerExploreModel
 }
 
 func (m Model) pickerSelectedValue() string {
@@ -471,10 +1023,28 @@ func (m Model) pickerSelectedValue() string {
 		}
 		return ""
 	}
+	if m.pickerKind == pickerKindTools {
+		return ""
+	}
+	if m.pickerKind == pickerKindRoles {
+		return m.projectSettings.Agents.DefaultRole
+	}
 	if m.pickerKind == pickerKindVariant {
+		if m.settingsPickerTarget == settingsPickerChildVariant {
+			return m.projectSettings.Agents.ModelVariant
+		}
 		return m.variant
 	}
-	if m.settingsPickRecap {
+	if m.pickerKind == pickerKindProvider {
+		return m.projectSettings.EffectiveProvider()
+	}
+	if m.settingsPickerTarget == settingsPickerChildModel {
+		return m.projectSettings.Agents.ModelOverride
+	}
+	if m.settingsPickerTarget == settingsPickerExploreModel {
+		return m.projectSettings.Agents.ExploreModel
+	}
+	if m.settingsPickerTarget == settingsPickerRecapModel {
 		return m.projectSettings.EffectiveRecap().Model
 	}
 	current := m.model
@@ -491,11 +1061,41 @@ func (m Model) pickerSelectedLabel() string {
 		}
 		return "none"
 	}
+	if m.pickerKind == pickerKindTools {
+		return fmt.Sprintf("%d enabled", len(m.projectSettings.EffectiveTools().Enabled))
+	}
+	if m.pickerKind == pickerKindRoles {
+		return m.projectSettings.Agents.DefaultRole
+	}
 	if m.pickerKind == pickerKindVariant {
+		if m.settingsPickerTarget == settingsPickerChildVariant {
+			if m.projectSettings.Agents.ModelVariant == "" {
+				return "default"
+			}
+			return m.projectSettings.Agents.ModelVariant
+		}
 		if m.variant != "" {
 			return m.variant
 		}
 		return "default"
+	}
+	if m.pickerKind == pickerKindProvider {
+		if descriptor, ok := provider.DescriptorFor(m.projectSettings.EffectiveProvider()); ok {
+			return descriptor.Label
+		}
+		return m.projectSettings.EffectiveProvider()
+	}
+	if m.settingsPickerTarget == settingsPickerChildModel && m.projectSettings.Agents.ModelOverride == "" {
+		return "inherit"
+	}
+	if m.settingsPickerTarget == settingsPickerExploreModel && m.projectSettings.Agents.ExploreModel == "" {
+		return "inherit"
+	}
+	if m.settingsPickerTarget == settingsPickerChildModel {
+		return m.projectSettings.Agents.ModelOverride
+	}
+	if m.settingsPickerTarget == settingsPickerExploreModel {
+		return m.projectSettings.Agents.ExploreModel
 	}
 	current := m.model
 	if current == "" && m.client != nil {
@@ -507,12 +1107,24 @@ func (m Model) pickerSelectedLabel() string {
 	return current
 }
 
-func (m Model) pickerItemLabel(id string) string {
+func (m Model) pickerItemLabelForProvider(id, providerID string) string {
 	if m.pickerKind == pickerKindSkills {
 		for _, skill := range m.pickerSkillItems {
 			if skill.DescriptorPath == id {
 				return skill.Name
 			}
+		}
+		return id
+	}
+	if m.pickerKind == pickerKindTools {
+		if tool, ok := toolplugin.Lookup(id); ok {
+			return tool.Spec().Name
+		}
+		return id
+	}
+	if m.pickerKind == pickerKindRoles {
+		if role, ok := roles.DescriptorFor(id); ok {
+			return role.Label
 		}
 		return id
 	}
@@ -522,8 +1134,20 @@ func (m Model) pickerItemLabel(id string) string {
 		}
 		return id
 	}
+	if m.pickerKind == pickerKindProvider {
+		if id == "__add_new_provider__" {
+			return "+ Add New Provider"
+		}
+		if descriptor, ok := provider.DescriptorFor(id); ok {
+			return descriptor.Label
+		}
+		return id
+	}
+	if id == "" && m.settingsModelPickerUsesInherit() {
+		return "inherit"
+	}
 	label := id
-	info, ok := modelscache.InfoOf(m.modelInfos, id)
+	info, ok := m.modelInfoForProvider(id, providerID)
 	if ok && modelscache.IsFree(info) {
 		label += "  free"
 	} else if modelscache.IsFree(modelscache.Info{ID: id}) {
@@ -548,8 +1172,11 @@ func (m Model) persistSelection() tea.Cmd {
 	if m.session == nil || m.store == nil {
 		return nil
 	}
-	sid, model, variant := m.session.ID, m.model, m.variant
+	sid, providerID, model, variant := m.session.ID, m.projectSettings.EffectiveProvider(), m.model, m.variant
 	return func() tea.Msg {
+		if err := m.store.UpdateSessionProvider(context.Background(), sid, providerID); err != nil {
+			return errMsg{err: err}
+		}
 		if err := m.store.UpdateSessionModel(context.Background(), sid, model); err != nil {
 			return errMsg{err: err}
 		}
@@ -567,8 +1194,15 @@ func (m *Model) syncSessionModel() {
 	m.session.Model = m.model
 }
 
+func (m *Model) syncSessionProvider() {
+	if m.session == nil {
+		return
+	}
+	m.session.Provider = m.projectSettings.EffectiveProvider()
+}
+
 func (m Model) refreshCompactHint(prev string, prevWindow int64) Model {
-	window := int64(modelscache.ContextOf(m.modelInfos, m.modelLabel()))
+	window := int64(m.modelContext(m.modelLabel()))
 	pct := m.projectSettings.EffectiveCompaction().Percent
 	if agent.NeedsCompact(m.tokensUsed, window, pct) {
 		m.pendingCompactReason = agent.CompactReasonShrink

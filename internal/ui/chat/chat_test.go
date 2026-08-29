@@ -17,7 +17,9 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/agent"
 	"github.com/chinmay-sawant/lazykoder/internal/db"
 	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
+	"github.com/chinmay-sawant/lazykoder/internal/provider"
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
+	"github.com/chinmay-sawant/lazykoder/internal/provider/subscription"
 	"github.com/chinmay-sawant/lazykoder/internal/tips"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
@@ -1050,8 +1052,8 @@ func TestConfirmEscDoesNotCancelTurn(t *testing.T) {
 func TestSessionPickerSelectsOlderSession(t *testing.T) {
 	dir := t.TempDir()
 	st := newTestStore(t)
-	// InsertMessage bumps sessions.time_updated; build older first, then
-	// newer, so the resume list (time_updated DESC) keeps newer on top.
+	// InsertMessage bumps the conversation timestamp; build older first, then
+	// newer, so the resume list keeps newer on top.
 	older, err := st.CreateSession(context.Background(), db.Session{
 		Title: "older-session", Directory: dir, TimeCreated: 1000, TimeUpdated: 1000,
 	})
@@ -1557,6 +1559,75 @@ func TestRefreshWritesModelsCache(t *testing.T) {
 	}
 }
 
+func TestRefreshLoadsGrokCatalog(t *testing.T) {
+	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
+	codex := subscription.NewCodex("", subscription.WithCatalogLoader(func(context.Context) (subscription.ModelCatalog, error) {
+		return subscription.ModelCatalog{Models: []opencode.ModelInfo{{
+			ID:       "gpt-account-default",
+			Provider: provider.IDCodex,
+		}}}, nil
+	}))
+	grok := subscription.NewGrok("grok-4.6", subscription.WithCatalogLoader(func(context.Context) (subscription.ModelCatalog, error) {
+		return subscription.ModelCatalog{Models: []opencode.ModelInfo{
+			{ID: "grok-4.6", Provider: provider.IDGrok, Endpoint: "cli://grok/chat/completions", Variants: []string{"low", "medium", "high", "xhigh"}},
+			{ID: "grok-4.5", Provider: provider.IDGrok, Endpoint: "cli://grok/chat/completions", Variants: []string{"low", "medium", "high", "xhigh"}},
+		}}, nil
+	}))
+	m := New(Options{
+		Store:   newTestStore(t),
+		Client:  newClient(fake.srv),
+		Workdir: t.TempDir(),
+		NewProviderClient: func(id string) (provider.Client, error) {
+			switch id {
+			case provider.IDCodex:
+				return codex, nil
+			case provider.IDGrok:
+				return grok, nil
+			default:
+				return nil, nil
+			}
+		},
+	})
+	msg, ok := m.refreshModels().(modelsMsg)
+	if !ok {
+		t.Fatalf("refreshModels returned %T", msg)
+	}
+	if msg.err != nil {
+		t.Fatalf("refreshModels err = %v", msg.err)
+	}
+	if !containsModel(msg.list, "grok-4.6") || !containsModel(msg.list, "grok-4.5") {
+		t.Fatalf("Grok models missing from refresh: %v", msg.list)
+	}
+	for _, id := range []string{"grok-4.6", "grok-4.5"} {
+		info, found := modelscache.InfoOf(msg.infos, id)
+		if !found || info.Provider != provider.IDGrok || info.Endpoint != "cli://grok/chat/completions" {
+			t.Fatalf("Grok model %q = %+v, found=%t", id, info, found)
+		}
+		if strings.Join(info.Variants, ",") != "low,medium,high,xhigh" {
+			t.Fatalf("Grok model %q variants = %v", id, info.Variants)
+		}
+	}
+}
+
+func TestCodexLiveCatalogClearsRemovedSavedModel(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	m.projectSettings.Provider.Active = provider.IDCodex
+	m.projectSettings.Model.Default = "removed-codex-model"
+	m.model = "removed-codex-model"
+
+	next, _ := m.Update(modelsMsg{infos: []modelscache.Info{{
+		ID:       "gpt-account-default",
+		Provider: provider.IDCodex,
+	}}})
+	m = next.(Model)
+	if m.projectSettings.Model.Default != "" {
+		t.Fatalf("saved Codex model = %q, want live default", m.projectSettings.Model.Default)
+	}
+	if m.model != "" {
+		t.Fatalf("live Codex model = %q, want provider default", m.model)
+	}
+}
+
 func TestRefreshStampsZenEndpoint(t *testing.T) {
 	dir := t.TempDir()
 	cachePath := filepath.Join(dir, "models.json")
@@ -1568,13 +1639,16 @@ func TestRefreshStampsZenEndpoint(t *testing.T) {
 			if r.Header.Get("Authorization") == "" {
 				t.Error("zen models request missing Authorization")
 			}
-			fmt.Fprint(w, `{"data":[{"id":"deepseek-v4-flash-free"},{"id":"deepseek-v4-flash"}]}`)
+			fmt.Fprint(w, `{"data":[{"id":"hy3-free"},{"id":"deepseek-v4-flash"}]}`)
 		default:
 			http.NotFound(w, r)
 		}
 	}))
 	t.Cleanup(srv.Close)
 	c := opencode.NewClient("test-key", opencode.WithBaseURL(srv.URL+"/zen/go/v1"))
+	if _, ok := any(c).(provider.FreeModelCatalog); !ok {
+		t.Fatal("OpenCode client does not expose the free-model catalog capability")
+	}
 	m := New(Options{Store: newTestStore(t), Client: c, Workdir: dir, CachePath: cachePath})
 	msg := m.refreshModels()
 	got, ok := msg.(modelsMsg)
@@ -1592,7 +1666,7 @@ func TestRefreshStampsZenEndpoint(t *testing.T) {
 	if !ok || flash.Endpoint != srv.URL+"/zen/go/v1/chat/completions" {
 		t.Fatalf("go model = %+v", flash)
 	}
-	free, ok := modelscache.InfoOf(infos, "deepseek-v4-flash-free")
+	free, ok := modelscache.InfoOf(infos, "hy3-free")
 	if !ok || free.Endpoint != srv.URL+"/zen/v1/chat/completions" {
 		t.Fatalf("zen free model = %+v", free)
 	}
@@ -1618,6 +1692,18 @@ func TestModelEndpointPrefersCacheThenFreeFallback(t *testing.T) {
 	m.model = "deepseek-v4-flash"
 	if got := m.modelEndpoint(); got != "https://opencode.ai/zen/go/v1/chat/completions" {
 		t.Fatalf("go fallback = %q", got)
+	}
+}
+
+func TestModelEndpointPreservesAdvertisedRoute(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: opencode.NewClient("k", opencode.WithBaseURL("https://opencode.ai/zen/go/v1")), Workdir: t.TempDir()})
+	m.model = "gpt-5.6-luna"
+	m.modelInfos = []modelscache.Info{{
+		ID: "gpt-5.6-luna", Provider: modelscache.ProviderOpenCodeGo,
+		Endpoint: "https://opencode.ai/zen/go/v1/chat/completions",
+	}}
+	if got := m.modelEndpoint(); got != "https://opencode.ai/zen/go/v1/chat/completions" {
+		t.Fatalf("cached endpoint = %q", got)
 	}
 }
 

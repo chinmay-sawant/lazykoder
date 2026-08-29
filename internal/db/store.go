@@ -188,14 +188,16 @@ var schemaMigrations = [][]string{
 // schemaVersion is the highest applied migration number (includes rebuilds
 // implemented as Go steps rather than pure SQL slices).
 const (
-	migrationSessionsFK = 7
-	migrationJobsFK     = 8
-	migrationTodos      = 9
-	migrationSegments   = 10
-	migrationStatusV2   = 11
-	migrationRecaps     = 12
-	migrationMemories   = 13
-	schemaVersion       = migrationMemories
+	migrationSessionsFK    = 7
+	migrationJobsFK        = 8
+	migrationTodos         = 9
+	migrationSegments      = 10
+	migrationStatusV2      = 11
+	migrationRecaps        = 12
+	migrationMemories      = 13
+	migrationMemoryTimings = 14
+	migrationSessionActive = 15
+	schemaVersion          = migrationSessionActive
 )
 
 // Migrate runs numbered migrations. schema_migrations records the applied
@@ -283,6 +285,10 @@ func (s *Store) Migrate(ctx context.Context) error {
 				`CREATE INDEX IF NOT EXISTS idx_memory_updates_open ON memory_updates(status, time_created, id) WHERE status IN ('queued', 'running')`,
 				`CREATE INDEX IF NOT EXISTS idx_memory_updates_workdir_seq ON memory_updates(workdir, source_end_seq, id)`,
 			})
+		case migrationMemoryTimings:
+			err = s.migrateV14MemoryTimings(ctx)
+		case migrationSessionActive:
+			err = s.migrateV15SessionActivity(ctx)
 		default:
 			if i < 1 || i > len(schemaMigrations) {
 				return fmt.Errorf("db: missing migration statements for version %d", i)
@@ -294,6 +300,35 @@ func (s *Store) Migrate(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (s *Store) migrateV14MemoryTimings(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(memory_updates)`)
+	if err != nil {
+		return fmt.Errorf("db: inspect memory update columns: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	hasColumn := false
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return fmt.Errorf("db: inspect memory update columns: %w", err)
+		}
+		if name == "stage_durations_json" {
+			hasColumn = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("db: inspect memory update columns: %w", err)
+	}
+	if hasColumn {
+		return s.applyMigration(ctx, migrationMemoryTimings, nil)
+	}
+	return s.applyMigration(ctx, migrationMemoryTimings, []string{
+		`ALTER TABLE memory_updates ADD COLUMN stage_durations_json TEXT NOT NULL DEFAULT '{}'`,
+	})
 }
 
 func (s *Store) applyMigration(ctx context.Context, version int, statements []string) error {

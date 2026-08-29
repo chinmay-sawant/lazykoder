@@ -3,6 +3,7 @@ package subagent
 import (
 	"time"
 
+	"github.com/chinmay-sawant/lazykoder/internal/roles"
 	"github.com/chinmay-sawant/lazykoder/internal/settings"
 )
 
@@ -16,7 +17,14 @@ func ConfigFromSettings(s settings.Settings) Config {
 		MaxDepth:             a.MaxDepth,
 		ChildMaxSteps:        a.ChildMaxSteps,
 		Model:                a.ModelOverride,
+		Variant:              a.ModelVariant,
 		ExploreModel:         a.ExploreModel,
+		ModelByRole:          map[string]string{roles.Explore: a.ExploreModel},
+		ModelClassByRole:     s.EffectiveOrchestrator().ModelClassByRole,
+		Roles:                roles.Roles(),
+		ExploreClass:         s.EffectiveOrchestrator().ExploreClass,
+		PlanClass:            s.EffectiveOrchestrator().PlanClass,
+		GeneralClass:         s.EffectiveOrchestrator().GeneralClass,
 		BashConfirm:          a.BashConfirm,
 		AllowParallelWriters: a.AllowParallelWriters,
 		DefaultRole:          a.DefaultRole,

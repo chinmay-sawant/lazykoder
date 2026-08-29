@@ -13,17 +13,22 @@ import (
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
 
 	"github.com/chinmay-sawant/lazykoder/internal/agent"
+	"github.com/chinmay-sawant/lazykoder/internal/agent/toolplugin"
 	"github.com/chinmay-sawant/lazykoder/internal/db"
 	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
+	"github.com/chinmay-sawant/lazykoder/internal/provider"
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 	"github.com/chinmay-sawant/lazykoder/internal/recap"
+	"github.com/chinmay-sawant/lazykoder/internal/roles"
 	"github.com/chinmay-sawant/lazykoder/internal/settings"
 	"github.com/chinmay-sawant/lazykoder/internal/skills"
 	"github.com/chinmay-sawant/lazykoder/internal/subagent"
 	"github.com/chinmay-sawant/lazykoder/internal/tips"
+	toolcatalog "github.com/chinmay-sawant/lazykoder/internal/tools"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/question"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/confirm"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
@@ -84,6 +89,11 @@ const (
 	pickerKindModel    = "model"
 	pickerKindVariant  = "variant"
 	pickerKindSkills   = "skills"
+	pickerKindProvider = "provider"
+	pickerKindTool     = "tool"
+	pickerKindRole     = "role"
+	pickerKindTools    = pickerKindTool
+	pickerKindRoles    = pickerKindRole
 	// pulseInterval and pulseSteps throb the in-progress reply rail.
 	pulseInterval = 70 * time.Millisecond
 	pulseSteps    = 16
@@ -150,28 +160,38 @@ func configureThemeStyles() {
 
 // Options configures the chat model.
 type Options struct {
-	Store        *db.Store
-	Client       *opencode.Client
-	Workdir      string
-	Session      *db.Session
-	MaxSteps     int // ignored when Settings is set; kept for tests
-	InitialErr   string
-	CachePath    string // optional models cache file; empty disables caching
-	SettingsPath string // .lazykoder/settings.json; empty skips persistence
-	Settings     *settings.Settings
+	Store             *db.Store
+	Client            provider.Client
+	ChildClient       provider.Client
+	NewProviderClient provider.ClientFactory
+	ProviderAuth      provider.AuthChecker
+	ProviderLogin     provider.LoginCommandFactory
+	Workdir           string
+	Session           *db.Session
+	MaxSteps          int // ignored when Settings is set; kept for tests
+	InitialErr        string
+	CachePath         string // optional models cache file; empty disables caching
+	SettingsPath      string // .lazykoder/settings.json; empty skips persistence
+	Settings          *settings.Settings
+	WorktreeDirty     worktreeDirtyChecker
 }
 
 // Model is the chat screen: title, transcript, prompt, status and confirm flow.
 type Model struct {
-	store               *db.Store
-	client              *opencode.Client
-	workdir             string
-	session             *db.Session
-	maxSteps            int
-	settingsPath        string
-	projectSettings     settings.Settings
-	settingsPickDefault bool // model/variant picker is setting the project default
-	settingsPickRecap   bool // model picker is setting the recap model
+	store                *db.Store
+	client               provider.Client
+	childClient          provider.Client
+	newProviderClient    provider.ClientFactory
+	providerAuth         provider.AuthChecker
+	providerLogin        provider.LoginCommandFactory
+	providerAuthStatus   map[string]provider.AuthStatus
+	providerLoginTarget  string
+	workdir              string
+	session              *db.Session
+	maxSteps             int
+	settingsPath         string
+	projectSettings      settings.Settings
+	settingsPickerTarget settingsPickerTarget
 
 	width  int
 	height int
@@ -191,12 +211,14 @@ type Model struct {
 	err                 string
 	pendingUser         string
 	turnHasNewUser      bool
+	turnToolErrors      int
 	lastTool            int
 
 	model                string // current model; "" = provider default
 	variant              string // current reasoning variant; "" = provider default
 	models               []string
 	modelInfos           []modelscache.Info
+	modelDefaults        map[string]modelDefault
 	modelsErr            string
 	modelsCached         bool // models came from the cache, not a live fetch
 	cachePath            string
@@ -205,6 +227,10 @@ type Model struct {
 	skillsScanning       bool
 	skillsCatalog        skills.Catalog
 	activeSkills         []skills.Skill
+	toolCatalog          toolcatalog.Catalog
+	roleCatalog          roles.Catalog
+	toolsScanning        bool
+	rolesScanning        bool
 	pendingSkillRefs     []recap.MemorySkillReference
 	memoryScanJobs       int
 	tokensUsed           int64
@@ -224,19 +250,20 @@ type Model struct {
 	tpsSamples           []tpsSample
 	stepMetrics          bool
 
-	confirmCh   chan confirmRequest
-	askCh       chan askRequest
-	doneCh      chan struct{}
-	doneClosed  bool
-	pending     *confirmRequest
-	pendingAsk  *askRequest
-	confirm     confirm.Model
-	confirmMode bool
-	formMode    bool
-	formHost    *formHost
-	askMode     bool
-	askQuestion question.Question
-	askCursor   int
+	confirmCh       chan confirmRequest
+	askCh           chan askRequest
+	doneCh          chan struct{}
+	doneClosed      bool
+	pending         *confirmRequest
+	pendingAsk      *askRequest
+	confirm         confirm.Model
+	confirmMode     bool
+	formMode        bool
+	formHost        *formHost
+	addProviderData *addProviderData
+	askMode         bool
+	askQuestion     question.Question
+	askCursor       int
 
 	helpMode bool
 
@@ -279,16 +306,17 @@ type Model struct {
 	pulseOn   bool
 	railInset int
 
-	pickerVp         viewport.Model
-	pickerItems      []string
-	pickerCursor     int
-	pickerFilter     string
-	pickerFiltering  bool
-	pickerBuilt      bool
-	pickerMode       bool
-	pickerKind       string
-	pickerFromPrompt bool
-	pickerSkillItems []skills.Skill
+	pickerVp          viewport.Model
+	pickerItems       []string
+	pickerProviderIDs []string
+	pickerCursor      int
+	pickerFilter      string
+	pickerFiltering   bool
+	pickerBuilt       bool
+	pickerMode        bool
+	pickerKind        string
+	pickerFromPrompt  bool
+	pickerSkillItems  []skills.Skill
 
 	sessionPickerMode bool
 	sessionItems      []db.Session
@@ -331,6 +359,13 @@ type Model struct {
 	memoryHistoryError      string
 	memoryHistorySelection  textSelection
 
+	// memoryContextMode shows the exact bounded memory block used by the next
+	// parent turn. The toggle is intentionally session-local.
+	memoryContextMode      bool
+	memoryInjectionEnabled bool
+	memoryContext          string
+	memoryContextVp        viewport.Model
+
 	slashMode                 bool
 	slashCursor               int
 	slashItems                []slashCmd
@@ -359,6 +394,25 @@ type Model struct {
 
 	// subMgr owns in-process sub-agent jobs for this chat model.
 	subMgr *subagent.Manager
+
+	worktreeDirty             worktreeDirtyChecker
+	pushPromptUntil           time.Time
+	pushPromptBusy            bool
+	commitDrawerSelected      int
+	commitDrawerActionFocused bool
+	commitFiles               []WorktreeFile
+	commitBranch              string
+	commitDiffPreview         map[string]string
+	commitDiffDetailMode      bool
+	commitDiffDetailPath      string
+	commitDiffHunks           []string
+	commitDiffHunkSelected    int
+	commitDiffHunkContextMode bool
+	commitDiffHunkVp          viewport.Model
+	commitDiffDetailVp        viewport.Model
+
+	providerDeleteMode   bool
+	providerDeleteTarget string
 }
 
 // slashCmd is one entry of the slash command menu. aliases are extra
@@ -367,6 +421,7 @@ type slashCmd struct {
 	name        string
 	description string
 	aliases     []string
+	group       string
 }
 
 type inputHistoryItem struct {
@@ -401,33 +456,54 @@ type tpsSample struct {
 }
 
 var slashCommands = []slashCmd{
-	{name: "/new", description: "start a new session and clear the transcript"},
-	{name: "/resume", description: "open past sessions (ctrl+s, also /session)", aliases: []string{"sessions", "session"}},
-	{name: "/model", description: "search and switch the live chat model"},
-	{name: "/variant", description: "switch live reasoning effort (low / medium / high / max)"},
-	{name: "/agents", description: "open the sub-agent drawer and logs", aliases: []string{"subs", "subagents"}},
-	{name: "/history", description: "open memory history for the current chat"},
-	{name: "/spawn", description: "spawn a new sub-agent via interactive form", aliases: []string{"agent"}},
-	{name: "/refresh", description: "reload the model list into models.json"},
-	{name: "/usage", description: "show OpenCode Go plan usage (rolling, weekly, monthly)"},
-	{name: "/status", description: "open the status drawer and toggle details"},
-	{name: "/skills", description: "discover and activate local and global skills", aliases: []string{"skill"}},
-	{name: "/settings", description: "project defaults (model, agents, compaction, safety)", aliases: []string{"slot"}},
-	{name: "/continue", description: "resume after a step-limit stop (or send continue)"},
-	{name: "/compact", description: "summarize older context now (optional notes)"},
-	{name: "/help", description: "keyboard shortcuts (?, also /keys)", aliases: []string{"keys"}},
+	{name: "/new", description: "start a new session and clear the transcript", group: "Session"},
+	{name: "/resume", description: "open past sessions (ctrl+s, also /session)", aliases: []string{"sessions", "session"}, group: "Session"},
+	{name: "/continue", description: "resume after a step-limit stop (or send continue)", group: "Session"},
+	{name: "/compact", description: "summarize older context now (optional notes)", group: "Session"},
+	{name: "/provider", description: "select the active chat provider", group: "Model"},
+	{name: "/model", description: "search and switch the live chat model", group: "Model"},
+	{name: "/variant", description: "switch live reasoning effort", group: "Model"},
+	{name: "/refresh", description: "reload the model list into models.json", group: "Model"},
+	{name: "/agents", description: "open the sub-agent drawer and logs", aliases: []string{"subs", "subagents"}, group: "Project"},
+	{name: "/history", description: "open memory history for the current chat", group: "Project"},
+	{name: "/memory", description: "show next-turn memory context and toggle injection", group: "Project"},
+	{name: "/spawn", description: "spawn a new sub-agent via interactive form", aliases: []string{"agent"}, group: "Project"},
+	{name: "/settings", description: "project defaults (model, agents, compaction, safety)", aliases: []string{"slot"}, group: "Project"},
+	{name: "/skills", description: "discover and activate local and global skills", aliases: []string{"skill"}, group: "Project"},
+	{name: "/tools", description: "discover and enable compiled or declarative tools", aliases: []string{"tool"}, group: "Project"},
+	{name: "/roles", description: "discover and select sub-agent roles", aliases: []string{"role"}, group: "Project"},
+	{name: "/usage", description: "show OpenCode Go plan usage (rolling, weekly, monthly)", group: "Project"},
+	{name: "/status", description: "open the status drawer and toggle details", group: "Project"},
+	{name: "/diff", description: "open the current worktree diff drawer", group: "Project"},
+	{name: "/help", description: "keyboard shortcuts (?, also /keys)", aliases: []string{"keys"}, group: "Help"},
 }
 
 type modelsMsg struct {
 	list      []string
 	infos     []modelscache.Info
+	defaults  map[string]modelDefault
 	err       error
 	fromCache bool
 	notice    string
 }
 
+type modelDefault struct {
+	model   string
+	variant string
+}
+
 type skillsMsg struct {
 	catalog skills.Catalog
+	err     error
+}
+
+type toolsMsg struct {
+	catalog toolcatalog.Catalog
+	err     error
+}
+
+type rolesMsg struct {
+	catalog roles.Catalog
 	err     error
 }
 
@@ -451,6 +527,16 @@ type memoryDoneMsg struct {
 
 type tipsTickMsg struct{}
 
+type providerAuthMsg struct {
+	id     string
+	status provider.AuthStatus
+}
+
+type providerLoginMsg struct {
+	id  string
+	err error
+}
+
 // New returns a chat model for the given options.
 func New(opts Options) Model {
 	cfg := settings.Default()
@@ -459,6 +545,9 @@ func New(opts Options) Model {
 	} else if opts.MaxSteps > 0 {
 		cfg.Slot.MaxSteps = opts.MaxSteps
 		cfg.Slot.LimitEnabled = true
+	}
+	if opts.Client != nil && cfg.EffectiveProvider() == "openai" && cfg.Model.Default == settings.DefaultModelID {
+		cfg.Model.Default = opts.Client.Model()
 	}
 	theme.SetMode(cfg.EffectiveTheme())
 	configureThemeStyles()
@@ -472,31 +561,52 @@ func New(opts Options) Model {
 	// Effective* helpers normalize clamps and empty model ids.
 	eff := cfg.EffectiveMaxSteps()
 	m := Model{
-		store:               opts.Store,
-		client:              opts.Client,
-		workdir:             opts.Workdir,
-		session:             opts.Session,
-		maxSteps:            eff,
-		settingsPath:        opts.SettingsPath,
-		projectSettings:     cfg,
-		err:                 opts.InitialErr,
-		width:               defaultWidth,
-		height:              defaultHeight,
-		confirmCh:           make(chan confirmRequest, confirmQueueSize),
-		askCh:               make(chan askRequest, confirmQueueSize),
-		doneCh:              make(chan struct{}),
-		lastTool:            -1,
-		selectedItem:        -1,
-		historyCursor:       -1,
-		pendingHistoryIndex: -1,
-		settingsHover:       -1,
-		userNavHover:        -1,
-		userNavTip:          -1,
-		cachePath:           opts.CachePath,
-		transcript:          viewport.New(viewport.WithWidth(defaultWidth-1), viewport.WithHeight(defaultHeight-chromeLines)),
-		todoVp:              viewport.New(viewport.WithWidth(defaultWidth-1), viewport.WithHeight(maxTodoPanelRows)),
-		prompt:              newPromptArea(defaultWidth),
-		renderCache:         &renderCache{},
+		store:                  opts.Store,
+		client:                 opts.Client,
+		childClient:            opts.ChildClient,
+		newProviderClient:      opts.NewProviderClient,
+		providerAuth:           opts.ProviderAuth,
+		providerLogin:          opts.ProviderLogin,
+		providerAuthStatus:     make(map[string]provider.AuthStatus),
+		modelDefaults:          make(map[string]modelDefault),
+		workdir:                opts.Workdir,
+		session:                opts.Session,
+		maxSteps:               eff,
+		settingsPath:           opts.SettingsPath,
+		projectSettings:        cfg,
+		err:                    opts.InitialErr,
+		width:                  defaultWidth,
+		height:                 defaultHeight,
+		confirmCh:              make(chan confirmRequest, confirmQueueSize),
+		askCh:                  make(chan askRequest, confirmQueueSize),
+		doneCh:                 make(chan struct{}),
+		lastTool:               -1,
+		selectedItem:           -1,
+		historyCursor:          -1,
+		pendingHistoryIndex:    -1,
+		settingsHover:          -1,
+		userNavHover:           -1,
+		userNavTip:             -1,
+		cachePath:              opts.CachePath,
+		worktreeDirty:          opts.WorktreeDirty,
+		commitDiffPreview:      make(map[string]string),
+		commitDiffHunkVp:       viewport.New(viewport.WithWidth(defaultWidth-1), viewport.WithHeight(1)),
+		commitDiffDetailVp:     viewport.New(viewport.WithWidth(defaultWidth-1), viewport.WithHeight(1)),
+		transcript:             viewport.New(viewport.WithWidth(defaultWidth-1), viewport.WithHeight(defaultHeight-chromeLines)),
+		todoVp:                 viewport.New(viewport.WithWidth(defaultWidth-1), viewport.WithHeight(maxTodoPanelRows)),
+		prompt:                 newPromptArea(defaultWidth),
+		memoryInjectionEnabled: true,
+		memoryContextVp:        viewport.New(viewport.WithWidth(defaultWidth-1), viewport.WithHeight(1)),
+		renderCache:            &renderCache{},
+	}
+	if m.providerAuth == nil {
+		m.providerAuth = provider.CheckAuth
+	}
+	if m.providerLogin == nil {
+		m.providerLogin = provider.LoginCommand
+	}
+	for _, descriptor := range provider.Descriptors() {
+		m.providerAuthStatus[descriptor.ID] = provider.InitialAuthStatus(descriptor.ID)
 	}
 	// Manager boot + recover; model/confirm refreshed per turn via wireSubMgrRuntime.
 	m = m.attachSubMgr(cfg, opts.Store != nil)
@@ -529,6 +639,11 @@ func New(opts Options) Model {
 // Init starts the fetch and watcher commands.
 func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{m.confirmWatch(), m.askWatch(), m.fetchModels, tipsTick()}
+	for _, descriptor := range provider.Descriptors() {
+		if descriptor.AuthMethod != provider.AuthMethodAPIKey {
+			cmds = append(cmds, m.checkProviderAuth(descriptor.ID))
+		}
+	}
 	if m.projectSettings.EffectiveRecap().Enabled && m.store != nil && m.client != nil {
 		cmds = append(cmds, m.recoverRecaps, m.recoverMemoryUpdates)
 	}
@@ -539,12 +654,34 @@ func (m Model) Init() tea.Cmd {
 }
 
 func (m Model) fetchModels() tea.Msg {
-	if m.cachePath != "" {
-		if infos, fresh, err := modelscache.Load(m.cachePath, time.Now(), modelscache.DefaultTTL); err == nil && fresh && len(infos) > 0 && modelscache.HasContext(infos) {
+	activeProvider := m.projectSettings.EffectiveProvider()
+	if m.cachePath != "" && activeProvider != provider.IDCodex && activeProvider != provider.IDGrok {
+		if infos, fresh, err := modelscache.Load(m.cachePath, time.Now(), modelscache.DefaultTTL); err == nil && fresh && len(infos) > 0 && modelscache.HasContext(infos) && cachedModelCatalogsAreCurrent(infos) {
 			return modelsMsg{list: modelscache.IDs(infos), infos: infos, fromCache: true}
 		}
 	}
 	return m.refreshModels()
+}
+
+func cachedModelCatalogsAreCurrent(infos []modelscache.Info) bool {
+	for _, providerID := range modelCatalogProviderIDs() {
+		if providerID != provider.IDCodex && providerID != provider.IDGrok {
+			continue
+		}
+		found := false
+		for _, info := range infos {
+			if providerIDForModelInfo(info) == providerID {
+				if providerID == provider.IDGrok && len(info.Variants) == 0 {
+					return false
+				}
+				found = true
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
 }
 
 // refreshModels fetches the model list from the API, rewrites the cache, and
@@ -552,36 +689,104 @@ func (m Model) fetchModels() tea.Msg {
 func (m Model) refreshModels() tea.Msg {
 	ctx, cancel := context.WithTimeout(context.Background(), modelsTimeout)
 	defer cancel()
-	infos, err := m.client.ModelInfos(ctx)
-	cached := toCacheInfos(infos)
-	if extras, xerr := m.client.FreeModelInfos(ctx); xerr == nil && len(extras) > 0 {
-		cached = modelscache.MergeByID(cached, toCacheInfos(extras))
+	var previous []modelscache.Info
+	if m.cachePath != "" {
+		previous, _, _ = modelscache.Load(m.cachePath, time.Now(), modelscache.DefaultTTL)
 	}
-	if live, lerr := m.fetchLiveCatalog(ctx); lerr == nil {
-		cached = modelscache.ApplyLive(cached, live)
+	activeProvider := m.projectSettings.EffectiveProvider()
+	var cached []modelscache.Info
+	defaults := make(map[string]modelDefault, len(modelCatalogProviderIDs()))
+	var unavailable []string
+	var activeErr error
+	loaded := false
+	for _, providerID := range modelCatalogProviderIDs() {
+		client, clientErr := m.modelCatalogClient(providerID)
+		if clientErr != nil || client == nil {
+			cached = modelscache.MergeByID(cached, modelInfosForProvider(previous, providerID))
+			unavailable = append(unavailable, modelProviderLabel(providerID))
+			if providerID == activeProvider {
+				activeErr = clientErr
+			}
+			continue
+		}
+		infos, err := client.ModelInfos(ctx)
+		if err != nil {
+			cached = modelscache.MergeByID(cached, modelInfosForProvider(previous, providerID))
+			unavailable = append(unavailable, modelProviderLabel(providerID))
+			if providerID == activeProvider {
+				activeErr = err
+			}
+			continue
+		}
+		loaded = true
+		defaults[providerID] = modelDefault{
+			model:   client.Model(),
+			variant: clientDefaultVariant(client),
+		}
+		catalog := toCacheInfos(infos)
+		catalog = modelscache.PreserveSpecializedEndpoints(catalog, modelInfosForProvider(previous, providerID))
+		if providerID == provider.IDOpenCode {
+			if catalogClient, ok := client.(provider.FreeModelCatalog); ok {
+				extras, xerr := catalogClient.FreeModelInfos(ctx)
+				if xerr == nil && len(extras) > 0 {
+					catalog = modelscache.MergeByID(catalog, toCacheInfos(extras))
+				}
+			}
+			if live, lerr := fetchLiveCatalog(ctx, client); lerr == nil {
+				catalog = modelscache.ApplyLive(catalog, live)
+			}
+			catalog = modelscache.FilterDeprecated(catalog)
+		}
+		cached = modelscache.MergeByID(cached, catalog)
 	}
+	cached = modelscache.FilterDeprecated(cached)
 	list := modelscache.IDs(cached)
-	if err == nil {
+	if loaded {
 		if m.cachePath != "" {
 			if serr := modelscache.Save(m.cachePath, cached, time.Now()); serr != nil {
 				return modelsMsg{list: list, infos: cached, err: fmt.Errorf("models cache: %w", serr)}
 			}
 		}
-		return modelsMsg{list: list, infos: cached, notice: fmt.Sprintf("models updated (%d)", len(list))}
+		notice := fmt.Sprintf("models updated (%d)", len(list))
+		if len(unavailable) > 0 {
+			notice += "; " + strings.Join(unavailable, ", ") + " unavailable"
+		}
+		return modelsMsg{list: list, infos: cached, defaults: defaults, notice: notice}
 	}
 	if m.cachePath != "" {
-		if stale, _, lerr := modelscache.Load(m.cachePath, time.Now(), modelscache.DefaultTTL); lerr == nil && len(stale) > 0 {
-			return modelsMsg{list: modelscache.IDs(stale), infos: stale, fromCache: true, err: err}
+		if len(previous) > 0 {
+			return modelsMsg{list: modelscache.IDs(previous), infos: previous, fromCache: true, err: activeErr}
 		}
 	}
-	return modelsMsg{list: list, infos: cached, err: err}
+	return modelsMsg{list: list, infos: cached, err: activeErr}
 }
 
-func (m Model) fetchLiveCatalog(ctx context.Context) (map[string]modelscache.Info, error) {
-	if m.client == nil || !strings.Contains(m.client.BaseURL(), "opencode.ai") {
+// Fetch Codex first so a signed-in subscription row owns a model ID also
+// advertised by the public OpenCode catalog. The drawer has its own display
+// order below, which keeps OpenCode first for browsing.
+func modelCatalogProviderIDs() []string {
+	return provider.IDs()
+}
+
+func modelPickerProviderIDs() []string {
+	return provider.IDs()
+}
+
+func (m Model) modelCatalogClient(id string) (provider.Client, error) {
+	if id == m.projectSettings.EffectiveProvider() && m.client != nil {
+		return m.client, nil
+	}
+	if m.newProviderClient == nil {
 		return nil, nil
 	}
-	return modelscache.Fetch(ctx, m.client.HTTP())
+	return m.newProviderClient(id)
+}
+
+func fetchLiveCatalog(ctx context.Context, client provider.Client) (map[string]modelscache.Info, error) {
+	if client == nil || !strings.Contains(client.BaseURL(), "opencode.ai") {
+		return nil, nil
+	}
+	return modelscache.Fetch(ctx, client.HTTP())
 }
 
 func toCacheInfos(infos []opencode.ModelInfo) []modelscache.Info {
@@ -613,6 +818,24 @@ func toCacheInfos(infos []opencode.ModelInfo) []modelscache.Info {
 // Update routes keys and streamed events through the model.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case providerAuthMsg:
+		m.providerAuthStatus[msg.id] = msg.status
+		if m.pickerMode && m.pickerKind == pickerKindProvider {
+			m.applyFilter()
+		}
+		if m.providerLoginTarget == msg.id && msg.status.State == provider.AuthStateReady {
+			m.providerLoginTarget = ""
+			return m.activateProvider(msg.id)
+		}
+		return m, nil
+	case providerLoginMsg:
+		if msg.err != nil {
+			m.providerLoginTarget = ""
+			m.err = "provider sign-in failed: " + msg.err.Error()
+			return m, nil
+		}
+		m.providerAuthStatus[msg.id] = provider.AuthStatus{State: provider.AuthStateChecking, Label: "checking sign-in"}
+		return m, m.checkProviderAuth(msg.id)
 	case confirmRequestMsg:
 		m.pending = &msg.req
 		qualifier := "rm"
@@ -638,6 +861,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.seq != m.turnSeq {
 			return m, nil
 		}
+		changeEligible := m.parentTurnEligible(msg.err) && m.turnToolErrors == 0
 		successfulTurn := m.successfulTurnEligible(msg.err)
 		memoryEligible := m.memoryEligible(msg.err)
 		recapEligible := m.recapEligible(msg.err)
@@ -661,11 +885,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if recapEligible {
 			recapCmd = m.scheduleRecap()
 		}
+		worktreeCmd := tea.Cmd(nil)
+		if changeEligible {
+			worktreeCmd = m.checkWorktree()
+		}
 		// Continue baton status motion while background sub-agents are live.
 		if m.hasLiveSubagents() || m.hasInFlightTools() || m.memoryScanJobs > 0 {
-			return m, tea.Batch(memoryCmd, recapCmd, pulseTick())
+			return m, tea.Batch(worktreeCmd, memoryCmd, recapCmd, pulseTick())
 		}
-		return m, tea.Batch(memoryCmd, recapCmd)
+		return m, tea.Batch(worktreeCmd, memoryCmd, recapCmd)
 	case pulseMsg:
 		// Keep throbbing for live sub-agents even after the parent turn ends.
 		if !m.busy && !m.hasInFlightTools() && !m.hasLiveSubagents() && !m.recallScanning && !m.skillsScanning && m.memoryScanJobs == 0 {
@@ -694,13 +922,87 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = appendChatError(m.err, "memory update failed: "+msg.err.Error())
 		}
 		return m, nil
+	case worktreeStatusMsg:
+		if msg.err != nil {
+			m.err = appendChatError(m.err, msg.err.Error())
+			return m, nil
+		}
+		if msg.info.Dirty || msg.manual {
+			m.pushPromptUntil = time.Now().Add(commitActionLifetime)
+			m.commitBranch = msg.info.Branch
+			m.commitFiles = msg.info.Files
+			m.commitDiffPreview = msg.info.Diffs
+			m.commitDrawerActionFocused = false
+			if len(m.commitFiles) > 0 {
+				m.commitDrawerSelected = 0
+			}
+			m.layout = layoutSnap{}
+			return m, m.scheduleCommitPushExpiry()
+		}
+		m.pushPromptUntil = time.Time{}
+		m.commitFiles = nil
+		m.commitBranch = msg.info.Branch
+		m.commitDiffPreview = nil
+		m.commitDrawerActionFocused = false
+		m.layout = layoutSnap{}
+		return m, nil
+	case commitActionExpiredMsg:
+		if !m.pushPromptUntil.IsZero() && !time.Now().Before(m.pushPromptUntil) {
+			m.pushPromptUntil = time.Time{}
+			m.commitDiffDetailMode = false
+			m.commitDiffDetailPath = ""
+			m.commitDiffHunks = nil
+			m.commitDiffHunkSelected = 0
+			m.commitDiffHunkContextMode = false
+			m.commitDrawerActionFocused = false
+			m.layout = layoutSnap{}
+		}
+		return m, nil
 	case tipsTickMsg:
 		m.tipsIndex++
 		return m, tipsTick()
 	case modelsMsg:
 		m.models = msg.list
+		if msg.defaults != nil {
+			m.modelDefaults = msg.defaults
+		}
 		if len(msg.infos) > 0 {
 			m.modelInfos = msg.infos
+			if m.projectSettings.EffectiveProvider() == provider.IDCodex && msg.err == nil {
+				settingsChanged := false
+				if m.model != "" {
+					if _, ok := m.selectedModelInfo(m.model); !ok {
+						m.model = ""
+						settingsChanged = true
+					}
+				}
+				if model := m.projectSettings.Model.Default; model != "" {
+					if _, ok := m.selectedModelInfo(model); !ok {
+						m.projectSettings.Model.Default = ""
+						settingsChanged = true
+					}
+				}
+				if m.model == "" && m.client != nil {
+					if model := m.client.Model(); model != "" {
+						if _, ok := m.selectedModelInfo(model); ok {
+							m.model = model
+							m.projectSettings.Model.Default = model
+							if m.variant == "" {
+								if variant := clientDefaultVariant(m.client); m.modelHasVariant(model, variant) {
+									m.variant = variant
+									m.projectSettings.Model.Variant = variant
+								}
+							}
+							m.syncSessionModel()
+							m.syncSessionVariant()
+							settingsChanged = true
+						}
+					}
+				}
+				if settingsChanged {
+					m = m.persistSettings()
+				}
+			}
 			m.recomputeSessionCost()
 			if m.session != nil {
 				m = m.reloadSubagentRows()
@@ -725,6 +1027,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.modelsErr = msg.err.Error()
 		}
 		if m.pickerMode && m.pickerKind == pickerKindSkills {
+			m.applyFilter()
+		}
+		return m, nil
+	case toolsMsg:
+		m.toolsScanning = false
+		m.toolCatalog = msg.catalog
+		snapshot := make(map[string]toolplugin.Tool, len(msg.catalog.Tools))
+		for _, descriptor := range msg.catalog.Tools {
+			snapshot[descriptor.Name] = descriptor.Plugin()
+		}
+		_ = toolplugin.ReplaceDiscovered(snapshot)
+		if msg.err != nil {
+			m.modelsErr = msg.err.Error()
+		}
+		if m.pickerMode && m.pickerKind == pickerKindTools {
+			m.applyFilter()
+		}
+		return m, nil
+	case rolesMsg:
+		m.rolesScanning = false
+		m.roleCatalog = msg.catalog
+		if msg.err != nil {
+			m.modelsErr = msg.err.Error()
+		}
+		if m.pickerMode && m.pickerKind == pickerKindRoles {
 			m.applyFilter()
 		}
 		return m, nil
@@ -788,6 +1115,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m = m.resizeSubagentDrawer()
 			}
 		}
+		if m.commitDiffDetailMode {
+			m = m.resizeCommitDiffDetail()
+		}
 		return m, nil
 	case tea.PasteMsg:
 		// Full-screen sub-agent log keeps paste blocked; the list drawer does not.
@@ -836,6 +1166,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if m.commitDiffDetailMode {
+			return m.handleCommitDiffDetailKey(msg)
+		}
 		if isUndoKey(msg) && !m.confirmMode && !m.pickerMode && !m.sessionPickerMode && !m.subagentPickerMode {
 			return m.undoPrompt(), nil
 		}
@@ -843,6 +1176,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.openSessionPicker(), nil
 		}
 		switch m.currentFocus() {
+		case focusProviderDelete:
+			return m.updateProviderDeleteKey(msg)
 		case focusForm:
 			return m.updateFormKey(msg)
 		case focusConfirm:
@@ -873,6 +1208,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.askMode {
 			return m, nil
 		}
+		if m.commitDiffDetailMode {
+			if m.commitDiffHunkContextMode {
+				vp, viewportCmd := m.commitDiffDetailVp.Update(msg)
+				m.commitDiffDetailVp = vp
+				m, timerCmd := m.resetCommitDrawerTimer()
+				return m, tea.Batch(viewportCmd, timerCmd)
+			}
+			delta := 1
+			if msg.Mouse().Button == tea.MouseWheelUp {
+				delta = -1
+			}
+			return m.navigateCommitDiffHunk(delta)
+		}
 		if m.sessionPickerMode {
 			vp, _ := m.sessionVp.Update(msg)
 			m.sessionVp = vp
@@ -891,6 +1239,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			vp, _ := m.subagentLogVp.Update(msg)
 			m.subagentLogVp = vp
+			return m, nil
+		}
+		if m.commitDrawerVisible() && m.pointerInCommitDrawer(msg.Mouse().Y) {
+			if msg.Mouse().Y < m.commitDrawerTop()+1 {
+				return m, nil
+			}
+			delta := 1
+			if strings.Contains(msg.String(), "up") || msg.Button == tea.MouseWheelUp {
+				delta = -1
+			}
+			files := m.commitDrawerFiles()
+			if len(files) > 0 {
+				next := m.commitDrawerSelected + delta
+				if next < 0 {
+					next = 0
+				}
+				if next >= len(files) {
+					next = len(files) - 1
+				}
+				m.commitDrawerSelected = next
+				nm, cmd := m.resetCommitDrawerTimer()
+				m = nm
+				return m, cmd
+			}
 			return m, nil
 		}
 		// Drawer open: wheel over the drawer scrolls the list; wheel over the
@@ -919,6 +1291,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.mousePress(msg)
 	case tea.MouseMotionMsg:
 		if m.askMode {
+			return m, nil
+		}
+		if m.commitDiffDetailMode {
 			return m, nil
 		}
 		if m.settingsMode {
@@ -1014,6 +1389,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+type defaultVariantClient interface {
+	DefaultVariant() string
+}
+
+func clientDefaultVariant(client provider.Client) string {
+	if configured, ok := client.(defaultVariantClient); ok {
+		return configured.DefaultVariant()
+	}
+	return ""
+}
+
 func (m Model) applyEvent(ev agent.Event) Model {
 	switch ev.Kind {
 	case agent.EventSessionCreated:
@@ -1058,6 +1444,9 @@ func (m Model) applyEvent(ev agent.Event) Model {
 		m = m.noteActivityFromPart(ev.Part)
 	case agent.EventTool:
 		m.applyTool(ev)
+		if ev.Tool.Status == "error" || ev.Tool.Status == "denied" {
+			m.turnToolErrors++
+		}
 		m.activity = toolActivity(ev.Tool)
 		// On task tool events: open drawer only when a new job appears.
 		if ev.Tool.Name == "task" || strings.HasPrefix(ev.Tool.Name, "task_") {
@@ -1143,6 +1532,7 @@ func (m Model) ensureSession(title string) Model {
 	sess, err := m.store.CreateSession(context.Background(), db.Session{
 		Title:     title,
 		Directory: m.workdir,
+		Provider:  m.projectSettings.EffectiveProvider(),
 		Model:     m.model,
 		Variant:   variantPtr,
 	})
@@ -1173,6 +1563,8 @@ func (m Model) finishTurn(err error) Model {
 	m.compacting = false
 	m.pendingUser = ""
 	m.turnHasNewUser = false
+	m.turnToolErrors = 0
+	m.pushPromptBusy = false
 	m.pending = nil
 	m.pendingAsk = nil
 	m.activeSkills = nil
@@ -1458,21 +1850,58 @@ func (m Model) modelLabel() string {
 	return label
 }
 
-// modelEndpoint is the chat-completions URL for the selected model.
-// models.json is the source of truth; free models without a stored
-// endpoint fall back to the Zen sibling of the Go client base.
+// modelEndpoint is the provider endpoint for the selected model. Cached
+// OpenCode rows are re-derived so a stale chat-completions cache entry cannot
+// bypass a model's current protocol route.
 func (m Model) modelEndpoint() string {
 	id := m.model
 	if id == "" && m.client != nil {
 		id = m.client.Model()
 	}
-	if ep := modelscache.EndpointOf(m.modelInfos, id); ep != "" {
-		return ep
+	if info, ok := m.selectedModelInfo(id); ok {
+		if endpoint := canonicalModelEndpoint(m.client, info); endpoint != "" {
+			return endpoint
+		}
 	}
 	if m.client == nil {
 		return ""
 	}
-	return opencode.ChatURLForModel(m.client.BaseURL(), id)
+	return fallbackModelEndpoint(m.client.BaseURL(), id)
+}
+
+func (m Model) modelEndpointFor(id string) string {
+	if info, ok := m.selectedModelInfo(id); ok {
+		if endpoint := canonicalModelEndpoint(m.client, info); endpoint != "" {
+			return endpoint
+		}
+	}
+	if m.client == nil {
+		return ""
+	}
+	if id == "" {
+		id = m.client.Model()
+	}
+	if id != "" {
+		return fallbackModelEndpoint(m.client.BaseURL(), id)
+	}
+	return ""
+}
+
+func canonicalModelEndpoint(client provider.Client, info modelscache.Info) string {
+	if info.Endpoint != "" {
+		return info.Endpoint
+	}
+	if client == nil {
+		return ""
+	}
+	return fallbackModelEndpoint(client.BaseURL(), info.ID)
+}
+
+func fallbackModelEndpoint(base, id string) string {
+	if modelscache.IsFree(modelscache.Info{ID: id}) {
+		return opencode.RouteForModel(base, id).Endpoint
+	}
+	return opencode.ChatURL(base)
 }
 
 func (m Model) modelChipLabel() string {
@@ -1502,13 +1931,18 @@ func (m Model) updateAskKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 		return m.closeDone(), tea.Quit
 	}
 	opts := m.askQuestion.Options
+	// Include the hard-coded custom option as an extra selectable row
+	total := len(opts) + 1
 	switch key.Code {
 	case tea.KeyEscape, 'q', 'Q':
 		return m.resolveAskIndex(-1), nil
 	case tea.KeyEnter:
+		if m.askCursor == len(opts) {
+			return m.openAskCustomForm()
+		}
 		return m.resolveAskIndex(m.askCursor), nil
 	case 'j', tea.KeyDown:
-		if m.askCursor < len(opts)-1 {
+		if m.askCursor < total-1 {
 			m.askCursor++
 		}
 		return m, nil
@@ -1523,8 +1957,68 @@ func (m Model) updateAskKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 		if idx >= 0 && idx < len(opts) {
 			return m.resolveAskIndex(idx), nil
 		}
+		if idx == len(opts) {
+			return m.openAskCustomForm()
+		}
 	}
 	return m, nil
+}
+
+func (m Model) openAskCustomForm() (Model, tea.Cmd) {
+	var text string
+	input := huh.NewInput().
+		Title("Type your own answer here").
+		Description("This will be sent to the LLM instead of the canned options").
+		Placeholder("Your custom answer...").
+		Value(&text).
+		Validate(func(s string) error {
+			if strings.TrimSpace(s) == "" {
+				return fmt.Errorf("answer cannot be empty")
+			}
+			return nil
+		})
+	form := huh.NewForm(huh.NewGroup(input)).
+		WithTheme(formTheme()).
+		WithWidth(min(formOverlayMaxWidth, max(minPaneWidth, m.width-cardBorder)))
+	host := &formHost{
+		form:  form,
+		title: "Custom answer",
+		kind:  "ask-custom",
+		width: min(formOverlayMaxWidth, max(minPaneWidth, m.width-cardBorder)),
+		onDone: func(mod Model) (Model, tea.Cmd) {
+			trimmed := strings.TrimSpace(text)
+			// Append custom answer to both the UI question and the pending ask
+			// so the tool's index validation passes and the LLM receives the
+			// free-form text instead of a canned option.
+			if mod.pendingAsk != nil {
+				mod.pendingAsk.q.Options = append(mod.pendingAsk.q.Options, trimmed)
+				mod.askQuestion.Options = append(mod.askQuestion.Options, trimmed)
+				idx := len(mod.pendingAsk.q.Options) - 1
+				mod = mod.clearFocus(focusForm)
+				return mod.resolveAskIndex(idx), nil
+			}
+			// Fallback: treat as custom index
+			mod.askQuestion.Options = append(mod.askQuestion.Options, trimmed)
+			idx := len(mod.askQuestion.Options) - 1
+			mod = mod.clearFocus(focusForm)
+			return mod.resolveAskIndex(idx), nil
+		},
+		onCancel: func(mod Model) (Model, tea.Cmd) {
+			mod = mod.clearFocus(focusForm)
+			// Restore the ask overlay
+			mod = mod.setFocus(focusAsk)
+			return mod, nil
+		},
+	}
+	// Keep the pending ask alive but hide the ask overlay while the custom
+	// input is shown. The overlayOn dim stays via form overlay.
+	m = m.setFocus(focusForm)
+	m.formHost = host
+	// Preserve askCursor at custom index so cancel returns to same spot
+	m.askCursor = len(m.askQuestion.Options)
+	cmd := form.Init()
+	host.form = form
+	return m, cmd
 }
 
 func (m Model) updateHelpKey(key tea.KeyPressMsg) (Model, tea.Cmd) {

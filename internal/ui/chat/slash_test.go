@@ -1,6 +1,8 @@
 package chat
 
 import (
+	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 
@@ -8,6 +10,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
+	"github.com/chinmay-sawant/lazykoder/internal/provider"
 )
 
 func TestSlashMenuOpensAndDivides(t *testing.T) {
@@ -21,7 +24,7 @@ func TestSlashMenuOpensAndDivides(t *testing.T) {
 		t.Fatal("slash mode not opened on /")
 	}
 	v := stripANSI(viewText(m))
-	if !strings.Contains(v, "/new") || !strings.Contains(v, "/model") || !strings.Contains(v, "/variant") || !strings.Contains(v, "/help") || !strings.Contains(v, "/resume") || !strings.Contains(v, "/settings") || !strings.Contains(v, "/continue") {
+	if !strings.Contains(v, "/new") || !strings.Contains(v, "/provider") || !strings.Contains(v, "/model") || !strings.Contains(v, "/variant") || !strings.Contains(v, "/help") || !strings.Contains(v, "/resume") || !strings.Contains(v, "/settings") || !strings.Contains(v, "/continue") {
 		t.Errorf("slash menu missing commands: %q", v)
 	}
 	if strings.Contains(v, "/sessions") {
@@ -35,6 +38,123 @@ func TestSlashMenuOpensAndDivides(t *testing.T) {
 	}
 	if !strings.Contains(v, "start a new session") {
 		t.Errorf("slash menu missing selected description: %q", v)
+	}
+}
+
+func TestSlashProviderPickerSelectsParentProvider(t *testing.T) {
+	t.Setenv("OPENCODE_API_KEY", "")
+	t.Setenv("OPENCODE_ZEN_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("XAI_API_KEY", "")
+	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
+	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
+	for _, r := range "/provider" {
+		m = typeRune(m, r)
+	}
+	if !m.slashMode || len(m.slashItems) != 1 || m.slashItems[0].name != "/provider" {
+		t.Fatalf("provider slash items = %+v", m.slashItems)
+	}
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !m.pickerMode || m.pickerKind != pickerKindProvider {
+		t.Fatalf("provider picker state = mode=%v kind=%q", m.pickerMode, m.pickerKind)
+	}
+	v := stripANSI(m.pickerView())
+	for _, label := range []string{"OpenCode", "OpenAI", "Grok", "Codex", "xAI"} {
+		if !strings.Contains(v, label) {
+			t.Fatalf("provider picker missing %q: %q", label, v)
+		}
+	}
+	m, _ = m.selectPickerItem(1)
+	if m.projectSettings.EffectiveProvider() != "openai" {
+		t.Fatalf("selected provider = %q, want openai", m.projectSettings.EffectiveProvider())
+	}
+	if got := m.projectSettings.EffectiveModel(); got != "gpt-4.1-mini" {
+		t.Fatalf("selected provider model = %q, want gpt-4.1-mini", got)
+	}
+	if !strings.Contains(m.err, "OPENAI_API_KEY is not configured") {
+		t.Fatalf("missing-key selection error = %q", m.err)
+	}
+}
+
+func TestProviderPickerDisplaysSelectionAndCredentialState(t *testing.T) {
+	t.Setenv("OPENCODE_API_KEY", "")
+	t.Setenv("OPENCODE_ZEN_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("XAI_API_KEY", "")
+	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
+	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
+	m = m.openProviderPicker()
+	v := stripANSI(m.pickerView())
+	if strings.Contains(v, "available") {
+		t.Fatalf("provider picker claims availability: %q", v)
+	}
+	if !strings.Contains(v, "selected • key missing") {
+		t.Fatalf("selected provider state missing: %q", v)
+	}
+	if !strings.Contains(v, "not selected • key missing") {
+		t.Fatalf("unselected provider state missing: %q", v)
+	}
+	if !strings.Contains(v, "not selected • checking sign-in") {
+		t.Fatalf("subscription provider state missing: %q", v)
+	}
+
+	t.Setenv("OPENAI_API_KEY", "openai-test")
+	m.providerAuthStatus[provider.IDCodex] = provider.AuthStatus{State: provider.AuthStateReady, Label: "signed in"}
+	m.providerAuthStatus[provider.IDGrok] = provider.AuthStatus{State: provider.AuthStateRequired, Label: "sign in required"}
+	m = m.openProviderPicker()
+	v = stripANSI(m.pickerView())
+	if !strings.Contains(v, "not selected • key set") {
+		t.Fatalf("configured unselected provider state missing: %q", v)
+	}
+	if !strings.Contains(v, "not selected • signed in") || !strings.Contains(v, "not selected • sign in required") {
+		t.Fatalf("subscription provider statuses missing: %q", v)
+	}
+}
+
+func TestProviderPickerStartsGrokDeviceLogin(t *testing.T) {
+	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
+	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
+	m.providerAuthStatus[provider.IDGrok] = provider.AuthStatus{State: provider.AuthStateRequired, Label: "sign in required"}
+	var got string
+	m.providerLogin = func(id string) (*exec.Cmd, error) {
+		got = id
+		return exec.Command("true"), nil
+	}
+	m = m.openProviderPicker()
+	index := slices.Index(m.pickerItems, provider.IDGrok)
+	if index < 0 {
+		t.Fatal("Grok picker item missing")
+	}
+	next, command := m.selectPickerItem(index)
+	if command == nil || got != provider.IDGrok || next.providerLoginTarget != provider.IDGrok {
+		t.Fatalf("login state = command:%v provider:%q target:%q", command != nil, got, next.providerLoginTarget)
+	}
+}
+
+func TestProviderLoginCompletionActivatesSubscriptionProvider(t *testing.T) {
+	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
+	client := newClient(fake.srv)
+	m := New(Options{
+		Store: newTestStore(t), Client: client, Workdir: t.TempDir(),
+		NewProviderClient: func(id string) (provider.Client, error) {
+			if id != provider.IDCodex {
+				return client, nil
+			}
+			return client, nil
+		},
+	})
+	m = m.openProviderPicker()
+	m.providerLoginTarget = provider.IDCodex
+	next, command := m.Update(providerAuthMsg{
+		id:     provider.IDCodex,
+		status: provider.AuthStatus{State: provider.AuthStateReady, Label: "signed in"},
+	})
+	m = next.(Model)
+	if command == nil || m.projectSettings.EffectiveProvider() != provider.IDCodex {
+		t.Fatalf("provider activation = provider:%q command:%v", m.projectSettings.EffectiveProvider(), command != nil)
+	}
+	if m.pickerMode {
+		t.Fatal("provider picker stayed open after sign-in")
 	}
 }
 
@@ -119,11 +239,11 @@ func TestSlashMenuFilterAndRunNew(t *testing.T) {
 	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
 	m = typeRune(m, '/')
 	m = typeRune(m, 'm')
-	if len(m.slashItems) != 1 || m.slashItems[0].name != "/model" {
-		t.Fatalf("filtered items = %+v, want only /model", m.slashItems)
+	if len(m.slashItems) != 2 || m.slashItems[0].name != "/model" || m.slashItems[1].name != "/memory" {
+		t.Fatalf("filtered items = %+v, want /model and /memory", m.slashItems)
 	}
-	if v := stripANSI(m.slashView()); strings.Contains(v, "Session") || strings.Contains(v, "Project") || strings.Contains(v, "Help") {
-		t.Errorf("filtered slash view still shows empty groups: %q", v)
+	if v := stripANSI(m.slashView()); strings.Contains(v, "Session") || strings.Contains(v, "Help") || !strings.Contains(v, "Project") {
+		t.Errorf("filtered slash view has incorrect groups: %q", v)
 	}
 	m = upd(m, tea.KeyPressMsg{Code: tea.KeyEscape})
 	if m.slashMode {
@@ -134,8 +254,8 @@ func TestSlashMenuFilterAndRunNew(t *testing.T) {
 	}
 
 	m = typeRune(m, 'm')
-	if !m.slashMode || len(m.slashItems) != 1 || m.slashItems[0].name != "/model" {
-		t.Fatalf("menu not reopened with /model filter: %+v", m.slashItems)
+	if !m.slashMode || len(m.slashItems) != 2 || m.slashItems[0].name != "/model" || m.slashItems[1].name != "/memory" {
+		t.Fatalf("menu not reopened with /model and /memory filter: %+v", m.slashItems)
 	}
 	m = upd(m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	if m.slashMode {

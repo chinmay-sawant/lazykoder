@@ -11,6 +11,7 @@ import (
 	"unicode"
 
 	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
+	"github.com/chinmay-sawant/lazykoder/internal/provider"
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/grep"
 )
@@ -25,9 +26,7 @@ const (
 )
 
 // Client is the narrow direct provider seam used by the hidden worker.
-type Client interface {
-	Chat(context.Context, opencode.ChatRequest) (*opencode.ChatResponse, error)
-}
+type Client = provider.ChatClient
 
 // Worker performs one no-tools recap request. It does not create a session,
 // persist provider rows, or emit normal agent events.
@@ -52,6 +51,9 @@ func NewWorker(client Client, model string, info modelscache.Info, variant strin
 
 // Generate calls the configured model and validates its strict JSON envelope.
 func (w Worker) Generate(ctx context.Context, snapshot Snapshot, relatedAvoid string) (Envelope, error) {
+	if err := requireContext(ctx); err != nil {
+		return Envelope{}, err
+	}
 	if w.Client == nil {
 		return Envelope{}, errors.New("recap: worker client is required")
 	}
@@ -60,9 +62,6 @@ func (w Worker) Generate(ctx context.Context, snapshot Snapshot, relatedAvoid st
 	}
 	if len(snapshot.Messages) < minimumMessageCount {
 		return Envelope{}, ErrInsufficientMessages
-	}
-	if ctx == nil {
-		ctx = context.Background()
 	}
 	prompt, err := buildPrompt(snapshot, relatedAvoid)
 	if err != nil {
@@ -141,25 +140,45 @@ func buildPrompt(snapshot Snapshot, relatedAvoid string) (string, error) {
 // are intentionally ignored because this lookup must never delay the parent
 // turn or prevent a recap from being generated.
 func RelatedAvoid(ctx context.Context, workdir string, snapshot Snapshot, runner *grep.Runner) (string, error) {
+	return relatedEvidence(ctx, workdir, snapshot, runner, relatedSearchOptions{
+		paths: []string{"knowledge-base/recaps/things-to-avoid"},
+	})
+}
+
+type relatedSearchOptions struct {
+	paths           []string
+	caseInsensitive bool
+	skipNoMatches   bool
+}
+
+func relatedEvidence(ctx context.Context, workdir string, snapshot Snapshot, runner *grep.Runner, opts relatedSearchOptions) (string, error) {
+	if err := requireContext(ctx); err != nil {
+		return "", err
+	}
 	pattern := relatedPattern(snapshot)
 	if pattern == "" {
 		return "", nil
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	searchCtx, cancel := context.WithTimeout(ctx, relatedAvoidTimeout)
 	defer cancel()
-	result, err := grep.Run(searchCtx, workdir, grep.Options{
-		Pattern:    pattern,
-		Path:       "knowledge-base/recaps/things-to-avoid",
-		Glob:       "*.md",
-		MaxMatches: maxRelatedMatches,
-	}, runner)
-	if err != nil {
-		return "", nil
+	for _, path := range opts.paths {
+		result, err := grep.Run(searchCtx, workdir, grep.Options{
+			Pattern:         pattern,
+			Path:            path,
+			Glob:            "*.md",
+			CaseInsensitive: opts.caseInsensitive,
+			MaxMatches:      maxRelatedMatches,
+		}, runner)
+		if err != nil {
+			continue
+		}
+		output := strings.TrimSpace(result.Output)
+		if opts.skipNoMatches && (output == "" || output == "no matches") {
+			continue
+		}
+		return truncateString(result.Output, maxRelatedOutput), nil
 	}
-	return truncateString(result.Output, maxRelatedOutput), nil
+	return "", nil
 }
 
 func relatedPattern(snapshot Snapshot) string {

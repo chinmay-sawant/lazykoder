@@ -16,16 +16,6 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 )
 
-func TestChildSubagentHostRespectsDepth(t *testing.T) {
-	if childSubagentHost(Job{Depth: 1, MaxDepth: 1}) != nil {
-		t.Fatal("Host must be nil when Depth >= MaxDepth")
-	}
-	// Nesting Host factory is not shipped; still nil when may-spawn is true.
-	if childSubagentHost(Job{Depth: 1, MaxDepth: 2}) != nil {
-		t.Fatal("nested Host not implemented; want nil")
-	}
-}
-
 func TestAgentRunnerCreatesChildSession(t *testing.T) {
 	st := openStore(t)
 	var mu sync.Mutex
@@ -38,7 +28,7 @@ func TestAgentRunnerCreatesChildSession(t *testing.T) {
 		body := map[string]any{
 			"choices": []any{map[string]any{
 				"message": map[string]any{
-					"content":      "explored the tree",
+					"content":       "explored the tree",
 					"finish_reason": "stop",
 				},
 			}},

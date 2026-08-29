@@ -32,8 +32,8 @@ func TestAskDialogWrapsQuestionAndOptions(t *testing.T) {
 		}
 	}
 	_, _, lines, spans := m.askOverlayLines()
-	if len(spans) != 2 || spans[0].end-spans[0].start < 2 {
-		t.Fatalf("option wrapping spans = %#v, lines=%d", spans, len(lines))
+	if len(spans) != 3 || spans[0].end-spans[0].start < 2 {
+		t.Fatalf("option wrapping spans = %#v, lines=%d (expected 2 options + custom)", spans, len(lines))
 	}
 }
 

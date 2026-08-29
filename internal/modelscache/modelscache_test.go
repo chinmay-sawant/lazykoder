@@ -30,8 +30,12 @@ func TestSaveLoadRoundtrip(t *testing.T) {
 	if models[0].Endpoint != "https://opencode.ai/zen/go/v1/chat/completions" {
 		t.Errorf("endpoint = %q", models[0].Endpoint)
 	}
-	if EndpointOf(models, "deepseek-v4-flash") == "" || EndpointOf(models, "missing") != "" {
-		t.Errorf("EndpointOf = %q / %q", EndpointOf(models, "deepseek-v4-flash"), EndpointOf(models, "missing"))
+	info, found := InfoOf(models, "deepseek-v4-flash")
+	if !found || info.Endpoint == "" {
+		t.Fatalf("saved model endpoint = %+v, found=%t", info, found)
+	}
+	if _, found := InfoOf(models, "missing"); found {
+		t.Fatal("missing model unexpectedly found")
 	}
 	if !fresh {
 		t.Error("fresh = false, want true within TTL")
@@ -45,8 +49,24 @@ func TestProviderFromEndpoint(t *testing.T) {
 	if got := ProviderFromEndpoint("https://opencode.ai/zen/v1/chat/completions", "deepseek-v4-flash-free"); got != ProviderOpenCodeZen {
 		t.Fatalf("zen = %q", got)
 	}
+	if got := ProviderFromEndpoint("cli://grok/chat/completions", "grok-4.6"); got != "grok" {
+		t.Fatalf("grok = %q", got)
+	}
 	if got := ProviderOf(nil, "deepseek-v4-flash-free"); got != ProviderOpenCodeZen {
 		t.Fatalf("free fallback = %q", got)
+	}
+}
+
+func TestMergeByIDKeepsSameModelIDAcrossProviders(t *testing.T) {
+	got := MergeByID(
+		[]Info{{ID: "gpt-5.6-luna", Provider: "codex"}},
+		[]Info{{ID: "gpt-5.6-luna", Provider: ProviderOpenCodeGo}},
+	)
+	if len(got) != 2 {
+		t.Fatalf("merged rows = %d, want 2: %+v", len(got), got)
+	}
+	if got[0].Provider != "codex" || got[1].Provider != ProviderOpenCodeGo {
+		t.Fatalf("merged providers = %q, %q", got[0].Provider, got[1].Provider)
 	}
 }
 

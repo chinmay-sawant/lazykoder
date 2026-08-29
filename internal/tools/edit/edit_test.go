@@ -57,6 +57,13 @@ func TestRunUniqueReplace(t *testing.T) {
 	}
 }
 
+func TestUnifiedDiffDoesNotAddTrailingContextRow(t *testing.T) {
+	got := UnifiedDiff("old\n", "new\n")
+	if strings.HasSuffix(strings.TrimSuffix(got, "\n"), " ") {
+		t.Fatalf("UnifiedDiff() added a synthetic trailing context row: %q", got)
+	}
+}
+
 func TestDiffLineNumbersDeepInFile(t *testing.T) {
 	// Regression: unchanged lines before a change used to be skipped without
 	// advancing aPos/bPos, so every deep edit was reported as @@ -1,...

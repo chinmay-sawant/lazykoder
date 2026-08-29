@@ -16,7 +16,8 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/agent"
 	"github.com/chinmay-sawant/lazykoder/internal/db"
 	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
-	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
+	"github.com/chinmay-sawant/lazykoder/internal/orchestrator"
+	"github.com/chinmay-sawant/lazykoder/internal/provider"
 	"github.com/chinmay-sawant/lazykoder/internal/recap"
 	"github.com/chinmay-sawant/lazykoder/internal/settings"
 	"github.com/chinmay-sawant/lazykoder/internal/skills"
@@ -52,12 +53,21 @@ func (m Model) runtimeAsk(prompt string, options []string) (int, error) {
 
 // attachSubMgr boots Manager with store/runner/runtime and optionally recovers jobs.
 func (m Model) attachSubMgr(cfg settings.Settings, recoverJobs bool) Model {
-	runner := subagent.AgentRunner{Store: m.store, Client: m.client}
+	childClient := m.childClient
+	if childClient == nil {
+		childClient = m.client
+	}
+	runner := subagent.AgentRunner{
+		Store:    m.store,
+		Client:   childClient,
+		Provider: cfg.EffectiveOrchestrator().Provider,
+	}
 	m.subMgr = subagent.NewManager(subagent.ConfigFromSettings(cfg), runner)
 	rt := subagent.Runtime{
 		Workdir:  m.workdir,
-		Model:    cfg.EffectiveModel(),
-		Variant:  cfg.EffectiveVariant(),
+		Model:    childModel(cfg),
+		Endpoint: m.childModelEndpoint(cfg),
+		Variant:  m.childModelVariant(cfg),
 		Profiles: m.subagentModelProfiles(),
 		Confirm:  m.confirmHook,
 		Ask:      m.runtimeAsk,
@@ -90,25 +100,47 @@ func (m Model) agentOptions() agent.Options {
 	opts := agent.Options{
 		Session:              m.session,
 		MaxSteps:             m.maxSteps,
+		Provider:             m.projectSettings.EffectiveProvider(),
 		Model:                m.model,
 		Endpoint:             m.modelEndpoint(),
-		Variant:              m.variant,
+		Variant:              m.effectiveVariantFor(m.modelLabel(), m.projectSettings.EffectiveProvider(), m.variant),
+		ToolNames:            enabledToolNames(m.projectSettings),
 		Confirm:              m.confirmHook,
 		Ask:                  m.askHook,
 		BashAllowlist:        m.projectSettings.EffectiveAgents().BashAllowlist,
 		BashAllowlistEnabled: m.projectSettings.EffectiveAgents().BashAllowlistEnabled,
-		ContextWindow:        int64(modelscache.ContextOf(m.modelInfos, m.modelLabel())),
+		ContextWindow:        int64(m.modelContext(m.modelLabel())),
 		TokensUsed:           m.tokensUsed,
 		OutgoingModel:        m.prevModel,
 		OutgoingWindow:       m.prevWindow,
-		OutgoingEndpoint:     modelscache.EndpointOf(m.modelInfos, m.prevModel),
+		OutgoingEndpoint:     m.modelEndpointFor(m.prevModel),
 		CompactAuto:          cfg.Auto,
 		CompactPercent:       cfg.Percent,
 		KeepTokens:           cfg.KeepTokens,
 		CompactReason:        m.pendingCompactReason,
+		Orchestrator: orchestrator.Config{
+			Enabled:          m.projectSettings.EffectiveAgents().Enabled && m.projectSettings.EffectiveOrchestrator().Enabled,
+			Review:           m.projectSettings.EffectiveOrchestrator().Review,
+			Model:            m.model,
+			Endpoint:         m.modelEndpoint(),
+			MaxSubtasks:      orchestrator.MaxSubtasks,
+			ModelClassByRole: m.projectSettings.EffectiveOrchestrator().ModelClassByRole,
+			ExploreClass:     m.projectSettings.EffectiveOrchestrator().ExploreClass,
+			PlanClass:        m.projectSettings.EffectiveOrchestrator().PlanClass,
+			GeneralClass:     m.projectSettings.EffectiveOrchestrator().GeneralClass,
+		},
+	}
+	opts.ToolProvider = func(_ context.Context, _, _ string) ([]string, error) {
+		return enabledToolNames(m.projectSettings), nil
+	}
+	opts.RoleProvider = func(_ context.Context, _, _ string) (string, error) {
+		return m.projectSettings.EffectiveAgents().DefaultRole, nil
 	}
 	if m.projectSettings.EffectiveRecap().Enabled {
 		opts.Recall = m.recall
+	}
+	if m.memoryInjectionEnabled {
+		opts.Memory = m.memoryProvider
 	}
 	if m.projectSettings.EffectiveSkills().Enabled {
 		opts.Skills = m.skillProvider
@@ -123,6 +155,16 @@ func (m Model) agentOptions() agent.Options {
 	}
 	opts.Host = host
 	return opts
+}
+
+func enabledToolNames(s settings.Settings) []string {
+	enabled := s.EffectiveTools().Enabled
+	names := make([]string, 0, len(enabled))
+	for name := range enabled {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // skillProvider discovers approved roots and reads only the selected,
@@ -228,7 +270,7 @@ func (m Model) recall(ctx context.Context, _ string, userText string) (string, e
 		{label: "MEMORY", path: "knowledge-base/memories.md", cap: maxMemoryRecall, valid: true},
 		{label: "RECAP", path: "knowledge-base/recaps", cap: maxRecallOutput},
 	}
-	for index, source := range sources {
+	for _, source := range sources {
 		if source.valid {
 			if _, err := recap.ReadMemoryDocument(m.workdir); err != nil {
 				continue
@@ -245,7 +287,7 @@ func (m Model) recall(ctx context.Context, _ string, userText string) (string, e
 			continue
 		}
 		parts = append(parts, source.label+"\n"+truncateRecall(result.Output, source.cap))
-		if index == 0 {
+		if source.label == "MEMORY" {
 			return truncateRecall(strings.Join(parts, "\n\n"), maxRecallOutput), nil
 		}
 	}
@@ -259,6 +301,19 @@ func (m Model) recall(ctx context.Context, _ string, userText string) (string, e
 		}, nil)
 		if err == nil && strings.TrimSpace(result.Output) != "" && strings.TrimSpace(result.Output) != "no matches" {
 			parts = append(parts, "KNOWLEDGE-BASE\n"+truncateRecall(result.Output, maxRecallOutput))
+		}
+	}
+	if len(parts) == 0 && m.client != nil {
+		selected, selectErr := recap.SelectRecapContext(
+			searchCtx,
+			m.client,
+			m.projectSettings.EffectiveRecap().Model,
+			m.recapModelInfo(m.projectSettings.EffectiveRecap().Model),
+			userText,
+			m.workdir,
+		)
+		if selectErr == nil && strings.TrimSpace(selected) != "" {
+			parts = append(parts, "RECAP\n"+selected)
 		}
 	}
 	return truncateRecall(strings.Join(parts, "\n\n"), maxRecallOutput), nil
@@ -335,13 +390,21 @@ func (m Model) wireSubMgrRuntime() {
 	if m.subMgr == nil {
 		return
 	}
-	m.subMgr.SetRunner(subagent.AgentRunner{Store: m.store, Client: m.client})
+	childClient := m.childClient
+	if childClient == nil {
+		childClient = m.client
+	}
+	m.subMgr.SetRunner(subagent.AgentRunner{
+		Store:    m.store,
+		Client:   childClient,
+		Provider: m.projectSettings.EffectiveOrchestrator().Provider,
+	})
 	m.subMgr.SetStore(m.store)
 	m.subMgr.SetRuntime(subagent.Runtime{
 		Workdir:  m.workdir,
-		Model:    m.model,
-		Endpoint: m.modelEndpoint(),
-		Variant:  m.variant,
+		Model:    childModel(m.projectSettings),
+		Endpoint: m.childModelEndpoint(m.projectSettings),
+		Variant:  m.childModelVariant(m.projectSettings),
 		Profiles: m.subagentModelProfiles(),
 		Confirm:  m.confirmHook,
 		Ask:      m.runtimeAsk,
@@ -381,8 +444,17 @@ func (m Model) explicitSkillContexts(ctx context.Context) []skills.Context {
 }
 
 func (m Model) subagentModelProfiles() []subagent.ModelProfile {
-	profiles := make([]subagent.ModelProfile, 0, len(m.modelInfos))
-	for _, info := range m.modelInfos {
+	childProvider := m.projectSettings.EffectiveOrchestrator().Provider
+	infos := modelInfosForProvider(m.modelInfos, childProvider)
+	if len(infos) == 0 {
+		for _, info := range m.modelInfos {
+			if providerIDForModelInfo(info) == "" {
+				infos = append(infos, info)
+			}
+		}
+	}
+	profiles := make([]subagent.ModelProfile, 0, len(infos))
+	for _, info := range infos {
 		profiles = append(profiles, subagent.ModelProfile{
 			ID:            info.ID,
 			Endpoint:      info.Endpoint,
@@ -391,6 +463,35 @@ func (m Model) subagentModelProfiles() []subagent.ModelProfile {
 		})
 	}
 	return profiles
+}
+
+func childModel(cfg settings.Settings) string {
+	if model := strings.TrimSpace(cfg.EffectiveAgents().ModelOverride); model != "" {
+		return model
+	}
+	return provider.DefaultModel(cfg.EffectiveOrchestrator().Provider)
+}
+
+func (m Model) childModelVariant(cfg settings.Settings) string {
+	a := cfg.EffectiveAgents()
+	providerID := cfg.EffectiveOrchestrator().Provider
+	return m.effectiveVariantFor(childModel(cfg), providerID, a.ModelVariant)
+}
+
+func (m Model) childModelEndpoint(cfg settings.Settings) string {
+	model := childModel(cfg)
+	if info, ok := m.modelInfoForProvider(model, cfg.EffectiveOrchestrator().Provider); ok {
+		if endpoint := canonicalModelEndpoint(m.childClient, info); endpoint != "" {
+			return endpoint
+		}
+	}
+	if model == m.model && m.client != nil && (m.childClient == nil || m.childClient.BaseURL() == m.client.BaseURL()) {
+		return m.modelEndpoint()
+	}
+	if m.childClient == nil {
+		return ""
+	}
+	return fallbackModelEndpoint(m.childClient.BaseURL(), model)
 }
 
 // startTurn arms channels, builds the Agent, and returns watch/pulse cmds.
@@ -508,7 +609,7 @@ func (m Model) scheduleRecap() tea.Cmd {
 			_ = store.CancelRecap(ctx, record.ID)
 			return recapDoneMsg{}
 		}
-		worker := recap.NewWorker(client, model, info, "")
+		worker := recap.NewWorker(client, model, info, m.effectiveVariantFor(model, m.projectSettings.EffectiveProvider(), ""))
 		_, _ = recap.Run(ctx, recap.RunInput{
 			Store:    store,
 			Record:   record,
@@ -531,9 +632,9 @@ func (m Model) scheduleMemoryUpdate() tea.Cmd {
 		return nil
 	}
 	sessionID := m.session.ID
-	model := recapCfg.Model
-	if !recapCfg.Enabled {
-		model = m.projectSettings.EffectiveModel()
+	model := m.memoryWorkerModel()
+	if model == "" {
+		return nil
 	}
 	workdir, err := filepath.Abs(m.workdir)
 	if err != nil {
@@ -543,6 +644,7 @@ func (m Model) scheduleMemoryUpdate() tea.Cmd {
 	store := m.store
 	client := m.client
 	info := m.recapModelInfo(model)
+	snapshotStarted := time.Now()
 	snapshot, snapshotErr := recap.BuildSnapshot(context.Background(), store, sessionID, recap.SnapshotOptions{
 		MinimumMessageCount: recap.MemoryMinimumMessageCount,
 	})
@@ -555,6 +657,7 @@ func (m Model) scheduleMemoryUpdate() tea.Cmd {
 			snapshotErr = nil
 		}
 	}
+	snapshotDuration := time.Since(snapshotStarted)
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), recapTimeout)
 		defer cancel()
@@ -597,18 +700,41 @@ func (m Model) scheduleMemoryUpdate() tea.Cmd {
 		if workerModel != model {
 			workerInfo = m.recapModelInfo(workerModel)
 		}
-		worker := recap.NewMemoryWorker(client, workerModel, workerInfo, "")
+		worker := recap.NewMemoryWorker(client, workerModel, workerInfo, m.effectiveVariantFor(workerModel, m.projectSettings.EffectiveProvider(), ""))
 		runErr := recap.RunMemoryUpdate(ctx, recap.MemoryRunInput{
-			Store:           store,
-			Record:          record,
-			Snapshot:        snapshot,
-			Workdir:         workdir,
-			Worker:          worker,
-			SkillReferences: append([]recap.MemorySkillReference{}, m.pendingSkillRefs...),
-			Enabled:         func() bool { return memoryEnabledAtPath(settingsPath) },
+			Store:            store,
+			Record:           record,
+			Snapshot:         snapshot,
+			Workdir:          workdir,
+			Worker:           worker,
+			SkillReferences:  append([]recap.MemorySkillReference{}, m.pendingSkillRefs...),
+			Enabled:          func() bool { return memoryEnabledAtPath(settingsPath) },
+			SnapshotDuration: snapshotDuration,
 		})
 		return memoryDoneMsg{err: runErr}
 	}
+}
+
+func (m Model) memoryWorkerModel() string {
+	if recap := m.projectSettings.EffectiveRecap(); recap.Enabled {
+		if model := strings.TrimSpace(recap.Model); model != "" {
+			return model
+		}
+	}
+	candidates := []string{m.model}
+	if m.session != nil {
+		candidates = append(candidates, m.session.Model)
+	}
+	if m.client != nil {
+		candidates = append(candidates, m.client.Model())
+	}
+	candidates = append(candidates, m.projectSettings.EffectiveModel())
+	for _, candidate := range candidates {
+		if model := strings.TrimSpace(candidate); model != "" {
+			return model
+		}
+	}
+	return ""
 }
 
 func recapEnabledAtPath(settingsPath string) bool {
@@ -663,7 +789,7 @@ func (m Model) recoverRecaps() tea.Msg {
 			_ = m.store.FailRecap(ctx, record.ID, "source snapshot unavailable: "+err.Error())
 			continue
 		}
-		worker := recap.NewWorker(m.client, record.Model, m.recapModelInfo(record.Model), "")
+		worker := recap.NewWorker(m.client, record.Model, m.recapModelInfo(record.Model), m.effectiveVariantFor(record.Model, m.projectSettings.EffectiveProvider(), ""))
 		_, _ = recap.Run(ctx, recap.RunInput{
 			Store:    m.store,
 			Record:   record,
@@ -700,36 +826,37 @@ func (m Model) recoverMemoryUpdates() tea.Msg {
 			}
 			update.Status = db.MemoryUpdateStatusQueued
 		}
+		snapshotStarted := time.Now()
 		snapshot, err := recap.BuildSnapshot(ctx, m.store, update.SourceSessionID, recap.SnapshotOptions{
 			AnchorMessageID:     update.SourceEndMessageID,
 			MinimumMessageCount: recap.MemoryMinimumMessageCount,
 		})
+		snapshotDuration := time.Since(snapshotStarted)
 		if err != nil {
 			_ = m.store.FailMemoryUpdate(ctx, update.ID, "source snapshot unavailable: "+err.Error())
 			continue
 		}
-		worker := recap.NewMemoryWorker(m.client, update.Model, m.recapModelInfo(update.Model), "")
+		worker := recap.NewMemoryWorker(m.client, update.Model, m.recapModelInfo(update.Model), m.effectiveVariantFor(update.Model, m.projectSettings.EffectiveProvider(), ""))
 		_ = recap.RunMemoryUpdate(ctx, recap.MemoryRunInput{
-			Store:    m.store,
-			Record:   update,
-			Snapshot: snapshot,
-			Workdir:  workdir,
-			Worker:   worker,
-			Enabled:  func() bool { return memoryEnabledAtPath(m.settingsPath) },
+			Store:            m.store,
+			Record:           update,
+			Snapshot:         snapshot,
+			Workdir:          workdir,
+			Worker:           worker,
+			Enabled:          func() bool { return memoryEnabledAtPath(m.settingsPath) },
+			SnapshotDuration: snapshotDuration,
 		})
 	}
 	return nil
 }
 
 func (m Model) recapModelInfo(model string) modelscache.Info {
-	for _, info := range m.modelInfos {
-		if info.ID == model {
-			return info
-		}
+	if info, ok := m.selectedModelInfo(model); ok {
+		return info
 	}
 	info := modelscache.Info{ID: model}
 	if m.client != nil {
-		info.Endpoint = opencode.RouteForModel(m.client.BaseURL(), model).Endpoint
+		info.Endpoint = fallbackModelEndpoint(m.client.BaseURL(), model)
 	}
 	return info
 }

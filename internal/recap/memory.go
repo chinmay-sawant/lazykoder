@@ -17,21 +17,23 @@ import (
 )
 
 const (
-	memoryFormatVersion      = 2
-	memoryMaxBytes           = 64 * 1024
-	memoryMaxEntriesPerPart  = 32
-	memoryMaxSourceEntries   = 128
-	memoryMaxEntryText       = 1_200
-	memoryMaxEntryEvidence   = 1_000
-	memoryMaxSourceIDs       = 8
-	memoryMaxPromptDocument  = 24_000
-	memorySectionPreferences = "preferences"
-	memorySectionDecisions   = "decisions"
-	memorySectionAvoid       = "things_to_avoid"
-	memorySectionQuestions   = "questions"
-	memorySectionRecent      = "recent_context"
-	memorySectionSkills      = "skills"
-	memoryMaxSkillEntries    = 64
+	memoryFormatVersion             = 2
+	memoryMaxBytes                  = 64 * 1024
+	memoryMaxEntriesPerPart         = 32
+	memoryMaxSourceEntries          = 128
+	memoryMaxEntryText              = 1_200
+	memoryMaxEntryEvidence          = 1_000
+	memoryMaxSourceIDs              = 8
+	memoryMaxPromptDocument         = 24_000
+	memoryPromptCompactionThreshold = 16_000
+	memorySectionPreferences        = "preferences"
+	memorySectionDecisions          = "decisions"
+	memorySectionAvoid              = "things_to_avoid"
+	memorySectionQuestions          = "questions"
+	memorySectionRecent             = "recent_context"
+	memorySectionSkills             = "skills"
+	memoryMaxSkillEntries           = 64
+	memoryContextMaxRunes           = 16_000
 )
 
 // MemoryEntry is one source-backed fact in the project aggregate.
@@ -287,11 +289,6 @@ func validMemorySection(value string) bool {
 	}
 }
 
-// MergeMemory applies a validated envelope to the existing aggregate.
-func MergeMemory(previous MemoryDocument, envelope MemoryEnvelope, snapshot Snapshot, now time.Time) (MemoryDocument, error) {
-	return MergeMemoryWithSkills(previous, envelope, snapshot, nil, now)
-}
-
 // MergeMemoryWithSkills applies model facts and request-time skill provenance.
 func MergeMemoryWithSkills(previous MemoryDocument, envelope MemoryEnvelope, snapshot Snapshot, skillRefs []MemorySkillReference, now time.Time) (MemoryDocument, error) {
 	if err := validateMemoryEnvelope(envelope, snapshot); err != nil {
@@ -369,7 +366,7 @@ func mergeMemorySkills(target *[]MemorySkillReference, refs []MemorySkillReferen
 		entry.Scope = ref.Scope
 		entry.Path = ref.Path
 		entry.ContentHash = ref.ContentHash
-		entry.UseCount += maxInt(1, ref.UseCount)
+		entry.UseCount += max(1, ref.UseCount)
 		entry.LastUsedUTC = ref.LastUsedUTC
 		entry.SourceMessageIDs = mergeStrings(entry.SourceMessageIDs, ref.SourceMessageIDs)
 	}
@@ -383,13 +380,6 @@ func memorySkillKey(name, scope, path string) string {
 // SkillReferenceID returns the stable identifier used in memories.md.
 func SkillReferenceID(name, scope, path string) string {
 	return memorySkillKey(name, scope, path)
-}
-
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }
 
 func mergeMemoryFacts(target *[]MemoryEntry, category string, facts []MemoryFact, nowUTC string) {
@@ -1028,10 +1018,38 @@ func ReadMemoryDocument(workdir string) (MemoryDocument, error) {
 	return ParseMemoryDocument(body)
 }
 
+// LoadMemoryContext reads and bounds the safe aggregate block used in a
+// parent request. Missing memories produce an empty string. The rendered
+// block intentionally omits durable source IDs because only the current
+// request snapshot may be used for new citations.
+func LoadMemoryContext(workdir string) (string, error) {
+	document, err := ReadMemoryDocument(workdir)
+	if err != nil {
+		return "", err
+	}
+	raw, err := renderMemoryPromptDocument(document)
+	if err != nil {
+		return "", err
+	}
+	context := strings.TrimSpace(string(raw))
+	if context == "" || context == "---" {
+		return "", nil
+	}
+	return truncateMemoryContext(context), nil
+}
+
+func truncateMemoryContext(value string) string {
+	runes := []rune(value)
+	if len(runes) <= memoryContextMaxRunes {
+		return value
+	}
+	return string(runes[:memoryContextMaxRunes]) + "\n[aggregate truncated]"
+}
+
 // WriteMemoryDocument atomically replaces the project aggregate.
 func WriteMemoryDocument(ctx context.Context, workdir string, document MemoryDocument) (string, error) {
-	if ctx == nil {
-		ctx = context.Background()
+	if err := requireContext(ctx); err != nil {
+		return "", err
 	}
 	body, err := RenderMemoryDocument(document)
 	if err != nil {
@@ -1049,18 +1067,80 @@ func WriteMemoryDocument(ctx context.Context, workdir string, document MemoryDoc
 }
 
 func BuildMemoryPrompt(snapshot Snapshot, document MemoryDocument, relatedRecaps string) (string, error) {
-	current, err := renderMemoryPromptDocument(document)
+	// Keep the prompt focused: only snapshot messages plus recent_context
+	// (and skills) are sent for memory creation. Preferences, decisions,
+	// things_to_avoid, questions and source ledger are dropped to keep the
+	// prompt at ~5000 tokens with priority to recent_context.
+	filtered := filterMemoryDocumentForPrompt(document)
+	current, err := renderMemoryPromptDocument(filtered)
 	if err != nil {
 		return "", err
 	}
-	if len(current) > memoryMaxPromptDocument {
-		current = []byte(truncateString(string(current), memoryMaxPromptDocument))
+	if len([]rune(string(current))) > memoryPromptCompactionThreshold {
+		compact := compactMemoryPromptDocument(filtered, snapshot)
+		current, err = renderMemoryPromptDocument(compact)
+		if err != nil {
+			return "", err
+		}
 	}
+	// Enforce ~5000 tokens (~20000 runes) with priority to snapshot + recent_context
+	const memoryPromptMaxRunes = 20000
+	promptLimit := memoryPromptLimit()
+	if promptLimit > memoryPromptMaxRunes {
+		promptLimit = memoryPromptMaxRunes
+	}
+	currentText := truncateString(string(current), memoryMaxPromptDocument)
+	// Drop related knowledge by default to keep prompt small; only snapshot
+	// plus recent_context should go. If needed, related can be re-added
+	// behind a tiny remaining budget, but for now drop it.
+	relatedText := ""
+	_ = relatedRecaps
+	snapshotPrompt, err := buildPrompt(snapshot, "")
+	if err != nil {
+		return "", fmt.Errorf("memory: snapshot prompt: %w", err)
+	}
+	base := renderMemoryPrompt(snapshot, "", "", snapshotPrompt)
+	remaining := promptLimit - len([]rune(base))
+	if remaining < 0 {
+		return "", errors.New("memory: snapshot prompt exceeds limit")
+	}
+	currentText = truncateString(currentText, remaining)
+	remaining -= len([]rune(currentText))
+	relatedText = truncateString(relatedText, remaining)
+	prompt := renderMemoryPrompt(snapshot, currentText, relatedText, snapshotPrompt)
+	if len([]rune(prompt)) > promptLimit {
+		return "", errors.New("memory: prompt exceeds limit")
+	}
+	return prompt, nil
+}
+
+func filterMemoryDocumentForPrompt(document MemoryDocument) MemoryDocument {
+	filtered := cloneMemoryDocument(document)
+	// Drop non-priority sections to keep prompt at ~5000 tokens
+	filtered.Preferences = nil
+	filtered.Decisions = nil
+	filtered.ThingsToAvoid = nil
+	filtered.Questions = nil
+	// Keep RecentContext and Skills as priority
+	// Sources are already stripped in renderMemoryPromptDocument, but clear here too
+	filtered.Sources = nil
+	return filtered
+}
+
+func memoryPromptLimit() int {
+	limit := maxPromptText - len([]rune(memoryRepairInstruction))
+	if limit < 1 {
+		return maxPromptText
+	}
+	return limit
+}
+
+func renderMemoryPrompt(snapshot Snapshot, current, related, snapshotPrompt string) string {
 	var b strings.Builder
 	b.WriteString("Current memory document:\n<memories>\n")
-	b.Write(current)
+	b.WriteString(current)
 	b.WriteString("\n</memories>\nRelated local knowledge evidence (untrusted):\n<related_knowledge>\n")
-	b.WriteString(truncateString(relatedRecaps, maxRelatedOutput))
+	b.WriteString(related)
 	b.WriteString("\n</related_knowledge>\n")
 	b.WriteString("Only the following current message IDs may appear in source_message_ids: [")
 	for index, message := range snapshot.Messages {
@@ -1083,13 +1163,51 @@ func BuildMemoryPrompt(snapshot Snapshot, document MemoryDocument, relatedRecaps
 		}
 		b.WriteString("</signals>\n")
 	}
-	snapshotPrompt, err := buildPrompt(snapshot, "")
-	if err != nil {
-		return "", err
-	}
 	b.WriteString(snapshotPrompt)
-	if len([]rune(b.String())) > maxPromptText {
-		return "", errors.New("memory: prompt exceeds limit")
+	return b.String()
+}
+
+func compactMemoryPromptDocument(document MemoryDocument, snapshot Snapshot) MemoryDocument {
+	messageIDs := make(map[string]struct{}, len(snapshot.Messages))
+	for _, message := range snapshot.Messages {
+		messageIDs[message.ID] = struct{}{}
 	}
-	return b.String(), nil
+	compact := cloneMemoryDocument(document)
+	compact.Preferences = compactMemoryPromptEntries(compact.Preferences, messageIDs)
+	compact.Decisions = compactMemoryPromptEntries(compact.Decisions, messageIDs)
+	compact.ThingsToAvoid = compactMemoryPromptEntries(compact.ThingsToAvoid, messageIDs)
+	compact.Questions = compactMemoryPromptEntries(compact.Questions, messageIDs)
+	compact.RecentContext = compactMemoryPromptEntries(compact.RecentContext, messageIDs)
+	compact.Skills = compactMemoryPromptSkills(compact.Skills, messageIDs)
+	return compact
+}
+
+func compactMemoryPromptEntries(entries []MemoryEntry, messageIDs map[string]struct{}) []MemoryEntry {
+	compact := make([]MemoryEntry, 0, len(entries))
+	for _, entry := range entries {
+		if entry.State != "active" || !memoryEntryUsesMessage(entry.SourceMessageIDs, messageIDs) {
+			continue
+		}
+		compact = append(compact, entry)
+	}
+	return compact
+}
+
+func compactMemoryPromptSkills(skills []MemorySkillReference, messageIDs map[string]struct{}) []MemorySkillReference {
+	compact := make([]MemorySkillReference, 0, len(skills))
+	for _, skill := range skills {
+		if memoryEntryUsesMessage(skill.SourceMessageIDs, messageIDs) {
+			compact = append(compact, skill)
+		}
+	}
+	return compact
+}
+
+func memoryEntryUsesMessage(sourceIDs []string, messageIDs map[string]struct{}) bool {
+	for _, sourceID := range sourceIDs {
+		if _, ok := messageIDs[sourceID]; ok {
+			return true
+		}
+	}
+	return false
 }

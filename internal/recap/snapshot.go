@@ -85,25 +85,9 @@ type ToolFact struct {
 // the identity tie-breaker; timestamps only determine the one-to-two-hour
 // windows and are preserved as source metadata.
 func BuildSnapshot(ctx context.Context, store *db.Store, sessionID string, opts SnapshotOptions) (Snapshot, error) {
-	if store == nil {
-		return Snapshot{}, errors.New("recap: store is required")
-	}
-	if strings.TrimSpace(sessionID) == "" {
-		return Snapshot{}, errors.New("recap: session id is required")
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	sess, err := store.GetSession(ctx, sessionID)
+	candidates, err := loadSnapshotCandidates(ctx, store, sessionID)
 	if err != nil {
-		return Snapshot{}, fmt.Errorf("recap: get session: %w", err)
-	}
-	if sess.Kind == db.SessionKindSubagent || sess.ParentSessionID != nil {
-		return Snapshot{}, ErrSubagentSession
-	}
-	graph, err := store.LoadSessionGraph(ctx, sessionID)
-	if err != nil {
-		return Snapshot{}, fmt.Errorf("recap: load session graph: %w", err)
+		return Snapshot{}, err
 	}
 	now := opts.Now
 	if now.IsZero() {
@@ -128,10 +112,6 @@ func BuildSnapshot(ctx context.Context, store *db.Store, sessionID string, opts 
 	if opts.MinimumMessageCount > 0 {
 		minimum = opts.MinimumMessageCount
 	}
-	candidates := snapshotCandidates(graph)
-	if len(candidates) == 0 {
-		return Snapshot{}, ErrInsufficientMessages
-	}
 	if opts.AnchorMessageID != "" {
 		anchor, ok := findAnchor(candidates, opts.AnchorMessageID)
 		if !ok {
@@ -147,12 +127,7 @@ func BuildSnapshot(ctx context.Context, store *db.Store, sessionID string, opts 
 		candidates = filtered
 		now = time.UnixMilli(anchor.message.TimeCreated)
 	}
-	sort.SliceStable(candidates, func(i, j int) bool {
-		if candidates[i].message.TimeCreated != candidates[j].message.TimeCreated {
-			return candidates[i].message.TimeCreated > candidates[j].message.TimeCreated
-		}
-		return candidates[i].message.Seq > candidates[j].message.Seq
-	})
+	sortSnapshotCandidates(candidates)
 	selected := selectWindow(candidates, now.Add(-recentWindow).UnixMilli(), limit)
 	if len(selected) < minimum {
 		selected = selectWindow(candidates, now.Add(-maximumWindow).UnixMilli(), limit)
@@ -168,37 +143,49 @@ func BuildSnapshot(ctx context.Context, store *db.Store, sessionID string, opts 
 // durable failed memory attempt so insufficient context is observable and can
 // be retried after the next successful turn.
 func BuildAnchorSnapshot(ctx context.Context, store *db.Store, sessionID string) (Snapshot, error) {
+	candidates, err := loadSnapshotCandidates(ctx, store, sessionID)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	sortSnapshotCandidates(candidates)
+	return makeSnapshot(sessionID, candidates[:1]), nil
+}
+
+func loadSnapshotCandidates(ctx context.Context, store *db.Store, sessionID string) ([]snapshotCandidate, error) {
+	if err := requireContext(ctx); err != nil {
+		return nil, err
+	}
 	if store == nil {
-		return Snapshot{}, errors.New("recap: store is required")
+		return nil, errors.New("recap: store is required")
 	}
 	if strings.TrimSpace(sessionID) == "" {
-		return Snapshot{}, errors.New("recap: session id is required")
-	}
-	if ctx == nil {
-		ctx = context.Background()
+		return nil, errors.New("recap: session id is required")
 	}
 	sess, err := store.GetSession(ctx, sessionID)
 	if err != nil {
-		return Snapshot{}, fmt.Errorf("recap: get session: %w", err)
+		return nil, fmt.Errorf("recap: get session: %w", err)
 	}
 	if sess.Kind == db.SessionKindSubagent || sess.ParentSessionID != nil {
-		return Snapshot{}, ErrSubagentSession
+		return nil, ErrSubagentSession
 	}
 	graph, err := store.LoadSessionGraph(ctx, sessionID)
 	if err != nil {
-		return Snapshot{}, fmt.Errorf("recap: load session graph: %w", err)
+		return nil, fmt.Errorf("recap: load session graph: %w", err)
 	}
 	candidates := snapshotCandidates(graph)
 	if len(candidates) == 0 {
-		return Snapshot{}, ErrInsufficientMessages
+		return nil, ErrInsufficientMessages
 	}
+	return candidates, nil
+}
+
+func sortSnapshotCandidates(candidates []snapshotCandidate) {
 	sort.SliceStable(candidates, func(i, j int) bool {
 		if candidates[i].message.TimeCreated != candidates[j].message.TimeCreated {
 			return candidates[i].message.TimeCreated > candidates[j].message.TimeCreated
 		}
 		return candidates[i].message.Seq > candidates[j].message.Seq
 	})
-	return makeSnapshot(sessionID, candidates[:1]), nil
 }
 
 func findAnchor(candidates []snapshotCandidate, id string) (snapshotCandidate, bool) {
@@ -242,7 +229,7 @@ func snapshotCandidates(graph db.SessionGraph) []snapshotCandidate {
 }
 
 func selectWindow(candidates []snapshotCandidate, cutoff int64, limit int) []snapshotCandidate {
-	selected := make([]snapshotCandidate, 0, minInt(limit, len(candidates)))
+	selected := make([]snapshotCandidate, 0, min(limit, len(candidates)))
 	for _, candidate := range candidates {
 		if candidate.message.TimeCreated < cutoff {
 			continue
@@ -344,11 +331,4 @@ func truncate(value *string, max int) string {
 		return *value
 	}
 	return string(runes[:max])
-}
-
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

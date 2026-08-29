@@ -17,7 +17,12 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
 
-const memoryHistoryPageSize = 20
+const (
+	memoryHistoryPageSize          = 20
+	memoryHistoryTimeFallbackRunes = 18
+	memoryHistoryBodyParts         = 2
+	memoryHistoryDrawerPadding     = 2
+)
 
 type memoryHistoryItem struct {
 	category string
@@ -217,7 +222,7 @@ func memoryHistoryTime(value string) time.Time {
 func formatMemoryHistoryTime(value string) string {
 	parsed := memoryHistoryTime(value)
 	if parsed.IsZero() {
-		return truncateRunes(singleLine(value), 18)
+		return truncateRunes(singleLine(value), memoryHistoryTimeFallbackRunes)
 	}
 	return parsed.Local().Format("2006-01-02 15:04")
 }
@@ -307,9 +312,9 @@ func (m Model) memoryHistoryDrawerView() string {
 	if m.subagentDrawerCompact {
 		return drawerChrome("memory history", meta, "", "enter/click expand  ·  esc close", width)
 	}
-	bodyParts := make([]string, 0, 2)
+	bodyParts := make([]string, 0, memoryHistoryBodyParts)
 	if m.memoryHistoryError != "" {
-		bodyParts = append(bodyParts, errStyle.Width(max(1, width-2)).Render("memory history failed: "+m.memoryHistoryError))
+		bodyParts = append(bodyParts, errStyle.Width(max(1, width-memoryHistoryDrawerPadding)).Render("memory history failed: "+m.memoryHistoryError))
 	}
 	body := hintStyle.Render("no memories from this chat")
 	if len(m.memoryHistoryItems) > 0 {
@@ -336,7 +341,7 @@ func (m Model) memoryHistoryDrawerContent(width int) string {
 		if item.entry.LastSeenUTC == "" {
 			right = formatMemoryUpdateTime(item.update)
 		}
-		b.WriteString(drawerRowLine(left, right, i == m.subagentCursor, width, 2))
+		b.WriteString(drawerRowLine(left, right, i == m.subagentCursor, width, memoryHistoryDrawerPadding))
 	}
 	return b.String()
 }

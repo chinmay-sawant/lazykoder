@@ -8,10 +8,10 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/chinmay-sawant/lazykoder/internal/provider"
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 )
 
@@ -29,7 +29,7 @@ const (
 )
 
 // Info is one cached model: context window, USD per million tokens,
-// selectable reasoning variants, and the chat-completions endpoint to call.
+// selectable reasoning variants, and the provider endpoint to call.
 type Info struct {
 	ID             string   `json:"id"`
 	Provider       string   `json:"provider,omitempty"`
@@ -47,11 +47,6 @@ type Info struct {
 type file struct {
 	FetchedAt int64  `json:"fetched_at"`
 	Models    []Info `json:"models"`
-}
-
-// Path returns the cache file path inside the workspace dir.
-func Path(dir string) string {
-	return filepath.Join(dir, "models.json")
 }
 
 // IDs extracts model ids from a list of Info rows.
@@ -73,22 +68,6 @@ func HasContext(infos []Info) bool {
 	return false
 }
 
-// ContextOf returns the cached context window for id, or 0 if unknown.
-func ContextOf(infos []Info, id string) int {
-	if info, ok := InfoOf(infos, id); ok {
-		return info.Context
-	}
-	return 0
-}
-
-// EndpointOf returns the stored chat-completions URL for id, or an empty value.
-func EndpointOf(infos []Info, id string) string {
-	if info, ok := InfoOf(infos, id); ok {
-		return info.Endpoint
-	}
-	return ""
-}
-
 // ProviderOf returns the stored provider label for id, or a fallback
 // derived from the endpoint or free-model id.
 func ProviderOf(infos []Info, id string) string {
@@ -101,6 +80,31 @@ func ProviderOf(infos []Info, id string) string {
 	return ProviderFromEndpoint("", id)
 }
 
+// CanonicalProvider returns the registry ID for a cached row. Legacy
+// OpenCode route labels and endpoint-derived values are accepted while old
+// caches are migrated.
+func CanonicalProvider(info Info) string {
+	if canonical := provider.Normalize(info.Provider); canonical != "" {
+		if _, ok := provider.DescriptorFor(canonical); ok {
+			return canonical
+		}
+	}
+	switch info.Provider {
+	case ProviderOpenCodeGo, ProviderOpenCodeZen:
+		return provider.IDOpenCode
+	}
+	legacy := ProviderFromEndpoint(info.Endpoint, info.ID)
+	if legacy == ProviderOpenCodeGo || legacy == ProviderOpenCodeZen {
+		return provider.IDOpenCode
+	}
+	if canonical := provider.Normalize(legacy); canonical != "" {
+		if _, ok := provider.DescriptorFor(canonical); ok {
+			return canonical
+		}
+	}
+	return ""
+}
+
 // ProviderFromEndpoint maps a chat URL or free-model id to a provider label.
 func ProviderFromEndpoint(endpoint, id string) string {
 	if endpoint == "" {
@@ -111,6 +115,10 @@ func ProviderFromEndpoint(endpoint, id string) string {
 		return ProviderOpenCodeGo
 	case strings.Contains(endpoint, "/zen/"):
 		return ProviderOpenCodeZen
+	case strings.HasPrefix(endpoint, "cli://codex"):
+		return "codex"
+	case strings.HasPrefix(endpoint, "cli://grok"):
+		return "grok"
 	case id != "":
 		return opencode.RouteForModel(opencode.DefaultBaseURL, id).Provider
 	default:
@@ -147,34 +155,35 @@ func isFreeID(id string) bool {
 	return strings.HasSuffix(id, "-free") || id == "big-pickle"
 }
 
-// HasVariant reports whether id lists variant as a selectable option.
-func HasVariant(infos []Info, id, variant string) bool {
-	info, ok := InfoOf(infos, id)
-	if !ok || variant == "" {
-		return false
-	}
-	for _, name := range info.Variants {
-		if name == variant {
-			return true
-		}
-	}
-	return false
-}
-
-// MergeByID appends extras whose ids are not already in base.
+// MergeByID appends extras whose provider and ids are not already in base.
+// Providers may expose the same model ID, so the provider is part of the
+// identity used for this merge.
 func MergeByID(base, extra []Info) []Info {
 	seen := make(map[string]struct{}, len(base))
 	for _, m := range base {
-		seen[m.ID] = struct{}{}
+		seen[mergeKey(m)] = struct{}{}
 	}
 	out := append([]Info(nil), base...)
 	for _, m := range extra {
-		if _, ok := seen[m.ID]; ok {
+		key := mergeKey(m)
+		if _, ok := seen[key]; ok {
 			continue
 		}
+		seen[key] = struct{}{}
 		out = append(out, m)
 	}
 	return out
+}
+
+func mergeKey(info Info) string {
+	providerID := CanonicalProvider(info)
+	if providerID == "" {
+		providerID = info.Provider
+	}
+	if providerID == "" {
+		providerID = ProviderFromEndpoint(info.Endpoint, info.ID)
+	}
+	return providerID + "\x00" + info.Endpoint + "\x00" + info.ID
 }
 
 // CostUSD estimates USD for a step from token counts and list prices.
@@ -255,6 +264,9 @@ func Save(path string, models []Info, now time.Time) error {
 	saved := make([]Info, len(models))
 	for i, m := range models {
 		saved[i] = markFree(m)
+		if canonical := CanonicalProvider(saved[i]); canonical != "" {
+			saved[i].Provider = canonical
+		}
 	}
 	raw, err := json.MarshalIndent(file{FetchedAt: now.UnixMilli(), Models: saved}, "", "  ")
 	if err != nil {

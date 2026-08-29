@@ -19,6 +19,12 @@ func TestParseModelsDevReadsPricesAndVariants(t *testing.T) {
         "limit": {"context": 200000},
         "cost": {"input": 0, "output": 0, "cache_read": 0},
         "reasoning_options": [{"type": "effort", "values": ["low", "high", "max"]}]
+      },
+      "future-zen-responses-model": {
+        "id": "future-zen-responses-model",
+        "api_format": "responses",
+        "limit": {"context": 100000},
+        "cost": {"input": 1, "output": 2}
       }
     }
   },
@@ -35,6 +41,12 @@ func TestParseModelsDevReadsPricesAndVariants(t *testing.T) {
         "limit": {"context": 1050000},
         "cost": {"input": 0.2, "output": 1.2, "cache_read": 0.02, "cache_write": 0.25},
         "reasoning_options": [{"type": "effort", "values": ["none", "low", "medium", "high", "xhigh", "max"]}]
+      },
+      "future-responses-model": {
+        "id": "future-responses-model",
+        "api_format": "responses",
+        "limit": {"context": 100000},
+        "cost": {"input": 1, "output": 2}
       }
     }
   }
@@ -54,6 +66,9 @@ func TestParseModelsDevReadsPricesAndVariants(t *testing.T) {
 	if luna.CacheWritePerM != 0.25 || !containsID(luna.Variants, "max") || !containsID(luna.Variants, "xhigh") {
 		t.Fatalf("gpt-5.6-luna = %+v", luna)
 	}
+	if luna.Endpoint != opencode.RouteForModel(opencode.DefaultBaseURL, luna.ID).Endpoint {
+		t.Fatalf("gpt-5.6-luna endpoint = %q", luna.Endpoint)
+	}
 	free := got["deepseek-v4-flash-free"]
 	if !free.Free || !containsID(free.Variants, "max") {
 		t.Fatalf("free model = %+v", free)
@@ -66,6 +81,14 @@ func TestParseModelsDevReadsPricesAndVariants(t *testing.T) {
 	}
 	if free.Provider != ProviderOpenCodeZen || glm.Provider != ProviderOpenCodeGo {
 		t.Fatalf("providers = %q / %q", free.Provider, glm.Provider)
+	}
+	future := got["future-responses-model"]
+	if future.Endpoint != opencode.ResponsesURL(opencode.DefaultBaseURL) {
+		t.Fatalf("future endpoint = %q", future.Endpoint)
+	}
+	zenFuture := got["future-zen-responses-model"]
+	if zenFuture.Endpoint != "https://opencode.ai/zen/v1/responses" || zenFuture.Provider != ProviderOpenCodeZen {
+		t.Fatalf("zen future = %+v", zenFuture)
 	}
 }
 
@@ -96,6 +119,24 @@ func TestMergeLiveFillsMissingEndpoint(t *testing.T) {
 	}
 }
 
+func TestPreserveSpecializedEndpoints(t *testing.T) {
+	got := PreserveSpecializedEndpoints(
+		[]Info{{ID: "future-model", Provider: ProviderOpenCodeGo, Endpoint: "https://example.test/chat/completions"}},
+		[]Info{{ID: "future-model", Provider: ProviderOpenCodeGo, Endpoint: "https://example.test/responses"}},
+	)
+	if got[0].Endpoint != "https://example.test/responses" {
+		t.Fatalf("endpoint = %q, want preserved responses route", got[0].Endpoint)
+	}
+
+	explicit := PreserveSpecializedEndpoints(
+		[]Info{{ID: "future-model", Provider: ProviderOpenCodeGo, Endpoint: "https://example.test/responses"}},
+		[]Info{{ID: "future-model", Provider: ProviderOpenCodeGo, Endpoint: "https://example.test/chat/completions"}},
+	)
+	if explicit[0].Endpoint != "https://example.test/responses" {
+		t.Fatalf("explicit endpoint = %q", explicit[0].Endpoint)
+	}
+}
+
 func TestSaveWritesZeroCacheWrite(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "models.json")
 	if err := Save(path, []Info{{ID: "minimax-m3", CacheReadPerM: 0.06}}, time.Now()); err != nil {
@@ -111,5 +152,28 @@ func TestSaveWritesZeroCacheWrite(t *testing.T) {
 	}
 	if !strings.Contains(body, `"cache_read_per_million": 0.06`) {
 		t.Fatalf("missing cache read:\n%s", body)
+	}
+}
+
+func TestSaveCanonicalizesProviderAndPreservesRoutes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "models.json")
+	models := []Info{
+		{ID: "same-model", Provider: ProviderOpenCodeGo, Endpoint: "https://opencode.ai/zen/go/v1/chat/completions"},
+		{ID: "same-model", Provider: ProviderOpenCodeZen, Endpoint: "https://opencode.ai/zen/v1/chat/completions"},
+	}
+	if err := Save(path, models, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	loaded, _, err := Load(path, time.Now(), time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 2 {
+		t.Fatalf("loaded models = %+v, want both provider routes", loaded)
+	}
+	for _, model := range loaded {
+		if model.Provider != "opencode" {
+			t.Fatalf("provider = %q, want canonical registry ID", model.Provider)
+		}
 	}
 }

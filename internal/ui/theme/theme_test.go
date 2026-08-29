@@ -22,6 +22,9 @@ func TestThemeColors(t *testing.T) {
 	if ColorAssistantBorder() == nil {
 		t.Fatal("ColorAssistantBorder returned nil")
 	}
+	if ColorPlanPanel() == nil || ColorPlanBorder() == nil {
+		t.Fatal("plan surface colors returned nil")
+	}
 }
 
 func TestModeSelection(t *testing.T) {

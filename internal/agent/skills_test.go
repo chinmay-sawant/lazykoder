@@ -67,6 +67,38 @@ func TestSendInjectsSkillsAfterRecallAndDoesNotPersist(t *testing.T) {
 	}
 }
 
+func TestSendSelectsToolsAndRoleAfterPersistingUserTurn(t *testing.T) {
+	fake := newFakeProvider(t, respBody("ok", "", "stop", nil, nil))
+	st, _ := newTestEnv(t)
+	var toolsCalled, rolesCalled int
+	a := New(st, newClient(t, fake.srv), t.TempDir(), Options{
+		DisableStreaming: true,
+		ToolProvider: func(_ context.Context, sessionID, _ string) ([]string, error) {
+			toolsCalled++
+			if sessionID == "" {
+				t.Fatal("tool provider received an empty session ID")
+			}
+			return []string{"read"}, nil
+		},
+		RoleProvider: func(_ context.Context, sessionID, _ string) (string, error) {
+			rolesCalled++
+			if sessionID == "" {
+				t.Fatal("role provider received an empty session ID")
+			}
+			return "review", nil
+		},
+	})
+	if _, err := sendAndCollect(t, a, "inspect this"); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if toolsCalled != 1 || rolesCalled != 1 || a.opts.Role != "review" {
+		t.Fatalf("selection calls = tools %d roles %d role %q", toolsCalled, rolesCalled, a.opts.Role)
+	}
+	if !fake.requestHadTools(0) {
+		t.Fatal("selected tool was not advertised")
+	}
+}
+
 func TestSkillsRunOnceAndContinueDoesNotRescan(t *testing.T) {
 	fake := newFakeProvider(t,
 		respBody("", "", "tool-calls", []fakeToolCall{{ID: "unknown", Name: "not-a-tool", Args: `{}`}}, nil),

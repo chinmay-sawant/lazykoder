@@ -54,14 +54,7 @@ func estimateTokenDelta(text string) int64 {
 		return 0
 	}
 	runes := int64(len([]rune(text)))
-	return maxInt64(1, (runes+tokenRunesPerUnit-1)/tokenRunesPerUnit)
-}
-
-func maxInt64(a, b int64) int64 {
-	if a > b {
-		return a
-	}
-	return b
+	return max(1, (runes+tokenRunesPerUnit-1)/tokenRunesPerUnit)
 }
 
 // FormatTokensPerSecond formats a completed step rate for diagnostics and
@@ -76,11 +69,12 @@ func FormatTokensPerSecond(tokens int64, elapsed time.Duration) string {
 
 func (a *Agent) beginAssistant(ctx context.Context, events chan<- Event) (db.Message, error) {
 	m, err := a.store.InsertMessage(ctx, db.Message{
-		SessionID: a.sessionID(),
-		Role:      "assistant",
-		Agent:     a.opts.AgentName,
-		ModelID:   a.opts.Model,
-		Variant:   strPtr(a.opts.Variant),
+		SessionID:  a.sessionID(),
+		Role:       "assistant",
+		Agent:      a.opts.AgentName,
+		ProviderID: a.opts.Provider,
+		ModelID:    a.opts.Model,
+		Variant:    strPtr(a.opts.Variant),
 	})
 	if err != nil {
 		return db.Message{}, fmt.Errorf("agent: insert assistant message: %w", err)
