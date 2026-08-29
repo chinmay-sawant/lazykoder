@@ -286,7 +286,11 @@ func LoadProviders(workdir string) (Catalog, error) {
 		diagnostics = append(diagnostics, itemDiagnostics...)
 		for _, item := range items {
 			if item.Descriptor.Factory == nil {
-				item.Descriptor.Factory = builtinFactories[item.Descriptor.ID]
+				if factory, ok := builtinFactories[item.Descriptor.ID]; ok {
+					item.Descriptor.Factory = factory
+				} else if item.Descriptor.AuthMethod == AuthMethodAPIKey && isOpenCodeDescriptor(item.Descriptor) {
+					item.Descriptor.Factory = builtinFactories[IDOpenCode]
+				}
 			}
 			if item.Descriptor.AuthMethod != AuthMethodAPIKey && item.Descriptor.AuthChecker == nil {
 				item.Descriptor.AuthChecker = cliAuthChecker
@@ -379,7 +383,7 @@ func parseProviderFile(data []byte, root catalog.Root) ([]providerEntry, []catal
 			continue
 		}
 		if descriptor.AuthMethod == AuthMethodAPIKey && descriptor.BaseURL == "" {
-			if _, builtin := builtinFactories[descriptor.ID]; !builtin {
+			if _, builtin := builtinFactories[descriptor.ID]; !builtin && !isOpenCodeDescriptor(descriptor) {
 				diagnostics = append(diagnostics, catalog.Diagnostic{Scope: root.Scope, Path: fmt.Sprintf("%s[%d]", path, index), Error: "base_url is required for declarative API-key providers"})
 				continue
 			}
@@ -399,6 +403,16 @@ func minInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func isOpenCodeDescriptor(descriptor Descriptor) bool {
+	if strings.HasPrefix(descriptor.ID, IDOpenCode) {
+		return true
+	}
+	if strings.Contains(strings.ToLower(descriptor.BaseURL), "opencode.ai") {
+		return true
+	}
+	return false
 }
 
 // ResetForTest restores the built-in provider set.

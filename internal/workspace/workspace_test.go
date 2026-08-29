@@ -55,7 +55,11 @@ func TestInitCreatesEmptyCatalogFiles(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read %s: %v", name, err)
 		}
-		if name != "settings.json" && string(body) != "[]\n" {
+		if name == "providers.json" {
+			if !strings.Contains(string(body), `"id": "opencode"`) || !strings.Contains(string(body), `"id": "opencode-team"`) {
+				t.Errorf("providers.json missing default entries: %q", body)
+			}
+		} else if name != "settings.json" && string(body) != "[]\n" {
 			t.Errorf("%s = %q, want empty array", name, body)
 		}
 	}
