@@ -1,9 +1,10 @@
 package chat
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
-	"math/rand"
+	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,12 +28,12 @@ type addProviderData struct {
 }
 
 type providerTemplate struct {
-	id       string
-	label    string
-	auth     string
-	baseURL  string
-	envKey   string
-	model    string
+	id      string
+	label   string
+	auth    string
+	baseURL string
+	envKey  string
+	model   string
 }
 
 var providerTemplates = []providerTemplate{
@@ -44,6 +45,16 @@ var providerTemplates = []providerTemplate{
 	{id: "xai", label: "xAI", auth: "api_key", baseURL: "https://api.x.ai/v1", envKey: "XAI_API_KEY", model: "grok-4.6"},
 	{id: "custom", label: "Custom", auth: "api_key", baseURL: "https://example.com/v1", envKey: "CUSTOM_API_KEY", model: ""},
 }
+
+const (
+	providerDisplayOrderOffset             = 60
+	providerDirectoryMode      os.FileMode = 0o755
+	providerFileMode           os.FileMode = 0o600
+	customProviderSuffixMin                = 100
+	customProviderSuffixRange              = 900
+	providerSuffixMin                      = 10
+	providerSuffixRange                    = 90
+)
 
 func providerTemplateOptions() []huh.Option[string] {
 	out := make([]huh.Option[string], 0, len(providerTemplates))
@@ -80,7 +91,7 @@ func randomProviderPlaceholder(templateID string) string {
 		return nextOpenCodePlaceholder()
 	}
 	if templateID == "custom" {
-		return fmt.Sprintf("custom-provider-%d", rand.Intn(900)+100)
+		return fmt.Sprintf("custom-provider-%d", randomProviderSuffix(customProviderSuffixRange, customProviderSuffixMin))
 	}
 	if templateID == "gemini" {
 		return "gemini"
@@ -97,9 +108,17 @@ func randomProviderPlaceholder(templateID string) string {
 		if !exists {
 			return tmpl.id
 		}
-		return fmt.Sprintf("%s-%d", tmpl.id, rand.Intn(90)+10)
+		return fmt.Sprintf("%s-%d", tmpl.id, randomProviderSuffix(providerSuffixRange, providerSuffixMin))
 	}
-	return fmt.Sprintf("provider-%d", rand.Intn(900)+100)
+	return fmt.Sprintf("provider-%d", randomProviderSuffix(customProviderSuffixRange, customProviderSuffixMin))
+}
+
+func randomProviderSuffix(max, min int64) int64 {
+	suffix, err := rand.Int(rand.Reader, big.NewInt(max))
+	if err != nil {
+		return min
+	}
+	return suffix.Int64() + min
 }
 
 func nextOpenCodeLabelPlaceholder() string {
@@ -282,11 +301,11 @@ func (m Model) saveProviderFromDialog(id, label, auth, baseURL, envKey, model st
 		}
 	}
 	entry := map[string]any{
-		"id":           id,
-		"label":        label,
-		"auth_method":  auth,
-		"supported":    true,
-		"display_order": len(list)*10 + 60,
+		"id":            id,
+		"label":         label,
+		"auth_method":   auth,
+		"supported":     true,
+		"display_order": len(list)*10 + providerDisplayOrderOffset,
 	}
 	if baseURL != "" {
 		entry["base_url"] = baseURL
@@ -321,10 +340,10 @@ func (m Model) saveProviderFromDialog(id, label, auth, baseURL, envKey, model st
 		return err
 	}
 	out = append(out, '\n')
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), providerDirectoryMode); err != nil {
 		return err
 	}
-	return os.WriteFile(path, out, 0o600)
+	return os.WriteFile(path, out, providerFileMode)
 }
 
 func (m Model) addProviderOverlayView() string {
@@ -415,9 +434,6 @@ func providerAddProviderPreview(m Model) string {
 	}
 	if t.auth == "codex" {
 		preview["cli"] = "codex"
-	}
-	if len(t.id) > 0 && t.id != "custom" {
-		// keep auth display consistent
 	}
 	b, _ := json.MarshalIndent(preview, "", "  ")
 	return "Live JSON preview:\n" + string(b)

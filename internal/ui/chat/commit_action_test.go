@@ -62,7 +62,7 @@ func TestCommitPushActivationKeepsPromptWireOnly(t *testing.T) {
 	m := New(Options{Store: store, Client: deadClient(), Session: &session, Workdir: session.Directory})
 	m.pushPromptUntil = time.Now().Add(time.Minute)
 	next, cmd := m.activateCommitPush()
-	if cmd == nil || !next.busy || !next.pushPromptBusy {
+	if cmd == nil || !next.busy || !next.pushPromptBusy || !next.pushPromptUntil.IsZero() {
 		t.Fatalf("activation state busy=%v pushBusy=%v cmd=%v", next.busy, next.pushPromptBusy, cmd != nil)
 	}
 }
@@ -120,6 +120,128 @@ func TestCommitDrawerVisibleMirrorsPushWindow(t *testing.T) {
 	m.pushPromptUntil = time.Time{}
 	if m.commitDrawerVisible() {
 		t.Fatal("drawer should hide after collapse")
+	}
+}
+
+func TestCommitDrawerExpiryHidesIdleDrawer(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	m.width = 80
+	m.height = 24
+	m.pushPromptUntil = time.Now().Add(-time.Second)
+	m.commitFiles = []WorktreeFile{{Path: "a.go", Added: 1}}
+	m.commitDiffDetailMode = true
+	m.commitDiffDetailPath = "a.go"
+	m.commitDiffHunks = []string{"@@ -1 +1 @@"}
+	m.commitDiffHunkContextMode = true
+	m.commitDrawerActionFocused = true
+
+	next, _ := m.Update(commitActionExpiredMsg{})
+	got := next.(Model)
+	if got.commitDrawerVisible() || !got.pushPromptUntil.IsZero() {
+		t.Fatalf("expired drawer remained visible: visible=%v deadline=%v", got.commitDrawerVisible(), got.pushPromptUntil)
+	}
+	if got.commitDiffDetailMode || got.commitDiffDetailPath != "" || len(got.commitDiffHunks) != 0 || got.commitDiffHunkContextMode || got.commitDrawerActionFocused {
+		t.Fatalf("expiry left detail state behind: %#v", got)
+	}
+}
+
+func TestCommitDrawerResetIgnoresStaleExpiry(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	m.width = 80
+	m.height = 24
+	m.pushPromptUntil = time.Now().Add(time.Second)
+	m.commitFiles = []WorktreeFile{{Path: "a.go", Added: 1}}
+	oldDeadline := m.pushPromptUntil
+
+	reset, cmd := m.resetCommitDrawerTimer()
+	if cmd == nil || !reset.pushPromptUntil.After(oldDeadline) {
+		t.Fatalf("timer was not reset: command=%v old=%v new=%v", cmd != nil, oldDeadline, reset.pushPromptUntil)
+	}
+
+	next, _ := reset.Update(commitActionExpiredMsg{})
+	got := next.(Model)
+	if !got.commitDrawerVisible() {
+		t.Fatal("stale expiry hid the drawer after its timer was reset")
+	}
+}
+
+func TestCommitDrawerCancellationIgnoresPendingExpiry(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	m.width = 80
+	m.height = 24
+	m.pushPromptUntil = time.Now().Add(time.Minute)
+	m.commitFiles = []WorktreeFile{{Path: "a.go", Added: 1}}
+
+	cancelled, cmd := m.handleCommitDrawerKey(keyMsg("esc"))
+	if cmd != nil || !cancelled.pushPromptUntil.IsZero() || cancelled.commitDrawerVisible() {
+		t.Fatalf("escape did not cancel drawer timer: command=%v deadline=%v visible=%v", cmd != nil, cancelled.pushPromptUntil, cancelled.commitDrawerVisible())
+	}
+
+	next, _ := cancelled.Update(commitActionExpiredMsg{})
+	if next.(Model).commitDrawerVisible() {
+		t.Fatal("pending expiry reopened or changed a cancelled drawer")
+	}
+}
+
+func TestCommitDiffDetailInteractionResetsTimer(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	m.width = 80
+	m.height = 24
+	m.pushPromptUntil = time.Now().Add(time.Minute)
+	m.commitFiles = []WorktreeFile{{Path: "a.go", Added: 1}}
+	m.commitDiffPreview = map[string]string{
+		"a.go": "diff --git a/a.go b/a.go\n@@ -1 +1 @@\n-old\n+new\n",
+	}
+	m = m.openCommitDiffDetail()
+	oldDeadline := time.Now().Add(time.Second)
+	m.pushPromptUntil = oldDeadline
+
+	next, cmd, hit := m.commitDiffDetailHit(0, 0, tea.MouseLeft)
+	if !hit || cmd == nil || !next.pushPromptUntil.After(oldDeadline) {
+		t.Fatalf("unmatched detail click did not reset timer: hit=%v command=%v old=%v new=%v", hit, cmd != nil, oldDeadline, next.pushPromptUntil)
+	}
+
+	x0, y, _, ok := next.commitDiffDetailCloseRect()
+	if !ok {
+		t.Fatal("diff detail close button was not hit-testable")
+	}
+	oldDeadline = time.Now().Add(time.Second)
+	next.pushPromptUntil = oldDeadline
+	closed, cmd, hit := next.commitDiffDetailHit(x0, y, tea.MouseLeft)
+	if !hit || cmd == nil || closed.commitDiffDetailMode || !closed.pushPromptUntil.After(oldDeadline) {
+		t.Fatalf("detail close did not reset drawer timer: hit=%v command=%v detail=%v old=%v new=%v", hit, cmd != nil, closed.commitDiffDetailMode, oldDeadline, closed.pushPromptUntil)
+	}
+}
+
+func TestCommitDrawerBoundaryKeysResetTimer(t *testing.T) {
+	tests := []struct {
+		name          string
+		key           tea.KeyPressMsg
+		selected      int
+		actionFocused bool
+		files         []WorktreeFile
+	}{
+		{name: "top file", key: keyMsg("up"), files: []WorktreeFile{{Path: "a.go"}}},
+		{name: "action row", key: keyMsg("up"), selected: 0, actionFocused: true, files: []WorktreeFile{{Path: "a.go"}}},
+		{name: "clean drawer", key: keyMsg("down")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+			m.width = 80
+			m.height = 24
+			m.pushPromptUntil = time.Now().Add(time.Second)
+			m.commitFiles = tt.files
+			m.commitDrawerSelected = tt.selected
+			m.commitDrawerActionFocused = tt.actionFocused
+			oldDeadline := m.pushPromptUntil
+
+			next, cmd := m.handleCommitDrawerKey(tt.key)
+			if cmd == nil || !next.pushPromptUntil.After(oldDeadline) {
+				t.Fatalf("boundary key did not reset timer: command=%v old=%v new=%v", cmd != nil, oldDeadline, next.pushPromptUntil)
+			}
+		})
 	}
 }
 

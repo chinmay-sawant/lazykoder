@@ -527,7 +527,7 @@ func (m Model) commitDiffHunkIndexAtScreenY(y int) (int, bool) {
 func (m Model) navigateCommitDiffHunk(delta int) (Model, tea.Cmd) {
 	next := m.commitDiffHunkSelected + delta
 	if next < 0 || next >= len(m.commitDiffHunks) {
-		return m, nil
+		return m.resetCommitDrawerTimer()
 	}
 	m.commitDiffHunkSelected = next
 	m = m.refreshCommitDiffHunkList()
@@ -538,15 +538,14 @@ func (m Model) navigateCommitDiffDetail(delta int) (Model, tea.Cmd) {
 	files := m.commitDrawerFiles()
 	next := m.commitDrawerSelected + delta
 	if next < 0 || next >= len(files) {
-		return m, nil
+		return m.resetCommitDrawerTimer()
 	}
 	m.commitDrawerSelected = next
 	m = m.openCommitDiffDetail()
 	if !m.commitDiffDetailMode {
-		return m, nil
+		return m.resetCommitDrawerTimer()
 	}
-	m.pushPromptUntil = time.Now().Add(commitActionLifetime)
-	return m, m.scheduleCommitPushExpiry()
+	return m.resetCommitDrawerTimer()
 }
 
 func (m Model) commitDiffDetailHit(x, y int, button tea.MouseButton) (Model, tea.Cmd, bool) {
@@ -554,7 +553,9 @@ func (m Model) commitDiffDetailHit(x, y int, button tea.MouseButton) (Model, tea
 		return m, nil, false
 	}
 	if x0, cy, x1, ok := m.commitDiffDetailCloseRect(); ok && y == cy && x >= x0 && x < x1 {
-		return m.closeCommitDiffDetail(), nil, true
+		m = m.closeCommitDiffDetail()
+		nm, cmd := m.resetCommitDrawerTimer()
+		return nm, cmd, true
 	}
 	if x0, cy, x1, ok := m.commitDiffDetailNavRect(false); ok && y == cy && x >= x0 && x < x1 {
 		m, cmd := m.navigateCommitDiffDetail(-1)
@@ -571,7 +572,8 @@ func (m Model) commitDiffDetailHit(x, y int, button tea.MouseButton) (Model, tea
 		return m, cmd, true
 	}
 	if y >= 0 && y < m.height {
-		return m, nil, true
+		nm, cmd := m.resetCommitDrawerTimer()
+		return nm, cmd, true
 	}
 	return m, nil, false
 }
@@ -593,7 +595,8 @@ func (m Model) handleCommitDiffDetailKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 			m = m.refreshCommitDiffHunkList()
 			return m.resetCommitDrawerTimer()
 		case 'q', 'Q', 'x', 'X':
-			return m.closeCommitDiffDetail(), nil
+			m = m.closeCommitDiffDetail()
+			return m.resetCommitDrawerTimer()
 		default:
 			vp, viewportCmd := m.commitDiffDetailVp.Update(key)
 			m.commitDiffDetailVp = vp
@@ -603,7 +606,8 @@ func (m Model) handleCommitDiffDetailKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 	}
 	switch key.Code {
 	case tea.KeyEscape, 'q', 'Q', 'x', 'X':
-		return m.closeCommitDiffDetail(), nil
+		m = m.closeCommitDiffDetail()
+		return m.resetCommitDrawerTimer()
 	case tea.KeyEnter:
 		m = m.openCommitDiffHunkContext()
 		return m.resetCommitDrawerTimer()
@@ -787,28 +791,25 @@ func (m Model) handleCommitDrawerKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	case "up", "k":
 		if m.commitDrawerActionFocused {
 			m.commitDrawerActionFocused = false
-			return m, nil
+			return m.resetCommitDrawerTimer()
 		}
 		if m.commitDrawerSelected > 0 {
 			m.commitDrawerSelected--
-			m.pushPromptUntil = time.Now().Add(commitActionLifetime)
-			return m, m.scheduleCommitPushExpiry()
+			return m.resetCommitDrawerTimer()
 		}
-		return m, nil
+		return m.resetCommitDrawerTimer()
 	case "down", "j":
 		files := m.commitDrawerFiles()
 		if m.commitDrawerSelected < len(files)-1 {
 			m.commitDrawerSelected++
 			m.commitDrawerActionFocused = false
-			m.pushPromptUntil = time.Now().Add(commitActionLifetime)
-			return m, m.scheduleCommitPushExpiry()
+			return m.resetCommitDrawerTimer()
 		}
 		if len(files) > 0 {
 			m.commitDrawerActionFocused = true
-			m.pushPromptUntil = time.Now().Add(commitActionLifetime)
-			return m, m.scheduleCommitPushExpiry()
+			return m.resetCommitDrawerTimer()
 		}
-		return m, nil
+		return m.resetCommitDrawerTimer()
 	case "enter":
 		if m.commitDrawerActionFocused {
 			return m.activateCommitPush()
@@ -816,11 +817,10 @@ func (m Model) handleCommitDrawerKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		if m.commitDrawerSelected >= 0 && m.commitDrawerSelected < len(m.commitDrawerFiles()) {
 			m = m.openCommitDiffDetail()
 			if m.commitDiffDetailMode {
-				m.pushPromptUntil = time.Now().Add(commitActionLifetime)
-				return m, m.scheduleCommitPushExpiry()
+				return m.resetCommitDrawerTimer()
 			}
 		}
-		return m, nil
+		return m.resetCommitDrawerTimer()
 	}
 	return m, nil
 }

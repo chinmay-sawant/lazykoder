@@ -13,7 +13,7 @@
 | --- | --- |
 | `make build` | builds `bin/lk` (creates `bin/` on demand) |
 | `make run` | rebuilds and runs `./bin/lk` |
-| `make test` | full gate: `go test ./...` |
+| `make test` | full gate: `go test -p 2 -parallel 2 ./...` |
 | `make vet` | `go vet ./...` |
 | `make clean` | removes `bin/lk` |
 
@@ -69,7 +69,7 @@ stdlib and the existing Charm stack.
 
 ## Verification habits
 
-- Rebuild before verifying (`make build` / `go test ./...`); never trust a
+- Rebuild before verifying (`make build` / `make test`); never trust a
   stale binary.
 - After a UI/layout change, run the app and check the full screen, not just
   the changed area.

@@ -262,7 +262,7 @@ func TestBuildMemoryPromptRespectsCombinedPromptLimit(t *testing.T) {
 func TestBuildMemoryPromptCompactsToCurrentSourceEntries(t *testing.T) {
 	document := NewMemoryDocument()
 	for index := 0; index < memoryMaxEntriesPerPart-1; index++ {
-		document.Preferences = append(document.Preferences, MemoryEntry{
+		document.RecentContext = append(document.RecentContext, MemoryEntry{
 			ID:               fmt.Sprintf("mem_old_%d", index),
 			State:            "active",
 			Text:             fmt.Sprintf("old memory entry %d %s", index, strings.Repeat("old detail ", 35)),
@@ -272,7 +272,7 @@ func TestBuildMemoryPromptCompactsToCurrentSourceEntries(t *testing.T) {
 			LastSeenUTC:      "2026-08-22T12:00:00Z",
 		})
 	}
-	document.Preferences = append(document.Preferences, MemoryEntry{
+	document.RecentContext = append(document.RecentContext, MemoryEntry{
 		ID:               "mem_current",
 		State:            "active",
 		Text:             "current memory entry",

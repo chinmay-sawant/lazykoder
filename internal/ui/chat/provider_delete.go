@@ -61,7 +61,7 @@ func (m Model) confirmProviderDelete() (Model, tea.Cmd) {
 		return m, nil
 	}
 	out = append(out, '\n')
-	if err := os.WriteFile(path, out, 0o600); err != nil {
+	if err := os.WriteFile(path, out, providerFileMode); err != nil {
 		m.err = "delete failed: " + err.Error()
 		return m, nil
 	}
@@ -124,24 +124,6 @@ func (m Model) providerDeleteView() string {
 		Padding(1, cardHorzPad).
 		Width(cardW).
 		Render(content)
-}
-
-func (m Model) providerDeleteCloseRect() (x0, y, x1 int, ok bool) {
-	if !m.providerDeleteMode {
-		return 0, 0, 0, false
-	}
-	card := m.providerDeleteView()
-	cardW := lipgloss.Width(card)
-	cardH := lipgloss.Height(card)
-	left := max(0, (m.width-cardW)/centerDiv)
-	top := max(0, (m.height-cardH)/centerDiv)
-	// Find y of hint line containing "y confirm"
-	for i, line := range strings.Split(m.providerDeleteView(), "\n") {
-		if strings.Contains(ansi.Strip(line), "y confirm") {
-			return left, top + i, left + cardW, true
-		}
-	}
-	return left, top, left + cardW, true
 }
 
 func (m Model) providerPickerDeleteRect() (x0, y, x1 int, ok bool) {

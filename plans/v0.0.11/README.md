@@ -1,7 +1,7 @@
 # v0.0.11 - Orchestrator, OpenAI provider, recap in loop, pluggable catalogs
 
 > **Parent:** current chat, settings, SQLite, first-request agent path, and local knowledge base
-> **Status:** phases 1-6 complete
+> **Status:** phases 1-6 complete; phase 4b Diff drawer complete 2026-08-29
 > **Priority:** P1
 > **Skill:** `skills/phase-wise-checklist/SKILLS.md`
 > **Gate:** automated provider, orchestration, memory, UI, database, build, lint, and test gates pass. Live provider-key and terminal scenarios remain explicit human checks.
@@ -19,6 +19,7 @@ Aider, Claude Code) into phase-wise work. Phase order is dependency-driven:
 | 2 | `phase-2-openai-provider.md` | OpenAI provider package | 3-4 days |
 | 3 | `phase-3-orchestrator.md` | Orchestrator over `internal/subagent` | 5-7 days |
 | 4 | `phase-4-commit-push-button.md` | Commit and push action button in the composer | 3-4 days |
+| 4b | `phase-4b-commit-push-drawer.md` | Diff drawer, change navigation, and commit action | complete |
 | 5 | `phase-5-memory-speed-history-churn.md` | Memory update speed and history list churn | 2-3 days |
 | 6 | `phase-6-pluggable-providers-tools-roles.md` | Pluggable providers, tools, and roles matching the skills pattern | 7-10 days |
 

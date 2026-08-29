@@ -136,7 +136,6 @@ func (m Model) pickerView() string {
 		// Use errStyle-like red for delete affordance
 		gap := cardW - lipgloss.Width(leftHead) - lipgloss.Width(rightHead)
 		if gap < 1 {
-			gap = 1
 			// Truncate left if needed
 			leftHead = truncateRunes(leftHead, max(1, cardW-lipgloss.Width(rightHead)-1))
 			gap = cardW - lipgloss.Width(leftHead) - lipgloss.Width(rightHead)

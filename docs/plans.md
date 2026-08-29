@@ -53,6 +53,7 @@ snapshots:
 | `v0.0.10/phase-10-skills-discovery.md` | global and local skill discovery, `/skills`, auto-detection, and memory references |
 | `v0.0.10/phase-11-browser-support.md` | safe browser-backed URL understanding, rendered content, links, and email-link extraction |
 | `v0.0.11/README.md` | recap and memory loop, OpenAI provider, orchestration, commit action, and history churn fixes |
+| `v0.0.11/phase-4b-commit-push-drawer.md` | Diff drawer, change navigation, and policy-gated commit action |
 
 Each checklist row is marked `[x]` only when the gate actually passed, with
 the command and exit code recorded beside the row. Rows are never checked
@@ -76,7 +77,7 @@ human runs them.
 - v0.0.8: auto-compact, `/compact`, mid-session shrink hint, live fill
   meters (not a lifetime peak), child cost on `/agents` and status
 - v0.0.11: bounded memory context and selection, OpenAI provider seam,
-  structured orchestration, commit and push composer action, memory update
+  structured orchestration, Diff drawer and commit action, memory update
   timing, and conversation-aware history ordering. Automated gates are green;
   live provider and terminal scenarios remain human checks. Ledger:
   `plans/v0.0.11/`.
