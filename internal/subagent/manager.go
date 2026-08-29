@@ -344,13 +344,23 @@ func (m *Manager) buildJob(id, parentSessionID, parentPartID, name, role string,
 	cfg := m.cfg
 	model := strings.TrimSpace(spec.Model)
 	if model == "" {
-		switch {
-		case role == RoleExplore && cfg.ExploreModel != "":
-			model = cfg.ExploreModel
-		case cfg.Model != "":
+		if roleModel := strings.TrimSpace(cfg.ModelByRole[role]); roleModel != "" {
+			model = roleModel
+		}
+		if model == "" && role == RoleExplore {
+			model = strings.TrimSpace(cfg.ExploreModel)
+		}
+		if model == "" {
 			model = cfg.Model
-		case spec.ModelClass != "":
-			model = resolveClass(spec.ModelClass, role, cfg, rt)
+		}
+		if model == "" {
+			class := strings.TrimSpace(spec.ModelClass)
+			if class == "" {
+				if descriptor, ok := roles.DescriptorFor(role); ok {
+					class = descriptor.DefaultModelClass
+				}
+			}
+			model = resolveClass(class, role, cfg, rt)
 		}
 	}
 	model = firstNonEmpty(model, rt.Model, opencode.DefaultModelID)
@@ -402,6 +412,11 @@ func resolveClass(class, role string, cfg Config, rt Runtime) string {
 		id := strings.ToLower(profile.ID)
 		if strings.Contains(id, class) {
 			return profile.ID
+		}
+	}
+	if configured := strings.TrimSpace(cfg.ModelClassByRole[role]); configured == class {
+		if model := strings.TrimSpace(cfg.ModelByRole[role]); model != "" {
+			return model
 		}
 	}
 	switch role {
@@ -471,7 +486,8 @@ func (m *Manager) execute(jobCtx context.Context, h *handle, job Job, role strin
 	defer func() { <-m.sem }()
 
 	// Optional single-writer lock for general role (cancelable wait).
-	if role == RoleGeneral && !m.cfg.AllowParallelWriters {
+	descriptor, known := roles.DescriptorFor(role)
+	if known && descriptor.SingleWriter && !m.cfg.AllowParallelWriters {
 		if err := m.acquireWriter(jobCtx); err != nil {
 			m.finish(h, terminalFromCtx(jobCtx, Result{
 				ID: job.ID, Name: job.Name, Role: job.Role,

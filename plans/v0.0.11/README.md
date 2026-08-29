@@ -1,7 +1,7 @@
 # v0.0.11 - Orchestrator, OpenAI provider, recap in loop, pluggable catalogs
 
 > **Parent:** current chat, settings, SQLite, first-request agent path, and local knowledge base
-> **Status:** phases 1-5 complete; phase 6 draft - pluggable providers/tools/roles
+> **Status:** phases 1-6 complete
 > **Priority:** P1
 > **Skill:** `skills/phase-wise-checklist/SKILLS.md`
 > **Gate:** automated provider, orchestration, memory, UI, database, build, lint, and test gates pass. Live provider-key and terminal scenarios remain explicit human checks.

@@ -26,8 +26,8 @@ func TestCatalog(t *testing.T) {
 	if got := Normalize("opencode-go"); got != IDOpenCode {
 		t.Fatalf("Normalize(opencode-go) = %q, want %q", got, IDOpenCode)
 	}
-	if got := Normalize("unknown"); got != IDOpenCode {
-		t.Fatalf("Normalize(unknown) = %q, want %q", got, IDOpenCode)
+	if got := Normalize("unknown"); got != "unknown" {
+		t.Fatalf("Normalize(unknown) = %q, want unknown", got)
 	}
 	if _, ok := DescriptorFor("unknown"); ok {
 		t.Fatal("DescriptorFor(unknown) unexpectedly returned a provider")
@@ -39,6 +39,72 @@ func TestCatalogReturnsCopy(t *testing.T) {
 	descriptors[0].Label = "changed"
 	if got, _ := DescriptorFor(IDOpenCode); got.Label == "changed" {
 		t.Fatal("Descriptors exposed the internal catalog")
+	}
+}
+
+func TestProviderRegistryDiscoverMerge(t *testing.T) {
+	ResetForTest()
+	defer ResetForTest()
+	workdir := t.TempDir()
+	local := filepath.Join(workdir, ".lazykoder")
+	global := filepath.Join(t.TempDir(), "lazykoder")
+	if err := os.MkdirAll(local, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(global, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(path, body string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join(global, "providers.json"), `[{"id":"shared","label":"Global","auth_method":"api_key","env_key":"SHARED_KEY","base_url":"https://global.example/v1","model":"global-model"},{"id":"global-only","auth_method":"api_key","env_key":"GLOBAL_KEY","base_url":"https://global.example/v1"},{"id":"bad"}]`)
+	write(filepath.Join(local, "providers.json"), `[{"id":"shared","label":"Local","auth_method":"api_key","env_key":"SHARED_KEY","base_url":"https://local.example/v1","model":"local-model"}]`)
+	t.Setenv("LAZYKODER_GLOBAL_CONFIG_DIR", global)
+	catalog, err := LoadProviders(workdir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shared, ok := DescriptorFor("shared")
+	if !ok || shared.Label != "Local" || shared.Model != "local-model" {
+		t.Fatalf("shared provider = %+v, found=%v", shared, ok)
+	}
+	if _, ok := DescriptorFor("global-only"); !ok {
+		t.Fatal("global-only provider was not loaded")
+	}
+	if len(catalog.Diagnostics) != 1 || !strings.Contains(catalog.Diagnostics[0].Error, "base_url") {
+		t.Fatalf("diagnostics = %+v", catalog.Diagnostics)
+	}
+	t.Setenv("SHARED_KEY", "secret")
+	client, err := NewClient("shared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.BaseURL() != "https://local.example/v1" || client.Model() != "local-model" {
+		t.Fatalf("declarative client = base %q model %q", client.BaseURL(), client.Model())
+	}
+}
+
+func TestProviderFactoryDelegatesToRegistry(t *testing.T) {
+	ResetForTest()
+	defer ResetForTest()
+	called := false
+	if err := Register(Descriptor{
+		ID: "compiled", AuthMethod: AuthMethodAPIKey,
+		Factory: func(Descriptor) (Client, error) {
+			called = true
+			return nil, nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewClient("compiled"); err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("compiled provider factory was not called")
 	}
 }
 

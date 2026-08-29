@@ -9,7 +9,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chinmay-sawant/lazykoder/internal/agent/toolplugin"
 	"github.com/chinmay-sawant/lazykoder/internal/provider"
+	"github.com/chinmay-sawant/lazykoder/internal/roles"
 )
 
 const (
@@ -75,6 +77,10 @@ const (
 	MinRetryDelaySeconds = 0
 	// MaxRetryDelaySeconds caps the configured retry delay.
 	MaxRetryDelaySeconds = 300
+	// DefaultMaxDiscoveredTools caps file-loaded shell tools.
+	DefaultMaxDiscoveredTools = 32
+	// MaxMaxDiscoveredTools is the upper bound for file-loaded shell tools.
+	MaxMaxDiscoveredTools = 128
 	// DefaultSkillMaxAutoMatches limits automatic skill context injection.
 	DefaultSkillMaxAutoMatches = 2
 	// MinSkillMaxAutoMatches is the smallest automatic skill match count.
@@ -126,12 +132,13 @@ type Provider struct {
 
 // Orchestrator controls hidden decomposition and role model classes.
 type Orchestrator struct {
-	Enabled      bool   `json:"enabled"`
-	Review       bool   `json:"review"`
-	Provider     string `json:"provider"`
-	ExploreClass string `json:"explore_class"`
-	PlanClass    string `json:"plan_class"`
-	GeneralClass string `json:"general_class"`
+	Enabled          bool              `json:"enabled"`
+	Review           bool              `json:"review"`
+	Provider         string            `json:"provider"`
+	ModelClassByRole map[string]string `json:"model_class_by_role,omitempty"`
+	ExploreClass     string            `json:"explore_class,omitempty"`
+	PlanClass        string            `json:"plan_class,omitempty"`
+	GeneralClass     string            `json:"general_class,omitempty"`
 }
 
 // Appearance holds visual preferences for the TUI.
@@ -201,6 +208,13 @@ type Skills struct {
 	MaxContextBytes int  `json:"max_context_bytes"`
 }
 
+// Tools controls built-in and declaratively discovered tool availability.
+type Tools struct {
+	Enabled         map[string]bool `json:"enabled"`
+	AllowDiscovered bool            `json:"allow_discovered"`
+	MaxDiscovered   int             `json:"max_discovered"`
+}
+
 // Settings is the on-disk project config under .lazykoder/settings.json.
 type Settings struct {
 	Appearance   Appearance   `json:"appearance"`
@@ -213,6 +227,7 @@ type Settings struct {
 	Recap        Recap        `json:"recap"`
 	Retry        Retry        `json:"retry"`
 	Skills       Skills       `json:"skills"`
+	Tools        Tools        `json:"tools"`
 }
 
 // Default returns the built-in defaults.
@@ -235,6 +250,11 @@ func Default() Settings {
 			ExploreClass: "flash",
 			PlanClass:    "pro",
 			GeneralClass: "pro",
+			ModelClassByRole: map[string]string{
+				roles.Explore: "flash",
+				roles.Plan:    "pro",
+				roles.General: "pro",
+			},
 		},
 		Agents: Agents{
 			Enabled:              true,
@@ -272,6 +292,13 @@ func Default() Settings {
 			MaxAutoMatches:  DefaultSkillMaxAutoMatches,
 			MaxBodyBytes:    DefaultSkillMaxBodyBytes,
 			MaxContextBytes: DefaultSkillMaxContextBytes,
+		},
+		Tools: Tools{
+			Enabled: map[string]bool{
+				"bash": true, "read": true, "write": true, "edit": true,
+				"grep": true, "webfetch": true, "question": true, "todowrite": true,
+			},
+			MaxDiscovered: DefaultMaxDiscoveredTools,
 		},
 	}
 }
@@ -364,6 +391,11 @@ func (s Settings) EffectiveSkills() Skills {
 	return s.normalized().Skills
 }
 
+// EffectiveTools returns normalized tool settings with unknown IDs removed.
+func (s Settings) EffectiveTools() Tools {
+	return s.normalized().Tools
+}
+
 // EffectiveTimeout is the sub-agent timeout duration.
 // Zero DefaultTimeoutSec means no timeout from settings.
 func (a Agents) EffectiveTimeout() time.Duration {
@@ -382,6 +414,9 @@ func (s Settings) normalized() Settings {
 		s.Slot.MaxSteps = MaxMaxSteps
 	}
 	s.Provider.Active = provider.Normalize(s.Provider.Active)
+	if _, ok := provider.DescriptorFor(s.Provider.Active); !ok {
+		s.Provider.Active = provider.IDOpenCode
+	}
 	s.Model.Default = strings.TrimSpace(s.Model.Default)
 	if s.Model.Default == "" {
 		s.Model.Default = provider.DefaultModel(s.Provider.Active)
@@ -393,6 +428,7 @@ func (s Settings) normalized() Settings {
 	s.Recap = s.Recap.normalized()
 	s.Retry = s.Retry.normalized()
 	s.Skills = s.Skills.normalized()
+	s.Tools = s.Tools.normalized()
 	return s
 }
 
@@ -518,9 +554,7 @@ func (a Agents) normalized() Agents {
 		a.BashConfirm = "parent"
 	}
 	a.DefaultRole = strings.TrimSpace(a.DefaultRole)
-	switch a.DefaultRole {
-	case "explore", "plan", "general":
-	default:
+	if !roles.IsKnown(a.DefaultRole) {
 		a.DefaultRole = "explore"
 	}
 	return a
@@ -579,11 +613,26 @@ func NormalizeAfterLoad(s Settings, raw []byte) Settings {
 	if !jsonHasKey(raw, "skills") {
 		s.Skills = Default().Skills
 	}
+	if !jsonHasKey(raw, "tools") {
+		s.Tools = Default().Tools
+	}
 	return s.normalized()
 }
 
 func (o Orchestrator) normalized() Orchestrator {
 	o.Provider = provider.Normalize(o.Provider)
+	if _, ok := provider.DescriptorFor(o.Provider); !ok {
+		o.Provider = provider.IDOpenCode
+	}
+	if o.ExploreClass == "" {
+		o.ExploreClass = o.ModelClassByRole[roles.Explore]
+	}
+	if o.PlanClass == "" {
+		o.PlanClass = o.ModelClassByRole[roles.Plan]
+	}
+	if o.GeneralClass == "" {
+		o.GeneralClass = o.ModelClassByRole[roles.General]
+	}
 	o.ExploreClass = strings.TrimSpace(strings.ToLower(o.ExploreClass))
 	o.PlanClass = strings.TrimSpace(strings.ToLower(o.PlanClass))
 	o.GeneralClass = strings.TrimSpace(strings.ToLower(o.GeneralClass))
@@ -596,7 +645,37 @@ func (o Orchestrator) normalized() Orchestrator {
 	if o.GeneralClass == "" {
 		o.GeneralClass = "pro"
 	}
+	classes := make(map[string]string, len(o.ModelClassByRole))
+	for role, class := range o.ModelClassByRole {
+		role = strings.ToLower(strings.TrimSpace(role))
+		class = strings.TrimSpace(strings.ToLower(class))
+		if role == "" || class == "" || !roles.IsKnown(role) {
+			continue
+		}
+		classes[role] = class
+	}
+	classes[roles.Explore] = o.ExploreClass
+	classes[roles.Plan] = o.PlanClass
+	classes[roles.General] = o.GeneralClass
+	o.ModelClassByRole = classes
 	return o
+}
+
+func (t Tools) normalized() Tools {
+	if t.Enabled == nil {
+		t.Enabled = Default().Tools.Enabled
+	}
+	enabled := make(map[string]bool, len(t.Enabled))
+	for _, id := range toolplugin.IDs() {
+		if t.Enabled[id] && (t.AllowDiscovered || !toolplugin.IsDiscovered(id)) {
+			enabled[id] = true
+		}
+	}
+	t.Enabled = enabled
+	if t.MaxDiscovered <= 0 || t.MaxDiscovered > MaxMaxDiscoveredTools {
+		t.MaxDiscovered = DefaultMaxDiscoveredTools
+	}
+	return t
 }
 
 func jsonHasKey(raw []byte, path ...string) bool {

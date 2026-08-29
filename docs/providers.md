@@ -168,22 +168,56 @@ provider before a job starts.
 }
 ```
 
-Partial settings files are normalized on load. Unknown provider IDs fall back
-to OpenCode.
+Partial settings files are normalized on load. An unknown active provider falls
+back to OpenCode, while an unknown ID passed to the provider registry returns
+an error.
 
-## Adding a provider
+## Declarative providers
 
-Use the existing shared `provider.Client` interface. A new provider needs:
+OpenAI-compatible providers can be added without changing Go code. Put a JSON
+array in `<workdir>/.lazykoder/providers.json`:
 
-1. A catalog entry in `internal/provider/catalog.go` with its ID, label,
-   authentication method, default model, and any API endpoint or CLI name.
-2. A branch in `internal/provider/factory.go` that creates the client.
-3. A client that implements `provider.Client`. HTTP providers can reuse the
-   OpenAI-compatible wire types. Subscription providers must keep credentials
-   in the official client and expose no token values.
-4. Settings normalization coverage in `internal/settings`.
-5. Picker coverage and a request test using a local fake server or injected
-   command runner. Do not use a live key or subscription in tests.
+```json
+[
+  {
+    "id": "together",
+    "label": "Together",
+    "auth_method": "api_key",
+    "env_key": "TOGETHER_API_KEY",
+    "base_url": "https://api.together.xyz/v1",
+    "model": "meta-llama/Llama-3.3-70B-Instruct",
+    "supported": true
+  }
+]
+```
+
+`auth_method` is `api_key`, `codex`, or `grok`. API-key entries need
+`base_url` and either `env_key` or `env_keys`. `cli` identifies a provider-owned
+CLI for the subscription auth methods. Global entries can be placed in
+`~/.config/lazykoder/providers.json`; a local entry with the same ID wins.
+Files are bounded, regular non-symlink files. Invalid entries become catalog
+diagnostics and do not hide valid siblings. Loading a descriptor never starts
+its CLI or sends a network request.
+
+## Compiled providers
+
+Providers with a custom wire protocol implement `provider.Client` and register
+a descriptor from `init`:
+
+```go
+func init() {
+    _ = provider.Register(provider.Descriptor{
+        ID: "company", Label: "Company", AuthMethod: provider.AuthMethodAPIKey,
+        EnvKey: "COMPANY_API_KEY", Factory: newCompanyClient,
+    })
+}
+```
+
+`DescriptorFactory`, `AuthChecker`, and `LoginCommandFactory` are the registry
+seams for provider-specific behavior. `provider.NewClient` dispatches through
+the descriptor registry. A new provider does not require a catalog entry,
+factory switch, settings switch, or picker switch. Tests should use a fake
+server or command runner and never a live credential.
 
 Keep authentication, model defaults, endpoints, and usage behavior behind the
 provider client. The agent, orchestration, recap, memory, and UI should depend

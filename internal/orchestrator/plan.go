@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
+	"github.com/chinmay-sawant/lazykoder/internal/roles"
 )
 
 const (
@@ -37,14 +38,15 @@ type Subtask struct {
 
 // Config controls one hidden plan call.
 type Config struct {
-	Enabled      bool
-	Review       bool
-	Model        string
-	Endpoint     string
-	MaxSubtasks  int
-	ExploreClass string
-	PlanClass    string
-	GeneralClass string
+	Enabled          bool
+	Review           bool
+	Model            string
+	Endpoint         string
+	MaxSubtasks      int
+	ModelClassByRole map[string]string
+	ExploreClass     string
+	PlanClass        string
+	GeneralClass     string
 }
 
 // LooksDecomposable avoids spending a planning call on ordinary one-step
@@ -67,10 +69,14 @@ func Prompt(task string, max int) string {
 	if max < 1 || max > MaxSubtasks {
 		max = MaxSubtasks
 	}
-	return fmt.Sprintf(`Return only JSON with this shape: {"goal":"...","subtasks":[{"id":"1","name":"...","prompt":"...","role":"explore|plan|general","model_class":"flash|pro"}]}. Decompose the task into at most %d independent direct subtasks. Use explore for read-only investigation, plan for design, and general for edits. If the task is not safely decomposable, return an empty subtasks array. Never include secrets or executable shell commands in the plan.
+	roleIDs := make([]string, 0, len(roles.IDs()))
+	for _, id := range roles.IDs() {
+		roleIDs = append(roleIDs, id)
+	}
+	return fmt.Sprintf(`Return only JSON with this shape: {"goal":"...","subtasks":[{"id":"1","name":"...","prompt":"...","role":"%s","model_class":"flash|pro"}]}. Decompose the task into at most %d independent direct subtasks. Choose a role from the registered catalog. If the task is not safely decomposable, return an empty subtasks array. Never include secrets or executable shell commands in the plan.
 
-Task:
-%s`, max, strings.TrimSpace(task))
+	Task:
+%s`, strings.Join(roleIDs, "|"), max, strings.TrimSpace(task))
 }
 
 // Generate asks the provider for one strict no-tools plan.
@@ -123,14 +129,22 @@ func Parse(raw string, max int) (Plan, error) {
 			return Plan{}, fmt.Errorf("orchestrator: duplicate subtask %q", task.ID)
 		}
 		seen[task.ID] = struct{}{}
-		switch strings.TrimSpace(task.Role) {
-		case "explore", "plan", "general":
-		default:
+		rawRole := strings.TrimSpace(task.Role)
+		if rawRole != "" && !roles.IsKnown(rawRole) {
+			return Plan{}, fmt.Errorf("orchestrator: invalid role %q", rawRole)
+		}
+		task.Role = roles.Normalize(rawRole, "")
+		if !roles.IsKnown(task.Role) {
 			return Plan{}, fmt.Errorf("orchestrator: invalid role %q", task.Role)
 		}
 		task.ModelClass = strings.TrimSpace(task.ModelClass)
 		if task.ModelClass == "" {
-			task.ModelClass = "flash"
+			if descriptor, ok := roles.DescriptorFor(task.Role); ok {
+				task.ModelClass = descriptor.DefaultModelClass
+			}
+			if task.ModelClass == "" {
+				task.ModelClass = "general"
+			}
 		}
 	}
 	return plan, nil

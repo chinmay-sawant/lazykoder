@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chinmay-sawant/lazykoder/internal/provider"
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 )
 
@@ -77,6 +78,31 @@ func ProviderOf(infos []Info, id string) string {
 		return ProviderFromEndpoint(info.Endpoint, id)
 	}
 	return ProviderFromEndpoint("", id)
+}
+
+// CanonicalProvider returns the registry ID for a cached row. Legacy
+// OpenCode route labels and endpoint-derived values are accepted while old
+// caches are migrated.
+func CanonicalProvider(info Info) string {
+	if canonical := provider.Normalize(info.Provider); canonical != "" {
+		if _, ok := provider.DescriptorFor(canonical); ok {
+			return canonical
+		}
+	}
+	switch info.Provider {
+	case ProviderOpenCodeGo, ProviderOpenCodeZen:
+		return provider.IDOpenCode
+	}
+	legacy := ProviderFromEndpoint(info.Endpoint, info.ID)
+	if legacy == ProviderOpenCodeGo || legacy == ProviderOpenCodeZen {
+		return provider.IDOpenCode
+	}
+	if canonical := provider.Normalize(legacy); canonical != "" {
+		if _, ok := provider.DescriptorFor(canonical); ok {
+			return canonical
+		}
+	}
+	return ""
 }
 
 // ProviderFromEndpoint maps a chat URL or free-model id to a provider label.
@@ -150,11 +176,14 @@ func MergeByID(base, extra []Info) []Info {
 }
 
 func mergeKey(info Info) string {
-	provider := info.Provider
-	if provider == "" {
-		provider = ProviderFromEndpoint(info.Endpoint, info.ID)
+	providerID := CanonicalProvider(info)
+	if providerID == "" {
+		providerID = info.Provider
 	}
-	return provider + "\x00" + info.ID
+	if providerID == "" {
+		providerID = ProviderFromEndpoint(info.Endpoint, info.ID)
+	}
+	return providerID + "\x00" + info.Endpoint + "\x00" + info.ID
 }
 
 // CostUSD estimates USD for a step from token counts and list prices.
@@ -235,6 +264,9 @@ func Save(path string, models []Info, now time.Time) error {
 	saved := make([]Info, len(models))
 	for i, m := range models {
 		saved[i] = markFree(m)
+		if canonical := CanonicalProvider(saved[i]); canonical != "" {
+			saved[i].Provider = canonical
+		}
 	}
 	raw, err := json.MarshalIndent(file{FetchedAt: now.UnixMilli(), Models: saved}, "", "  ")
 	if err != nil {

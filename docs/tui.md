@@ -8,7 +8,9 @@ The active provider comes from `provider.active` in
 `.lazykoder/settings.json`. OpenCode is the default. `/model` shows available
 OpenCode, Grok, and Codex models in one drawer. `/memory` shows the exact bounded context
 for the next parent turn and toggles injection for the current session.
-`/history` shows current-chat memory entries with their update status.
+`/history` shows current-chat memory entries with their update status. `/tools`
+discovers and toggles registered tools, and `/roles` discovers and selects a
+child role.
 `/provider` shows the persisted selected or not-selected state and the
 provider authentication state. API-key providers show `key set` or `key
 missing`. Codex and Grok show `checking sign-in`, `signed in`, `sign in
@@ -187,6 +189,8 @@ draft in the input box (**edit**). Actions:
 | `/resume` | same as `ctrl+s` |
 | `/provider` | open the parent provider picker |
 | `/model` | open the model picker |
+| `/tools` | filter and toggle registered or allowed discovered tools |
+| `/roles` | filter and select a registered child role |
 | `/agents` | open the sub-agent list and logs (aliases `/subs`) |
 | `/status` | open the status details and visibility drawer |
 | click `subs:N` | same as `/agents` when sub-agents exist for this session |

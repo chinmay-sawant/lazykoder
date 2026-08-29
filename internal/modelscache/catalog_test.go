@@ -154,3 +154,26 @@ func TestSaveWritesZeroCacheWrite(t *testing.T) {
 		t.Fatalf("missing cache read:\n%s", body)
 	}
 }
+
+func TestSaveCanonicalizesProviderAndPreservesRoutes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "models.json")
+	models := []Info{
+		{ID: "same-model", Provider: ProviderOpenCodeGo, Endpoint: "https://opencode.ai/zen/go/v1/chat/completions"},
+		{ID: "same-model", Provider: ProviderOpenCodeZen, Endpoint: "https://opencode.ai/zen/v1/chat/completions"},
+	}
+	if err := Save(path, models, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	loaded, _, err := Load(path, time.Now(), time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 2 {
+		t.Fatalf("loaded models = %+v, want both provider routes", loaded)
+	}
+	for _, model := range loaded {
+		if model.Provider != "opencode" {
+			t.Fatalf("provider = %q, want canonical registry ID", model.Provider)
+		}
+	}
+}

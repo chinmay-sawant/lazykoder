@@ -12,11 +12,12 @@ a wrapper around the OpenCode CLI or its global `~/.local/share/opencode/opencod
 
 | Package | Responsibility |
 | --- | --- |
-| `main.go` | init workspace, load key, start the tea program |
-| `internal/workspace` | create `.lazykoder/`, open + migrate the db, ensure `.gitignore` |
+| `main.go` | init workspace, load catalogs and key, start the tea program |
+| `internal/workspace` | create `.lazykoder/`, bootstrap catalog files, open + migrate the db, ensure `.gitignore` |
 | `internal/db` | numbered migrations + session/message/part/tool/recap/memory store |
+| `internal/catalog` | approved local/global roots, bounded reads, and diagnostics |
 | `internal/provider/opencode` | HTTP client for the OpenCode Go API |
-| `internal/provider` | shared client contract, provider catalog, and factory |
+| `internal/provider` | shared client contract, provider registry, discovery, auth, and factory |
 | `internal/provider/openai` | OpenAI chat-completions client and model catalog |
 | `internal/provider/subscription` | constrained Codex and Grok CLI adapters that retain lazykoder's tool boundary |
 | `internal/agent` | turn loop, `buildHistory`, compact policy and summarizer run |
@@ -25,9 +26,11 @@ a wrapper around the OpenCode CLI or its global `~/.local/share/opencode/opencod
 | `internal/prompts` | embedded `compact.md` via `go:embed` (`prompts.Must`) |
 | `internal/subagent` | Manager + Host + AgentRunner for concurrent children |
 | `internal/policy` | bash classifier returning Allow/Ask/Deny |
-| `internal/tools` | bash, read, grep, write, edit, question, webfetch with HTTP and isolated browser reading, task schemas |
-| `internal/settings` | project settings: provider, model, orchestration, slot, `agents` caps, `compaction`, `recap`, skills, and API retry policy |
-| `internal/ui/chat` | transcript, prompt, status line, model picker |
+| `internal/agent/toolplugin` | executable contract and registry for compiled or discovered tools |
+| `internal/tools` | declarative shell-tool catalog plus bash, read, grep, write, edit, question, webfetch, and task schemas |
+| `internal/roles` | built-in and discovered child-role registry and policy descriptors |
+| `internal/settings` | project settings: provider, model, orchestration, slot, `agents` caps, tools, `compaction`, `recap`, skills, and API retry policy |
+| `internal/ui/chat` | transcript, prompt, status line, model, provider, tool, and role pickers |
 | `internal/ui/confirm` | the y/n confirm view (rm and question flows) |
 | `internal/envfile` | stdlib-only `.env` loader |
 
@@ -38,13 +41,14 @@ screen is a dedicated full view, not an OS dialog.
 
 ```
 cwd = process working directory
-1. envfile.Load(<cwd>/.env)        # keys; real env wins
-2. workspace.Init(cwd)
+1. workspace.Init(cwd)
      mkdir .lazykoder/             (0755, exist-ok)
      open .lazykoder/lazykoder.db  (create if missing)
      migrate schema
      ensure .gitignore lists .lazykoder/ (append only)
-3. load `provider.active`; create the parent client and create the child
+     ensure settings.json, providers.json, tools.json, roles.json (0600)
+2. envfile.Load(<cwd>/.env)        # keys; real env wins
+3. load provider, tool, and role catalogs; load `provider.active`; create the parent client and create the child
    client from `orchestrator.provider` (OpenCode is the child default)
 4. tea.NewProgram(chat.New(...))   # Session is nil: every launch is fresh
                                    # Workdir is the project cwd; env.Dir is .lazykoder for db + models.json
@@ -58,6 +62,33 @@ Past runs stay in SQLite. Load one explicitly with `/resume` or `ctrl+s`.
 
 A missing key is not a crash: the TUI starts and shows the error in the
 status line; the prompt stays usable.
+
+`bin/lk init` runs the same workspace bootstrap, prints only files created by
+that invocation, and exits without starting Bubble Tea. A normal launch uses
+the same idempotent path, so the explicit command is optional.
+
+## Pluggable catalogs
+
+Providers, tools, and roles use the same `Registry + Discover + Diagnostics`
+shape. `internal/catalog` resolves only the project `.lazykoder` directory and
+the configured global directory, rejects symlinked roots and files, and caps
+descriptor file size and entry count. The provider, tool, and role loaders
+merge global entries first and local entries second, so local IDs win. A bad
+entry is reported beside valid entries and never blocks chat.
+
+Compiled extensions register through `provider.Register`,
+`internal/tools.Register`, or `roles.Register`. Declarative providers,
+shell-backed tools, and child roles live in `providers.json`, `tools.json`, and
+`roles.json` under `.lazykoder`; global mirrors live under
+`~/.config/lazykoder`. Discovery reads metadata only. It never starts a CLI,
+opens a provider connection, or runs a tool command. A discovered shell tool
+still passes the policy classifier and workspace containment check at runtime.
+
+The first ordinary parent send persists the user row, then resolves the
+request-time tool and role providers alongside skills before calling the model.
+Continue, hidden turns, compaction, and child sessions do not rescan. Child
+jobs carry their explicit tool allowlist and role ID; the manager reads the
+registered role's writer and model-class policy.
 
 ## Providers
 

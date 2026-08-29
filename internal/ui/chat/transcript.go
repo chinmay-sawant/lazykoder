@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/chinmay-sawant/lazykoder/internal/agent"
+	"github.com/chinmay-sawant/lazykoder/internal/agent/toolplugin"
 	"github.com/chinmay-sawant/lazykoder/internal/db"
 	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
 	"github.com/chinmay-sawant/lazykoder/internal/provider"
@@ -975,7 +976,7 @@ func (m Model) renderToolMode(tool db.ToolCall, part db.Part, collapsed bool, wh
 		label = name + "  " + title
 	}
 	// Collapsed or open: still show +/− counts on the edit header.
-	if name == "edit" {
+	if name == "edit" || toolMetadataDiff(tool) != "" {
 		if add, del := diffStat(m.toolEditDiff(tool)); add+del > 0 {
 			label += "  " + formatDiffStat(add, del)
 		}
@@ -986,7 +987,7 @@ func (m Model) renderToolMode(tool db.ToolCall, part db.Part, collapsed bool, wh
 	bodyWidth := max(minPaneWidth, m.toolCardWidth())
 
 	// Edit tools: full-width soft green/red panel when expanded.
-	if name == "edit" {
+	if name == "edit" || toolMetadataDiff(tool) != "" {
 		return m.renderEditTool(header, tool, collapsed, bodyWidth)
 	}
 
@@ -1484,6 +1485,11 @@ func (m Model) toolCardWidth() int {
 }
 
 func toolCommand(tc db.ToolCall) string {
+	if tool, ok := toolplugin.Lookup(tc.Tool); ok {
+		if title := strings.TrimSpace(tool.Title(tc.InputJSON)); title != "" {
+			return title
+		}
+	}
 	if tc.Tool == "bash" {
 		var args struct {
 			Command string `json:"command"`

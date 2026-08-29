@@ -28,6 +28,9 @@ type Config struct {
 	Model                string // inherit if empty (runner)
 	Variant              string
 	ExploreModel         string
+	ModelByRole          map[string]string
+	ModelClassByRole     map[string]string
+	Roles                []roles.Role
 	ExploreClass         string
 	PlanClass            string
 	GeneralClass         string
@@ -76,6 +79,43 @@ func (c Config) Normalize() Config {
 	c.Model = strings.TrimSpace(c.Model)
 	c.Variant = strings.TrimSpace(c.Variant)
 	c.ExploreModel = strings.TrimSpace(c.ExploreModel)
+	if c.ModelByRole == nil {
+		c.ModelByRole = make(map[string]string)
+	}
+	if c.ModelClassByRole == nil {
+		c.ModelClassByRole = make(map[string]string)
+	}
+	classes := make(map[string]string, len(c.ModelClassByRole))
+	for role, class := range c.ModelClassByRole {
+		rawRole := strings.ToLower(strings.TrimSpace(role))
+		if !roles.IsKnown(rawRole) {
+			continue
+		}
+		role = rawRole
+		class = strings.TrimSpace(strings.ToLower(class))
+		if class == "" {
+			continue
+		}
+		classes[role] = class
+	}
+	c.ModelClassByRole = classes
+	models := make(map[string]string, len(c.ModelByRole))
+	for role, model := range c.ModelByRole {
+		rawRole := strings.ToLower(strings.TrimSpace(role))
+		if !roles.IsKnown(rawRole) {
+			continue
+		}
+		role = rawRole
+		model = strings.TrimSpace(model)
+		if model == "" {
+			continue
+		}
+		models[role] = model
+	}
+	c.ModelByRole = models
+	if c.Roles == nil {
+		c.Roles = roles.Roles()
+	}
 	c.ExploreClass = strings.TrimSpace(strings.ToLower(c.ExploreClass))
 	c.PlanClass = strings.TrimSpace(strings.ToLower(c.PlanClass))
 	c.GeneralClass = strings.TrimSpace(strings.ToLower(c.GeneralClass))

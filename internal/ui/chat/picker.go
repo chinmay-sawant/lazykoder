@@ -10,9 +10,13 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/chinmay-sawant/lazykoder/internal/agent"
+	"github.com/chinmay-sawant/lazykoder/internal/agent/toolplugin"
 	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
 	"github.com/chinmay-sawant/lazykoder/internal/provider"
+	"github.com/chinmay-sawant/lazykoder/internal/roles"
+	"github.com/chinmay-sawant/lazykoder/internal/settings"
 	"github.com/chinmay-sawant/lazykoder/internal/skills"
+	toolcatalog "github.com/chinmay-sawant/lazykoder/internal/tools"
 )
 
 // pickerRowMinLeftW is the minimum width left for the model label when a
@@ -55,12 +59,16 @@ func (m Model) pickerView() string {
 		kind = "skills"
 	} else if m.pickerKind == pickerKindProvider {
 		kind = "providers"
+	} else if m.pickerKind == pickerKindTools {
+		kind = "tools"
+	} else if m.pickerKind == pickerKindRoles {
+		kind = "roles"
 	}
 	meta := m.pickerSelectedLabel()
 
 	vpH := m.pickerVPHeight()
 	body := ""
-	if m.modelsErr != "" && m.pickerKind != pickerKindVariant && m.pickerKind != pickerKindSkills && m.pickerKind != pickerKindProvider {
+	if m.modelsErr != "" && m.pickerKind != pickerKindVariant && m.pickerKind != pickerKindSkills && m.pickerKind != pickerKindProvider && m.pickerKind != pickerKindTools && m.pickerKind != pickerKindRoles {
 		body = errStyle.Render("models unavailable: " + m.modelsErr)
 	} else if len(m.pickerItems) == 0 {
 		if m.pickerKind == pickerKindVariant {
@@ -73,6 +81,10 @@ func (m Model) pickerView() string {
 			body = hintStyle.Render("no skills discovered")
 		} else if m.pickerKind == pickerKindProvider {
 			body = hintStyle.Render("no providers available")
+		} else if m.pickerKind == pickerKindTools {
+			body = hintStyle.Render("no tools discovered")
+		} else if m.pickerKind == pickerKindRoles {
+			body = hintStyle.Render("no roles discovered")
 		} else if len(m.models) == 0 {
 			body = hintStyle.Render("no models loaded")
 		} else {
@@ -92,6 +104,10 @@ func (m Model) pickerView() string {
 		filter = "filter /  •  enter activate  •  esc cancel"
 	case pickerKindProvider:
 		filter = "filter /  •  enter select or sign in  •  esc cancel"
+	case pickerKindTools:
+		filter = "filter /  •  enter toggle  •  esc cancel"
+	case pickerKindRoles:
+		filter = "filter /  •  enter select  •  esc cancel"
 	}
 	if m.pickerFromPrompt {
 		filter = "type to search  •  enter select  •  esc cancel"
@@ -137,7 +153,7 @@ func (m Model) pickerLines() []pickerLine {
 		}
 		return lines
 	}
-	byProvider := make(map[string][]int, len(modelPickerProviderIDs))
+	byProvider := make(map[string][]int, len(modelPickerProviderIDs()))
 	var unclassified []int
 	for index := range m.pickerItems {
 		providerID := m.modelProviderAt(index)
@@ -148,7 +164,7 @@ func (m Model) pickerLines() []pickerLine {
 		byProvider[providerID] = append(byProvider[providerID], index)
 	}
 	lines := make([]pickerLine, 0, len(m.pickerItems)+len(byProvider))
-	for _, providerID := range modelPickerProviderIDs {
+	for _, providerID := range modelPickerProviderIDs() {
 		items := byProvider[providerID]
 		if len(items) == 0 {
 			continue
@@ -289,24 +305,7 @@ func (m Model) modelInfoForProvider(id, providerID string) (modelscache.Info, bo
 }
 
 func providerIDForModelInfo(info modelscache.Info) string {
-	switch info.Provider {
-	case provider.IDCodex:
-		return provider.IDCodex
-	case provider.IDGrok:
-		return provider.IDGrok
-	case provider.IDOpenCode, modelscache.ProviderOpenCodeGo, modelscache.ProviderOpenCodeZen:
-		return provider.IDOpenCode
-	}
-	if strings.HasPrefix(info.Endpoint, "cli://"+provider.IDCodex) {
-		return provider.IDCodex
-	}
-	if strings.HasPrefix(info.Endpoint, "cli://"+provider.IDGrok) {
-		return provider.IDGrok
-	}
-	if strings.Contains(info.Endpoint, "opencode.ai") {
-		return provider.IDOpenCode
-	}
-	return ""
+	return modelscache.CanonicalProvider(info)
 }
 
 func modelInfosForProvider(infos []modelscache.Info, providerID string) []modelscache.Info {
@@ -342,6 +341,19 @@ func (m Model) pickerRow(id, providerID string, selected bool, width int) string
 				continue
 			}
 			return left + "  " + string(skill.Scope) + "  " + skill.DisplayPath
+		}
+		return left
+	}
+	if m.pickerKind == pickerKindTools {
+		mark := "off"
+		if m.projectSettings.EffectiveTools().Enabled[id] {
+			mark = "on"
+		}
+		return pickerRowWithRight(left, mark, width)
+	}
+	if m.pickerKind == pickerKindRoles {
+		if role, ok := roles.DescriptorFor(id); ok {
+			return pickerRowWithRight(left, fmt.Sprintf("%d tools", len(role.Tools)), width)
 		}
 		return left
 	}
@@ -541,6 +553,13 @@ func (m Model) selectPickerItem(idx int) (Model, tea.Cmd) {
 		} else {
 			m = m.setExploreModel(selected)
 		}
+	case settingsPickerRole:
+		role, ok := roles.DescriptorFor(m.pickerItems[idx])
+		if !ok {
+			return m, nil
+		}
+		m.projectSettings.Agents.DefaultRole = role.ID
+		m = m.rebuildSubMgr().persistSettings()
 	default:
 		goto normalSelection
 	}
@@ -548,6 +567,20 @@ func (m Model) selectPickerItem(idx int) (Model, tea.Cmd) {
 	return m.openSettings(), nil
 
 normalSelection:
+	if m.pickerKind == pickerKindTools {
+		m = m.toggleTool(m.pickerItems[idx])
+		m.copyNotice = "tool " + m.pickerItems[idx] + " " + toolSettingState(m.projectSettings, m.pickerItems[idx])
+		return m.finishPickerSelection(), clearCopyNotice()
+	}
+	if m.pickerKind == pickerKindRoles {
+		if role, ok := roles.DescriptorFor(m.pickerItems[idx]); ok {
+			m.projectSettings.Agents.DefaultRole = role.ID
+			m = m.persistSettings()
+			m.copyNotice = "default role: " + role.Label
+			return m.finishPickerSelection(), clearCopyNotice()
+		}
+		return m.finishPickerSelection(), nil
+	}
 	if m.pickerKind == pickerKindSkills {
 		for _, skill := range m.pickerSkillItems {
 			if skill.DescriptorPath != m.pickerItems[idx] {
@@ -621,6 +654,21 @@ func (m Model) finishPickerSelection() Model {
 	return m.closePicker()
 }
 
+func (m Model) toggleTool(id string) Model {
+	if m.projectSettings.Tools.Enabled == nil {
+		m.projectSettings.Tools.Enabled = make(map[string]bool)
+	}
+	m.projectSettings.Tools.Enabled[id] = !m.projectSettings.Tools.Enabled[id]
+	return m.persistSettings()
+}
+
+func toolSettingState(s settings.Settings, id string) string {
+	if s.EffectiveTools().Enabled[id] {
+		return "enabled"
+	}
+	return "disabled"
+}
+
 func (m Model) closePicker() Model {
 	reopenSettings := m.settingsPickerTarget != settingsPickerNone
 	m = m.clearFocus(focusPicker)
@@ -653,6 +701,28 @@ func (m *Model) applyFilter() {
 			haystack := strings.ToLower(skill.Name + " " + skill.Description + " " + strings.Join(skill.Triggers, " ") + " " + skill.DisplayPath)
 			if modelMatchesFilter(haystack, "", needle) {
 				m.pickerItems = append(m.pickerItems, skill.DescriptorPath)
+			}
+		}
+		if m.pickerCursor >= len(m.pickerItems) {
+			m.pickerCursor = max(0, len(m.pickerItems)-1)
+		}
+		m.pickerVp.SetHeight(m.pickerVPHeight())
+		m.pickerVp.SetContent(m.pickerContent(m.pickerVp.Width()))
+		return
+	}
+	if m.pickerKind == pickerKindTools || m.pickerKind == pickerKindRoles {
+		for _, id := range m.pickerSource() {
+			haystack := id
+			if m.pickerKind == pickerKindTools {
+				if tool, ok := toolplugin.Lookup(id); ok {
+					spec := tool.Spec()
+					haystack += " " + spec.Description
+				}
+			} else if role, ok := roles.DescriptorFor(id); ok {
+				haystack += " " + role.Label + " " + role.Prompt
+			}
+			if modelMatchesFilter(haystack, "", needle) {
+				m.pickerItems = append(m.pickerItems, id)
 			}
 		}
 		if m.pickerCursor >= len(m.pickerItems) {
@@ -743,6 +813,28 @@ func (m Model) openSkillsPicker(query string) (Model, tea.Cmd) {
 	return m, m.scanSkills
 }
 
+func (m Model) openToolsPicker(query string) (Model, tea.Cmd) {
+	m = m.openKindPicker(pickerKindTools)
+	m.pickerFilter = strings.TrimSpace(query)
+	if m.pickerFilter != "" {
+		m.applyFilter()
+	}
+	m.toolsScanning = true
+	m.activity = "scanning approved tools"
+	return m, m.scanTools
+}
+
+func (m Model) openRolesPicker(query string) (Model, tea.Cmd) {
+	m = m.openKindPicker(pickerKindRoles)
+	m.pickerFilter = strings.TrimSpace(query)
+	if m.pickerFilter != "" {
+		m.applyFilter()
+	}
+	m.rolesScanning = true
+	m.activity = "scanning approved roles"
+	return m, m.scanRoles
+}
+
 func (m Model) scanSkills() tea.Msg {
 	cfg := m.projectSettings.EffectiveSkills()
 	opts := skills.DefaultOptions(m.workdir)
@@ -752,6 +844,17 @@ func (m Model) scanSkills() tea.Msg {
 	opts.MaxBody = cfg.MaxBodyBytes
 	catalog, err := skills.Discover(context.Background(), opts)
 	return skillsMsg{catalog: catalog, err: err}
+}
+
+func (m Model) scanTools() tea.Msg {
+	cfg := m.projectSettings.EffectiveTools()
+	catalog, err := toolcatalog.Load(m.workdir, true, cfg.AllowDiscovered, cfg.MaxDiscovered)
+	return toolsMsg{catalog: catalog, err: err}
+}
+
+func (m Model) scanRoles() tea.Msg {
+	catalog, err := roles.Load(m.workdir)
+	return rolesMsg{catalog: catalog, err: err}
 }
 
 func (m Model) openKindPicker(kind string) Model {
@@ -806,6 +909,12 @@ func (m Model) pickerSource() []string {
 	if m.pickerKind == pickerKindProvider {
 		return provider.IDs()
 	}
+	if m.pickerKind == pickerKindTools {
+		return toolplugin.IDsFor(m.projectSettings.EffectiveTools().AllowDiscovered)
+	}
+	if m.pickerKind == pickerKindRoles {
+		return roles.IDs()
+	}
 	return m.models
 }
 
@@ -835,6 +944,12 @@ func (m Model) pickerSelectedValue() string {
 			return m.activeSkills[0].DescriptorPath
 		}
 		return ""
+	}
+	if m.pickerKind == pickerKindTools {
+		return ""
+	}
+	if m.pickerKind == pickerKindRoles {
+		return m.projectSettings.Agents.DefaultRole
 	}
 	if m.pickerKind == pickerKindVariant {
 		if m.settingsPickerTarget == settingsPickerChildVariant {
@@ -867,6 +982,12 @@ func (m Model) pickerSelectedLabel() string {
 			return m.activeSkills[0].Name
 		}
 		return "none"
+	}
+	if m.pickerKind == pickerKindTools {
+		return fmt.Sprintf("%d enabled", len(m.projectSettings.EffectiveTools().Enabled))
+	}
+	if m.pickerKind == pickerKindRoles {
+		return m.projectSettings.Agents.DefaultRole
 	}
 	if m.pickerKind == pickerKindVariant {
 		if m.settingsPickerTarget == settingsPickerChildVariant {
@@ -914,6 +1035,18 @@ func (m Model) pickerItemLabelForProvider(id, providerID string) string {
 			if skill.DescriptorPath == id {
 				return skill.Name
 			}
+		}
+		return id
+	}
+	if m.pickerKind == pickerKindTools {
+		if tool, ok := toolplugin.Lookup(id); ok {
+			return tool.Spec().Name
+		}
+		return id
+	}
+	if m.pickerKind == pickerKindRoles {
+		if role, ok := roles.DescriptorFor(id); ok {
+			return role.Label
 		}
 		return id
 	}

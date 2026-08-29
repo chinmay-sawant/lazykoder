@@ -14,9 +14,9 @@ import (
 type AuthMethod string
 
 const (
-	AuthMethodAPIKey AuthMethod = "api-key"
-	AuthMethodCodex  AuthMethod = "codex-login"
-	AuthMethodGrok   AuthMethod = "grok-login"
+	AuthMethodAPIKey AuthMethod = "api_key"
+	AuthMethodCodex  AuthMethod = "codex"
+	AuthMethodGrok   AuthMethod = "grok"
 )
 
 // AuthState is the current usability of a provider credential.
@@ -71,9 +71,16 @@ func CheckAuth(ctx context.Context, id string) AuthStatus {
 	if !ok {
 		return AuthStatus{State: AuthStateMissing, Label: "unavailable"}
 	}
+	if descriptor.AuthChecker != nil {
+		return descriptor.AuthChecker(ctx, descriptor.ID)
+	}
 	if descriptor.AuthMethod == AuthMethodAPIKey {
 		return InitialAuthStatus(descriptor.ID)
 	}
+	return checkCLIAuth(ctx, descriptor)
+}
+
+func checkCLIAuth(ctx context.Context, descriptor Descriptor) AuthStatus {
 	path, err := exec.LookPath(descriptor.CLI)
 	if err != nil {
 		return AuthStatus{State: AuthStateMissing, Label: "CLI missing", Details: descriptor.CLI}
@@ -83,18 +90,23 @@ func CheckAuth(ctx context.Context, id string) AuthStatus {
 		args = []string{"models"}
 	}
 	cmd := exec.CommandContext(ctx, path, args...)
-	cmd.Env = withoutCredentialEnv(os.Environ(), descriptor.EnvKey)
-	if descriptor.AuthMethod == AuthMethodCodex {
-		cmd.Env = withoutCredentialEnv(cmd.Env, "OPENAI_API_KEY")
-	}
-	if descriptor.AuthMethod == AuthMethodGrok {
-		cmd.Env = withoutCredentialEnv(cmd.Env, "XAI_API_KEY")
+	cmd.Env = os.Environ()
+	for _, name := range descriptor.EnvKeys {
+		cmd.Env = withoutCredentialEnv(cmd.Env, name)
 	}
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return AuthStatus{State: AuthStateRequired, Label: "sign in required", Details: commandFailure(output, err)}
 	}
 	return AuthStatus{State: AuthStateReady, Label: "signed in"}
+}
+
+func cliAuthChecker(ctx context.Context, id string) AuthStatus {
+	descriptor, ok := DescriptorFor(id)
+	if !ok {
+		return AuthStatus{State: AuthStateMissing, Label: "unavailable"}
+	}
+	return checkCLIAuth(ctx, descriptor)
 }
 
 // LoginCommand returns the supported provider-owned login command. Grok uses
@@ -104,8 +116,19 @@ func LoginCommand(id string) (*exec.Cmd, error) {
 	if !ok {
 		return nil, fmt.Errorf("provider: unknown provider %s", id)
 	}
+	if descriptor.LoginCommand != nil {
+		return descriptor.LoginCommand(descriptor.ID)
+	}
 	if descriptor.AuthMethod == AuthMethodAPIKey {
 		return nil, errors.New("provider: API-key providers do not have a CLI sign-in flow")
+	}
+	return cliLoginCommand(descriptor.ID)
+}
+
+func cliLoginCommand(id string) (*exec.Cmd, error) {
+	descriptor, ok := DescriptorFor(id)
+	if !ok {
+		return nil, fmt.Errorf("provider: unknown provider %s", id)
 	}
 	path, err := exec.LookPath(descriptor.CLI)
 	if err != nil {
@@ -116,11 +139,9 @@ func LoginCommand(id string) (*exec.Cmd, error) {
 		args = append(args, "--device-auth")
 	}
 	cmd := exec.Command(path, args...)
-	if descriptor.AuthMethod == AuthMethodCodex {
-		cmd.Env = withoutCredentialEnv(os.Environ(), "OPENAI_API_KEY")
-	}
-	if descriptor.AuthMethod == AuthMethodGrok {
-		cmd.Env = withoutCredentialEnv(os.Environ(), "XAI_API_KEY")
+	cmd.Env = os.Environ()
+	for _, name := range descriptor.EnvKeys {
+		cmd.Env = withoutCredentialEnv(cmd.Env, name)
 	}
 	return cmd, nil
 }

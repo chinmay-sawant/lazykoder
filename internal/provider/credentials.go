@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"fmt"
 	"os"
 	"strings"
 )
@@ -13,15 +14,24 @@ func CredentialSource(id string) (string, bool) {
 	if !ok || descriptor.AuthMethod != AuthMethodAPIKey {
 		return "", false
 	}
-	if descriptor.ID == IDOpenCode {
-		for _, name := range []string{"OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"} {
-			if hasCredential(name) {
-				return name, true
-			}
+	for _, name := range descriptor.EnvKeys {
+		if hasCredential(name) {
+			return name, true
 		}
-		return descriptor.EnvKey, false
 	}
-	return descriptor.EnvKey, hasCredential(descriptor.EnvKey)
+	return descriptor.EnvKey, false
+}
+
+func credentialValue(descriptor Descriptor) (string, error) {
+	for _, name := range descriptor.EnvKeys {
+		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+			return value, nil
+		}
+	}
+	if descriptor.EnvKey == "" {
+		return "", nil
+	}
+	return "", fmt.Errorf("provider: %s is not set", descriptor.EnvKey)
 }
 
 func hasCredential(name string) bool {

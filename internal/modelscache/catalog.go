@@ -270,13 +270,20 @@ func FilterDeprecated(infos []Info) []Info {
 // metadata remains authoritative when it supplies a specialized route.
 func PreserveSpecializedEndpoints(infos, fallback []Info) []Info {
 	previous := make(map[string]Info, len(fallback))
+	specialized := make(map[string]Info, len(fallback))
 	for _, info := range fallback {
 		previous[mergeKey(info)] = info
+		if isResponsesEndpoint(info.Endpoint) {
+			specialized[providerModelKey(info)] = info
+		}
 	}
 	out := make([]Info, len(infos))
 	copy(out, infos)
 	for index, info := range out {
 		old, ok := previous[mergeKey(info)]
+		if !ok {
+			old, ok = specialized[providerModelKey(info)]
+		}
 		if !ok {
 			continue
 		}
@@ -296,4 +303,12 @@ func isGenericChatEndpoint(endpoint string) bool {
 
 func isResponsesEndpoint(endpoint string) bool {
 	return strings.HasSuffix(strings.TrimSuffix(endpoint, "/"), "/responses")
+}
+
+func providerModelKey(info Info) string {
+	providerID := CanonicalProvider(info)
+	if providerID == "" {
+		providerID = info.Provider
+	}
+	return providerID + "\x00" + info.ID
 }

@@ -34,6 +34,58 @@ func TestInitFresh(t *testing.T) {
 	}
 }
 
+func TestInitCreatesEmptyCatalogFiles(t *testing.T) {
+	cwd := t.TempDir()
+	env, err := Init(cwd)
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	defer env.DB.Close()
+
+	for _, name := range []string{"settings.json", "providers.json", "tools.json", "roles.json"} {
+		path := filepath.Join(env.Dir, name)
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("stat %s: %v", name, err)
+		}
+		if got := info.Mode().Perm(); got != 0o600 {
+			t.Errorf("%s mode = %o, want 600", name, got)
+		}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		if name != "settings.json" && string(body) != "[]\n" {
+			t.Errorf("%s = %q, want empty array", name, body)
+		}
+	}
+}
+
+func TestInitDoesNotOverwriteExistingProviders(t *testing.T) {
+	cwd := t.TempDir()
+	dir := filepath.Join(cwd, ".lazykoder")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "providers.json")
+	want := []byte(`[{"id":"local","base_url":"https://example.test/v1"}]`)
+	if err := os.WriteFile(path, want, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env, err := Init(cwd)
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	defer env.DB.Close()
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("providers.json changed to %q", got)
+	}
+}
+
 func TestInitTwice(t *testing.T) {
 	cwd := t.TempDir()
 	env1, err := Init(cwd)

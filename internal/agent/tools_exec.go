@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chinmay-sawant/lazykoder/internal/agent/toolplugin"
 	"github.com/chinmay-sawant/lazykoder/internal/db"
 	"github.com/chinmay-sawant/lazykoder/internal/policy"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/bash"
@@ -154,6 +155,11 @@ func (a *Agent) runTool(ctx context.Context, events chan<- Event, msgID string, 
 }
 
 func toolTitle(tc ChatToolCall) string {
+	if tool, ok := registeredTool(tc.Name); ok {
+		if title := strings.TrimSpace(tool.Title(tc.Arguments)); title != "" {
+			return truncateRunes(title, maxToolTitle)
+		}
+	}
 	var args map[string]json.RawMessage
 	if json.Unmarshal([]byte(tc.Arguments), &args) != nil {
 		return tc.Name
@@ -219,6 +225,13 @@ func (a *Agent) executeTool(ctx context.Context, events chan<- Event, partID, ti
 	if isTaskToolName(tc.Name) {
 		return a.execTaskTool(ctx, events, partID, title, tc)
 	}
+	if tool, ok := registeredTool(tc.Name); ok {
+		if !toolAllowed(a.opts.ToolNames, tc.Name) {
+			out := "tool not allowed: " + tc.Name
+			return a.updateTool(ctx, events, partID, title, tc, "denied", &out, deniedJSON(), nil, nil)
+		}
+		return a.execRegisteredTool(ctx, events, partID, title, tc, tool)
+	}
 	registration, known := baseToolRegistry[tc.Name]
 	if known && !toolAllowed(a.opts.ToolNames, tc.Name) {
 		out := "tool not allowed: " + tc.Name
@@ -229,6 +242,47 @@ func (a *Agent) executeTool(ctx context.Context, events chan<- Event, partID, ti
 	}
 	out := "unknown tool: " + tc.Name
 	return a.updateTool(ctx, events, partID, title, tc, "denied", &out, deniedJSON(), nil, nil)
+}
+
+func (a *Agent) execRegisteredTool(ctx context.Context, events chan<- Event, partID, title string, tc ChatToolCall, tool Tool) (string, error) {
+	if err := validateRegisteredTool(tc.Name, tool); err != nil {
+		msg := err.Error()
+		return a.updateTool(ctx, events, partID, title, tc, "error", &msg, errorJSON(msg), nil, nil)
+	}
+	toolCtx := toolplugin.Context{
+		Workdir: a.workdir,
+		Store:   a.store,
+		Confirm: a.opts.Confirm,
+	}
+	if a.opts.Ask != nil {
+		toolCtx.Ask = func(prompt string, options []string) (int, error) {
+			return a.opts.Ask(question.Question{Question: prompt, Options: options})
+		}
+	}
+	out, metadata, status, err := tool.Run(ctx, tc.Arguments, toolCtx)
+	if err != nil {
+		if strings.TrimSpace(out) == "" {
+			out = err.Error()
+		}
+		if status == "" {
+			status = "error"
+		}
+	}
+	if status == "" {
+		status = "completed"
+	}
+	result := toolOutputJSON(out)
+	if status == "denied" {
+		result = deniedJSON()
+	}
+	if status == "error" {
+		result = errorJSON(out)
+	}
+	var metadataPtr *string
+	if metadata != "" {
+		metadataPtr = &metadata
+	}
+	return a.updateTool(ctx, events, partID, title, tc, status, &out, result, nil, metadataPtr)
 }
 
 func (a *Agent) execTaskTool(ctx context.Context, events chan<- Event, partID, title string, tc ChatToolCall) (string, error) {

@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
+	"github.com/chinmay-sawant/lazykoder/internal/roles"
 	"github.com/chinmay-sawant/lazykoder/internal/settings"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
@@ -32,6 +33,7 @@ const (
 	settingsRowSkillsGlobal
 	settingsRowSkillsRemember
 	settingsRowSkillsMaxMatches
+	settingsRowTools
 	settingsRowLimit
 	settingsRowSteps
 	settingsRowCompactAuto
@@ -106,6 +108,8 @@ const (
 	settingsPickerChildVariant
 	settingsPickerExploreModel
 	settingsPickerRecapModel
+	settingsPickerTools
+	settingsPickerRole
 )
 
 type settingsRowDefinition struct {
@@ -131,6 +135,7 @@ var settingsRowDefinitions = [...]settingsRowDefinition{
 	{id: settingsRowSkillsGlobal, label: "skills global source"},
 	{id: settingsRowSkillsRemember, label: "remember skill references"},
 	{id: settingsRowSkillsMaxMatches, label: "skill auto matches"},
+	{id: settingsRowTools, label: "enabled tools"},
 	{id: settingsRowLimit, label: "step limit"},
 	{id: settingsRowSteps, label: "parent max steps"},
 	{id: settingsRowCompactAuto, label: "auto-compact"},
@@ -432,7 +437,7 @@ func (m Model) settingsPaintLines(innerW int) []settingsPaintLine {
 		settingsPaintLine{kind: settingsLineHeader, row: -1, text: "compaction"},
 		m.settingsPaintRow(settingsRowCompactAuto, "["+boolOn(m.projectSettings.Compaction.Auto)+"]", innerW, false),
 		m.settingsPaintRow(settingsRowCompactPercent, fmt.Sprintf("◂ %d%% ▸", m.projectSettings.EffectiveCompaction().Percent), innerW, !m.projectSettings.Compaction.Auto),
-		settingsPaintLine{kind: settingsLineHint, row: -1, text: "auto-compact when used tokens exceed this % of the model window"},
+		m.settingsPaintRow(settingsRowTools, fmt.Sprintf("◂ %d enabled, discovered %s ▸", len(m.projectSettings.EffectiveTools().Enabled), boolOn(m.projectSettings.EffectiveTools().AllowDiscovered)), innerW, false),
 		settingsPaintLine{kind: settingsLineHeader, row: -1, text: "sub-agents"},
 		m.settingsPaintRow(settingsRowAgentsEnabled, "["+agentsOn+"]", innerW, false),
 		m.settingsPaintRow(settingsRowChildModel, "◂ "+childVal+" ▸", innerW, false),
@@ -682,6 +687,10 @@ func (m Model) activateSettingsRow() (Model, tea.Cmd) {
 			v, _ := strconv.Atoi(val)
 			return mod.setSkillsMaxMatches(v), nil
 		})
+	case settingsRowTools:
+		m.settingsPickerTarget = settingsPickerTools
+		m.settingsMode = false
+		return m.openKindPicker(pickerKindTools), nil
 	case settingsRowLimit:
 		return m.setLimitEnabled(!m.projectSettings.Slot.LimitEnabled), nil
 	case settingsRowSteps:
@@ -707,7 +716,9 @@ func (m Model) activateSettingsRow() (Model, tea.Cmd) {
 	case settingsRowAgentsEnabled:
 		return m.setAgentsEnabled(!m.projectSettings.Agents.Enabled), nil
 	case settingsRowAgentsRole:
-		return m.cycleAgentsRole(1), nil
+		m.settingsPickerTarget = settingsPickerRole
+		m.settingsMode = false
+		return m.openKindPicker(pickerKindRoles), nil
 	case settingsRowAgentsConcurrent:
 		return m.openSettingInputForm("Max Concurrent Agents", "Max parallel sub-agents", strconv.Itoa(m.projectSettings.Agents.MaxConcurrent), validateIntSetting, func(mod Model, val string) (Model, tea.Cmd) {
 			v, _ := strconv.Atoi(val)
@@ -822,6 +833,11 @@ func (m Model) setAllowlistEnabled(on bool) Model {
 	return m.persistSettings()
 }
 
+func (m Model) setToolsDiscovered(on bool) Model {
+	m.projectSettings.Tools.AllowDiscovered = on
+	return m.persistSettings()
+}
+
 func (m Model) adjustSettings(delta int) Model {
 	switch m.settingsCursor {
 	case settingsRowTheme:
@@ -875,6 +891,10 @@ func (m Model) adjustSettings(delta int) Model {
 		}
 	case settingsRowSkillsMaxMatches:
 		return m.setSkillsMaxMatches(m.projectSettings.EffectiveSkills().MaxAutoMatches + delta)
+	case settingsRowTools:
+		if delta != 0 {
+			return m.setToolsDiscovered(delta > 0)
+		}
 	case settingsRowLimit:
 		if delta > 0 {
 			return m.setLimitEnabled(true)
@@ -997,6 +1017,8 @@ func (m Model) toggleSettingsRow() Model {
 		return m.setSkillsRemember(!m.projectSettings.EffectiveSkills().Remember)
 	case settingsRowSkillsMaxMatches:
 		return m.setSkillsMaxMatches(m.projectSettings.EffectiveSkills().MaxAutoMatches + 1)
+	case settingsRowTools:
+		return m.setToolsDiscovered(!m.projectSettings.EffectiveTools().AllowDiscovered)
 	}
 	return m
 }
@@ -1128,7 +1150,10 @@ func (m Model) setExploreModel(id string) Model {
 }
 
 func (m Model) cycleAgentsRole(delta int) Model {
-	list := []string{"explore", "plan", "general"}
+	list := roles.IDs()
+	if len(list) == 0 {
+		return m
+	}
 	cur := m.projectSettings.Agents.DefaultRole
 	idx := slices.Index(list, cur)
 	if idx < 0 {
@@ -1700,6 +1725,12 @@ func (m Model) settingsHit(x, y int, button tea.MouseButton) (Model, tea.Cmd, bo
 			return m.setSkillsMaxMatches(current + 1), nil, true
 		}
 		return m.setSkillsMaxMatches(current + 1), nil, true
+	case settingsRowTools:
+		if button == tea.MouseLeft {
+			next, cmd := m.activateSettingsRow()
+			return next, cmd, true
+		}
+		return m.setToolsDiscovered(!m.projectSettings.EffectiveTools().AllowDiscovered), nil, true
 	case settingsRowLimit:
 		return m.setLimitEnabled(!m.projectSettings.Slot.LimitEnabled), nil, true
 	case settingsRowCompactAuto:

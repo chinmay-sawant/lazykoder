@@ -104,6 +104,7 @@ func (m Model) agentOptions() agent.Options {
 		Model:                m.model,
 		Endpoint:             m.modelEndpoint(),
 		Variant:              m.effectiveVariantFor(m.modelLabel(), m.projectSettings.EffectiveProvider(), m.variant),
+		ToolNames:            enabledToolNames(m.projectSettings),
 		Confirm:              m.confirmHook,
 		Ask:                  m.askHook,
 		BashAllowlist:        m.projectSettings.EffectiveAgents().BashAllowlist,
@@ -118,15 +119,22 @@ func (m Model) agentOptions() agent.Options {
 		KeepTokens:           cfg.KeepTokens,
 		CompactReason:        m.pendingCompactReason,
 		Orchestrator: orchestrator.Config{
-			Enabled:      m.projectSettings.EffectiveAgents().Enabled && m.projectSettings.EffectiveOrchestrator().Enabled,
-			Review:       m.projectSettings.EffectiveOrchestrator().Review,
-			Model:        m.model,
-			Endpoint:     m.modelEndpoint(),
-			MaxSubtasks:  orchestrator.MaxSubtasks,
-			ExploreClass: m.projectSettings.EffectiveOrchestrator().ExploreClass,
-			PlanClass:    m.projectSettings.EffectiveOrchestrator().PlanClass,
-			GeneralClass: m.projectSettings.EffectiveOrchestrator().GeneralClass,
+			Enabled:          m.projectSettings.EffectiveAgents().Enabled && m.projectSettings.EffectiveOrchestrator().Enabled,
+			Review:           m.projectSettings.EffectiveOrchestrator().Review,
+			Model:            m.model,
+			Endpoint:         m.modelEndpoint(),
+			MaxSubtasks:      orchestrator.MaxSubtasks,
+			ModelClassByRole: m.projectSettings.EffectiveOrchestrator().ModelClassByRole,
+			ExploreClass:     m.projectSettings.EffectiveOrchestrator().ExploreClass,
+			PlanClass:        m.projectSettings.EffectiveOrchestrator().PlanClass,
+			GeneralClass:     m.projectSettings.EffectiveOrchestrator().GeneralClass,
 		},
+	}
+	opts.ToolProvider = func(_ context.Context, _, _ string) ([]string, error) {
+		return enabledToolNames(m.projectSettings), nil
+	}
+	opts.RoleProvider = func(_ context.Context, _, _ string) (string, error) {
+		return m.projectSettings.EffectiveAgents().DefaultRole, nil
 	}
 	if m.projectSettings.EffectiveRecap().Enabled {
 		opts.Recall = m.recall
@@ -147,6 +155,16 @@ func (m Model) agentOptions() agent.Options {
 	}
 	opts.Host = host
 	return opts
+}
+
+func enabledToolNames(s settings.Settings) []string {
+	enabled := s.EffectiveTools().Enabled
+	names := make([]string, 0, len(enabled))
+	for name := range enabled {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // skillProvider discovers approved roots and reads only the selected,

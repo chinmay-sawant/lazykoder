@@ -189,6 +189,14 @@ func (m Model) runSlashArg(name, extra string) (Model, tea.Cmd) {
 			return m, clearCopyNotice()
 		}
 		return m.openSkillsPicker(extra)
+	case "/tools", "/tool":
+		if len(m.projectSettings.EffectiveTools().Enabled) == 0 {
+			m.copyNotice = "tools disabled in settings"
+			return m, clearCopyNotice()
+		}
+		return m.openToolsPicker(extra)
+	case "/roles", "/role":
+		return m.openRolesPicker(extra)
 	case "/settings", "/slot":
 		return m.openSettings(), m.maybeFetchUsage()
 	case "/agents", "/subs", "/subagents":

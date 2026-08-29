@@ -16,15 +16,18 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/chinmay-sawant/lazykoder/internal/agent"
+	"github.com/chinmay-sawant/lazykoder/internal/agent/toolplugin"
 	"github.com/chinmay-sawant/lazykoder/internal/db"
 	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
 	"github.com/chinmay-sawant/lazykoder/internal/provider"
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 	"github.com/chinmay-sawant/lazykoder/internal/recap"
+	"github.com/chinmay-sawant/lazykoder/internal/roles"
 	"github.com/chinmay-sawant/lazykoder/internal/settings"
 	"github.com/chinmay-sawant/lazykoder/internal/skills"
 	"github.com/chinmay-sawant/lazykoder/internal/subagent"
 	"github.com/chinmay-sawant/lazykoder/internal/tips"
+	toolcatalog "github.com/chinmay-sawant/lazykoder/internal/tools"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/question"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/confirm"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
@@ -86,6 +89,10 @@ const (
 	pickerKindVariant  = "variant"
 	pickerKindSkills   = "skills"
 	pickerKindProvider = "provider"
+	pickerKindTool     = "tool"
+	pickerKindRole     = "role"
+	pickerKindTools    = pickerKindTool
+	pickerKindRoles    = pickerKindRole
 	// pulseInterval and pulseSteps throb the in-progress reply rail.
 	pulseInterval = 70 * time.Millisecond
 	pulseSteps    = 16
@@ -219,6 +226,10 @@ type Model struct {
 	skillsScanning       bool
 	skillsCatalog        skills.Catalog
 	activeSkills         []skills.Skill
+	toolCatalog          toolcatalog.Catalog
+	roleCatalog          roles.Catalog
+	toolsScanning        bool
+	rolesScanning        bool
 	pendingSkillRefs     []recap.MemorySkillReference
 	memoryScanJobs       int
 	tokensUsed           int64
@@ -442,6 +453,8 @@ var slashCommands = []slashCmd{
 	{name: "/spawn", description: "spawn a new sub-agent via interactive form", aliases: []string{"agent"}, group: "Project"},
 	{name: "/settings", description: "project defaults (model, agents, compaction, safety)", aliases: []string{"slot"}, group: "Project"},
 	{name: "/skills", description: "discover and activate local and global skills", aliases: []string{"skill"}, group: "Project"},
+	{name: "/tools", description: "discover and enable compiled or declarative tools", aliases: []string{"tool"}, group: "Project"},
+	{name: "/roles", description: "discover and select sub-agent roles", aliases: []string{"role"}, group: "Project"},
 	{name: "/usage", description: "show OpenCode Go plan usage (rolling, weekly, monthly)", group: "Project"},
 	{name: "/status", description: "open the status drawer and toggle details", group: "Project"},
 	{name: "/help", description: "keyboard shortcuts (?, also /keys)", aliases: []string{"keys"}, group: "Help"},
@@ -463,6 +476,16 @@ type modelDefault struct {
 
 type skillsMsg struct {
 	catalog skills.Catalog
+	err     error
+}
+
+type toolsMsg struct {
+	catalog toolcatalog.Catalog
+	err     error
+}
+
+type rolesMsg struct {
+	catalog roles.Catalog
 	err     error
 }
 
@@ -620,7 +643,7 @@ func (m Model) fetchModels() tea.Msg {
 }
 
 func cachedModelCatalogsAreCurrent(infos []modelscache.Info) bool {
-	for _, providerID := range modelCatalogProviderIDs {
+	for _, providerID := range modelCatalogProviderIDs() {
 		if providerID != provider.IDCodex && providerID != provider.IDGrok {
 			continue
 		}
@@ -651,11 +674,11 @@ func (m Model) refreshModels() tea.Msg {
 	}
 	activeProvider := m.projectSettings.EffectiveProvider()
 	var cached []modelscache.Info
-	defaults := make(map[string]modelDefault, len(modelCatalogProviderIDs))
+	defaults := make(map[string]modelDefault, len(modelCatalogProviderIDs()))
 	var unavailable []string
 	var activeErr error
 	loaded := false
-	for _, providerID := range modelCatalogProviderIDs {
+	for _, providerID := range modelCatalogProviderIDs() {
 		client, clientErr := m.modelCatalogClient(providerID)
 		if clientErr != nil || client == nil {
 			cached = modelscache.MergeByID(cached, modelInfosForProvider(previous, providerID))
@@ -720,9 +743,13 @@ func (m Model) refreshModels() tea.Msg {
 // Fetch Codex first so a signed-in subscription row owns a model ID also
 // advertised by the public OpenCode catalog. The drawer has its own display
 // order below, which keeps OpenCode first for browsing.
-var modelCatalogProviderIDs = []string{provider.IDCodex, provider.IDGrok, provider.IDOpenCode}
+func modelCatalogProviderIDs() []string {
+	return provider.IDs()
+}
 
-var modelPickerProviderIDs = []string{provider.IDOpenCode, provider.IDGrok, provider.IDCodex}
+func modelPickerProviderIDs() []string {
+	return provider.IDs()
+}
 
 func (m Model) modelCatalogClient(id string) (provider.Client, error) {
 	if id == m.projectSettings.EffectiveProvider() && m.client != nil {
@@ -962,6 +989,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.modelsErr = msg.err.Error()
 		}
 		if m.pickerMode && m.pickerKind == pickerKindSkills {
+			m.applyFilter()
+		}
+		return m, nil
+	case toolsMsg:
+		m.toolsScanning = false
+		m.toolCatalog = msg.catalog
+		snapshot := make(map[string]toolplugin.Tool, len(msg.catalog.Tools))
+		for _, descriptor := range msg.catalog.Tools {
+			snapshot[descriptor.Name] = descriptor.Plugin()
+		}
+		_ = toolplugin.ReplaceDiscovered(snapshot)
+		if msg.err != nil {
+			m.modelsErr = msg.err.Error()
+		}
+		if m.pickerMode && m.pickerKind == pickerKindTools {
+			m.applyFilter()
+		}
+		return m, nil
+	case rolesMsg:
+		m.rolesScanning = false
+		m.roleCatalog = msg.catalog
+		if msg.err != nil {
+			m.modelsErr = msg.err.Error()
+		}
+		if m.pickerMode && m.pickerKind == pickerKindRoles {
 			m.applyFilter()
 		}
 		return m, nil

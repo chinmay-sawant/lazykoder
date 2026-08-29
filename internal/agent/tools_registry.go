@@ -1,9 +1,28 @@
 package agent
 
 import (
+	"fmt"
+
+	"github.com/chinmay-sawant/lazykoder/internal/agent/toolplugin"
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/task"
 )
+
+// Tool is the extension contract for compiled and discovered tools.
+type Tool = toolplugin.Tool
+
+// ToolContext is the capability set passed to extension tools.
+type ToolContext = toolplugin.Context
+
+// Register adds a compiled extension tool to the shared registry.
+func Register(name string, tool Tool) error {
+	return toolplugin.Register(name, tool)
+}
+
+// RegisteredToolIDs returns the current extension IDs.
+func RegisteredToolIDs() []string {
+	return toolplugin.IDs()
+}
 
 // Base tool names advertised to parent and child agents (role allowlists filter further).
 const (
@@ -221,6 +240,13 @@ func toolSpecsFor(names []string, host SubagentHost) []opencode.ToolSpec {
 		seen[n] = struct{}{}
 		out = append(out, registration.spec)
 	}
+	for _, spec := range toolplugin.Specs(names) {
+		if _, ok := seen[spec.Name]; ok {
+			continue
+		}
+		seen[spec.Name] = struct{}{}
+		out = append(out, spec)
+	}
 	if host != nil {
 		for _, v := range host.Specs() {
 			if _, ok := seen[v.Name]; ok {
@@ -231,6 +257,18 @@ func toolSpecsFor(names []string, host SubagentHost) []opencode.ToolSpec {
 		}
 	}
 	return out
+}
+
+func registeredTool(name string) (Tool, bool) {
+	tool, ok := toolplugin.Lookup(name)
+	return tool, ok
+}
+
+func validateRegisteredTool(name string, tool Tool) error {
+	if tool == nil {
+		return fmt.Errorf("agent: nil tool %q", name)
+	}
+	return nil
 }
 
 func isTaskToolName(name string) bool {

@@ -74,6 +74,16 @@ type Options struct {
 	// Skills selects bounded request-time skill contexts. It is called once per
 	// Send and never for Continue or child agents.
 	Skills SkillProvider
+	// ToolProvider selects the tool IDs for the first ordinary parent request.
+	// It is called after the user message is persisted and never for Continue,
+	// hidden turns, or child agents.
+	ToolProvider ToolProvider
+	// RoleProvider selects request metadata for the first ordinary parent
+	// request. It is called after the user message is persisted and never for
+	// Continue, hidden turns, or child agents.
+	RoleProvider RoleProvider
+	// Role is the selected request role metadata, when one is available.
+	Role string
 	// Memory selects bounded aggregate and recall context for one parent turn.
 	// It is called once per Send and never for Continue or child agents.
 	Memory MemoryProvider
@@ -149,6 +159,12 @@ type RecallProvider func(ctx context.Context, sessionID, userText string) (strin
 // SkillProvider returns bounded request-time skill contexts. The returned
 // bodies are wire-only and are never written to the transcript.
 type SkillProvider func(ctx context.Context, sessionID, userText string) ([]skills.Context, error)
+
+// ToolProvider returns the bounded tool IDs for one persisted parent turn.
+type ToolProvider func(ctx context.Context, sessionID, userText string) ([]string, error)
+
+// RoleProvider returns request role metadata for one persisted parent turn.
+type RoleProvider func(ctx context.Context, sessionID, userText string) (string, error)
 
 // MemoryProvider returns wire-only project memory for one parent turn.
 type MemoryProvider func(ctx context.Context, sessionID, userText string) (string, error)
@@ -483,6 +499,7 @@ func (a *Agent) Send(ctx context.Context, userText string, events chan<- Event) 
 	if err = a.writeUserTurn(ctx, userText, events); err != nil {
 		return err
 	}
+	a.prepareSelections(ctx, userText)
 	a.emit(events, Event{Kind: EventRecallStarted, SessionID: a.sessionID()})
 	a.prepareRecall(ctx, userText)
 	a.emit(events, Event{Kind: EventRecallFinished, SessionID: a.sessionID()})
@@ -492,6 +509,19 @@ func (a *Agent) Send(ctx context.Context, userText string, events chan<- Event) 
 	selected := a.prepareSkills(ctx, userText)
 	a.emit(events, Event{Kind: EventSkillsFinished, SessionID: a.sessionID(), Skills: selected})
 	return a.runSteps(ctx, events)
+}
+
+func (a *Agent) prepareSelections(ctx context.Context, userText string) {
+	if a.opts.ToolProvider != nil {
+		if names, err := a.opts.ToolProvider(ctx, a.sessionID(), userText); err == nil {
+			a.opts.ToolNames = slices.Clone(names)
+		}
+	}
+	if a.opts.RoleProvider != nil {
+		if role, err := a.opts.RoleProvider(ctx, a.sessionID(), userText); err == nil {
+			a.opts.Role = strings.TrimSpace(role)
+		}
+	}
 }
 
 // SendHidden runs a provider turn without inserting a user message. The
