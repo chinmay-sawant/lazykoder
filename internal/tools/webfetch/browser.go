@@ -3,15 +3,14 @@ package webfetch
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,9 +18,10 @@ import (
 
 const (
 	browserTimeout      = 30 * time.Second
-	browserVirtualTime  = 5 * time.Second
+	browserSettleDelay  = 250 * time.Millisecond
 	maxBrowserDOMBytes  = 8 * 1024 * 1024
 	maxBrowserBodyBytes = 5 * 1024 * 1024
+	browserWaitDelay    = time.Second
 
 	// maxBrowserStderrBytes caps captured stderr from the browser process.
 	maxBrowserStderrBytes = 256 * 1024
@@ -32,6 +32,40 @@ const (
 	// tunnelConns is the number of directions a CONNECT tunnel copies between.
 	tunnelConns = 2
 )
+
+// BrowserErrorCategory identifies the browser failure boundary reported to a
+// caller.
+type BrowserErrorCategory string
+
+const (
+	BrowserMissingBinary     BrowserErrorCategory = "missing_binary"
+	BrowserStartupFailure    BrowserErrorCategory = "startup_failure"
+	BrowserBlockedPage       BrowserErrorCategory = "blocked_page"
+	BrowserEmptyDocument     BrowserErrorCategory = "empty_valid_document"
+	BrowserRendererCrash     BrowserErrorCategory = "renderer_crash"
+	BrowserNavigationTimeout BrowserErrorCategory = "navigation_timeout"
+	BrowserCancellation      BrowserErrorCategory = "cancellation"
+)
+
+// BrowserError keeps browser lifecycle failures distinguishable while
+// preserving context cancellation and unsafe-destination errors for callers.
+type BrowserError struct {
+	Category BrowserErrorCategory
+	Err      error
+}
+
+func (e *BrowserError) Error() string {
+	if e.Err == nil {
+		return fmt.Sprintf("webfetch browser: %s", e.Category)
+	}
+	return fmt.Sprintf("webfetch browser: %s: %v", e.Category, e.Err)
+}
+
+func (e *BrowserError) Unwrap() error { return e.Err }
+
+func browserError(category BrowserErrorCategory, err error) error {
+	return &BrowserError{Category: category, Err: err}
+}
 
 // ChromeBrowser renders a page with an isolated system Chrome or Chromium
 // process. Browser requests go through a local validating proxy so redirects
@@ -53,16 +87,18 @@ func NewChromeBrowser() *ChromeBrowser {
 
 // Read renders one public HTTP(S) URL and extracts its readable document.
 func (b *ChromeBrowser) Read(ctx context.Context, urlStr string) (Result, error) {
-	u, err := url.Parse(urlStr)
+	if err := ctx.Err(); err != nil {
+		return Result{}, browserContextError(err)
+	}
+	network := normalizedNetwork(b.network)
+	u, err := parseHTTPURL(urlStr)
 	if err != nil {
-		return Result{}, fmt.Errorf("webfetch browser: %w", err)
+		return Result{}, err
 	}
-	switch strings.ToLower(u.Scheme) {
-	case "http", "https":
-	default:
-		return Result{}, fmt.Errorf("webfetch browser: unsupported scheme %q", u.Scheme)
-	}
-	if err := validateURL(ctx, u, b.network.resolver); err != nil {
+	if err := validateURL(ctx, u, network.resolver); err != nil {
+		if ctx.Err() != nil {
+			return Result{}, browserContextError(ctx.Err())
+		}
 		return Result{}, err
 	}
 
@@ -74,67 +110,90 @@ func (b *ChromeBrowser) Read(ctx context.Context, urlStr string) (Result, error)
 		}
 		command, err = finder()
 		if err != nil {
-			return Result{}, err
+			return Result{}, browserError(BrowserMissingBinary, err)
 		}
 	}
-	proxy, err := newBrowserProxy(b.network)
-	if err != nil {
-		return Result{}, fmt.Errorf("webfetch browser: start egress proxy: %w", err)
-	}
-	defer proxy.Close()
 
 	profile, err := os.MkdirTemp("", "lazykoder-chrome-")
 	if err != nil {
-		return Result{}, fmt.Errorf("webfetch browser: create profile: %w", err)
+		return Result{}, browserError(BrowserStartupFailure, fmt.Errorf("create profile: %w", err))
 	}
 	defer os.RemoveAll(profile)
 
 	readCtx, cancel := context.WithTimeout(ctx, browserTimeout)
 	defer cancel()
+	proxy, err := newBrowserProxy(readCtx, network)
+	if err != nil {
+		return Result{}, browserError(BrowserStartupFailure, fmt.Errorf("start egress proxy: %w", err))
+	}
+	defer proxy.Close()
+
 	args := browserArgs(profile, proxy.Address(), urlStr)
 	cmd := exec.CommandContext(readCtx, command, args...)
 	configureBrowserCommand(cmd)
-	stdout := &limitedBuffer{limit: maxBrowserDOMBytes}
 	stderr := &limitedBuffer{limit: maxBrowserStderrBytes}
-	cmd.Stdout = stdout
 	cmd.Stderr = stderr
-	if err := cmd.Run(); err != nil {
-		if readCtx.Err() != nil {
-			return Result{}, fmt.Errorf("webfetch browser: %w", readCtx.Err())
-		}
-		if stdout.Len() == 0 {
-			message := strings.TrimSpace(stderr.String())
-			if message != "" {
-				return Result{}, fmt.Errorf("webfetch browser: %w: %s", err, truncateRunes(message, maxBrowserErrorMessageRunes))
-			}
-			return Result{}, fmt.Errorf("webfetch browser: %w", err)
-		}
+	cmd.WaitDelay = browserWaitDelay
+	if err := cmd.Start(); err != nil {
+		return Result{}, browserError(BrowserStartupFailure, withBrowserStderr(err, stderr))
 	}
-	if stdout.Len() == 0 {
-		return Result{}, fmt.Errorf("webfetch browser: empty rendered document")
-	}
-	document, err := extractHTML(stdout.Bytes(), urlStr, "text")
+	process := newBrowserProcess(cmd)
+	defer func() {
+		cancel()
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), browserWaitDelay)
+		defer cleanupCancel()
+		_ = process.wait(cleanupCtx)
+	}()
+
+	devtools, err := connectDevTools(readCtx, profile, process)
 	if err != nil {
-		return Result{}, fmt.Errorf("webfetch browser: extract document: %w", err)
+		return Result{}, classifyBrowserRuntimeError(readCtx, process, err, stderr)
+	}
+	defer devtools.Close()
+	snapshot, err := devtools.waitForDocument(readCtx, process)
+	if err != nil {
+		return Result{}, classifyBrowserRuntimeError(readCtx, process, err, stderr)
+	}
+	finalURL, err := parseHTTPURL(snapshot.URL)
+	if err != nil {
+		return Result{}, browserError(BrowserBlockedPage, fmt.Errorf("final navigation URL: %w", err))
+	}
+	if err := validateURL(readCtx, finalURL, network.resolver); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(readCtx.Err(), context.DeadlineExceeded) {
+			return Result{}, browserError(BrowserNavigationTimeout, context.DeadlineExceeded)
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(readCtx.Err(), context.Canceled) {
+			return Result{}, browserError(BrowserCancellation, context.Canceled)
+		}
+		return Result{}, err
+	}
+	dom, domTruncated := truncateUTF8(snapshot.HTML, maxBrowserBodyBytes)
+	document, err := extractHTML([]byte(dom), finalURL.String(), "text")
+	if err != nil {
+		return Result{}, browserError(BrowserBlockedPage, fmt.Errorf("extract document: %w", err))
 	}
 	if document.Metadata == nil {
 		document.Metadata = map[string]any{}
 	}
 	document.Metadata["browser_rendered"] = true
 	document.Metadata["browser_command"] = filepath.Base(command)
-	document.Metadata["browser_truncated"] = stdout.Truncated()
+	document.Metadata["browser_truncated"] = domTruncated
 	document.Metadata["content_type"] = "text/html"
-	document.Metadata["final_url_source"] = "requested"
+	document.Metadata["final_url"] = finalURL.String()
+	document.Metadata["final_url_source"] = "browser"
+	document.Metadata["mode"] = string(ModeBrowser)
+	if strings.TrimSpace(document.Output) == "" {
+		return Result{}, browserError(BrowserEmptyDocument, nil)
+	}
 	return document, nil
 }
 
 func browserArgs(profile, proxyAddress, urlStr string) []string {
-	virtualTime := strconv.FormatInt(browserVirtualTime.Milliseconds(), 10)
 	return []string{
 		"--headless=new",
-		"--dump-dom",
 		"--disable-gpu",
 		"--disable-extensions",
+		"--disable-component-extensions-with-background-pages",
 		"--disable-sync",
 		"--disable-background-networking",
 		"--disable-component-update",
@@ -143,12 +202,19 @@ func browserArgs(profile, proxyAddress, urlStr string) []string {
 		"--no-first-run",
 		"--no-default-browser-check",
 		"--user-data-dir=" + profile,
+		"--remote-debugging-address=127.0.0.1",
+		"--remote-debugging-port=0",
 		"--proxy-server=http://" + proxyAddress,
 		"--proxy-bypass-list=<-loopback>",
-		"--virtual-time-budget=" + virtualTime,
-		"--timeout=" + strconv.FormatInt(browserTimeout.Milliseconds(), 10),
 		urlStr,
 	}
+}
+
+func browserContextError(err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return browserError(BrowserNavigationTimeout, context.DeadlineExceeded)
+	}
+	return browserError(BrowserCancellation, context.Canceled)
 }
 
 func findChrome() (string, error) {
@@ -158,7 +224,7 @@ func findChrome() (string, error) {
 			return path, nil
 		}
 	}
-	return "", fmt.Errorf("webfetch browser: Google Chrome or Chromium is not installed")
+	return "", fmt.Errorf("Google Chrome or Chromium is not installed")
 }
 
 type limitedBuffer struct {
@@ -211,14 +277,25 @@ type browserProxy struct {
 	server   *http.Server
 	listener net.Listener
 	network  networkDeps
+	ctx      context.Context
+
+	mu        sync.Mutex
+	closed    bool
+	conns     map[net.Conn]struct{}
+	closeOnce sync.Once
 }
 
-func newBrowserProxy(network networkDeps) (*browserProxy, error) {
+func newBrowserProxy(ctx context.Context, network networkDeps) (*browserProxy, error) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, err
 	}
-	proxy := &browserProxy{listener: listener, network: network}
+	proxy := &browserProxy{
+		listener: listener,
+		network:  normalizedNetwork(network),
+		ctx:      ctx,
+		conns:    make(map[net.Conn]struct{}),
+	}
 	proxy.server = &http.Server{
 		Handler:           http.HandlerFunc(proxy.handle),
 		ReadHeaderTimeout: browserHeaderTimeout,
@@ -226,6 +303,7 @@ func newBrowserProxy(network networkDeps) (*browserProxy, error) {
 	go func() {
 		_ = proxy.server.Serve(listener)
 	}()
+	go proxy.closeOnContext()
 	return proxy, nil
 }
 
@@ -234,9 +312,28 @@ func (p *browserProxy) Address() string {
 }
 
 func (p *browserProxy) Close() {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	_ = p.server.Shutdown(ctx)
+	p.closeOnce.Do(func() {
+		p.mu.Lock()
+		p.closed = true
+		connections := make([]net.Conn, 0, len(p.conns))
+		for connection := range p.conns {
+			connections = append(connections, connection)
+		}
+		p.mu.Unlock()
+		_ = p.server.Close()
+		_ = p.listener.Close()
+		for _, connection := range connections {
+			_ = connection.Close()
+		}
+	})
+}
+
+func (p *browserProxy) closeOnContext() {
+	if p.ctx == nil {
+		return
+	}
+	<-p.ctx.Done()
+	p.Close()
 }
 
 func (p *browserProxy) handle(w http.ResponseWriter, r *http.Request) {
@@ -308,10 +405,39 @@ func (p *browserProxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		_ = remote.Close()
 		return
 	}
-	go tunnel(client, remote)
+	if !p.track(client, remote) {
+		_ = client.Close()
+		_ = remote.Close()
+		return
+	}
+	go p.tunnel(client, remote)
 }
 
-func tunnel(left, right net.Conn) {
+func (p *browserProxy) track(connections ...net.Conn) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed {
+		return false
+	}
+	if p.conns == nil {
+		p.conns = make(map[net.Conn]struct{})
+	}
+	for _, connection := range connections {
+		p.conns[connection] = struct{}{}
+	}
+	return true
+}
+
+func (p *browserProxy) untrack(connections ...net.Conn) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, connection := range connections {
+		delete(p.conns, connection)
+	}
+}
+
+func (p *browserProxy) tunnel(left, right net.Conn) {
+	defer p.untrack(left, right)
 	defer left.Close()
 	defer right.Close()
 	done := make(chan struct{}, tunnelConns)

@@ -64,7 +64,7 @@ evidence.
 | Phase | Ledger | Responsibility | Status |
 | --- | --- | --- | --- |
 | 1 | [`phase-1-cancellation-contract-and-lifecycle.md`](phase-1-cancellation-contract-and-lifecycle.md) | Parent and child cancellation, provider stop semantics, durable terminal state | `[~]` implementation validated; final gate blocked by unrelated scripts |
-| 2 | [`phase-2-public-internet-and-browser-reading.md`](phase-2-public-internet-and-browser-reading.md) | Public HTTP access, isolated browser reads, egress safety, fixtures | `[ ]` planned |
+| 2 | [`phase-2-public-internet-and-browser-reading.md`](phase-2-public-internet-and-browser-reading.md) | Public HTTP access, isolated browser reads, egress safety, fixtures | `[x]` implementation and closure evidence validated |
 | 3 | [`phase-3-subagent-goroutines-and-parent-orchestration.md`](phase-3-subagent-goroutines-and-parent-orchestration.md) | Bounded goroutines, task controls, recovery, and sibling behavior | `[ ]` planned |
 | 4 | [`phase-4-screenshot-driven-tui-enhancements.md`](phase-4-screenshot-driven-tui-enhancements.md) | Screenshot-led cancellation, browser status, and responsive TUI work | `[~]` awaiting screenshots |
 | 5 | [`phase-5-documentation-and-closure-gates.md`](phase-5-documentation-and-closure-gates.md) | Documentation, automated gates, manual proof, and release closure | `[ ]` planned |

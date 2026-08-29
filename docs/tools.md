@@ -113,8 +113,11 @@ fallback otherwise). Prefer this over reading many files to find symbols.
 ## webfetch
 
 - Input: `{"url": "...", "format": "markdown"|"text", "mode": "auto"|"http"|"browser"}`.
-- http/https only (file:// and other schemes rejected). 30s timeout, 5 MiB
-  body cap, `truncated` + `content_type` in metadata.
+- Only public `http` and `https` URLs are accepted. Local, private, link-local,
+  multicast, metadata, and IPv4-mapped private destinations are rejected.
+  URLs are limited to 8192 characters.
+- HTTP mode has a 30-second timeout and a 5 MiB response cap. The metadata
+  includes `truncated` and `content_type` when the response is capped.
 - Local, private, link-local, multicast, and metadata destinations are
   rejected before the request and again at dial time. Redirects use the same
   check. `webfetch` copies a supplied client and never changes its redirect
@@ -122,16 +125,24 @@ fallback otherwise). Prefer this over reading many files to find symbols.
 - Auto mode uses the guarded HTTP path first and falls back to an isolated
   Google Chrome process, with Chromium as fallback, for blocked or
   JavaScript-rendered pages. The browser uses a local validating proxy for
-  page requests, redirects, and subresource origins.
-- HTML responses return readable text plus bounded title, final URL, ordinary
+  page requests, redirects, and subresource origins. The browser also exposes
+  a loopback DevTools endpoint only for the active isolated process so the
+  reader can capture the rendered DOM and actual final navigation URL.
+- HTML responses return bounded readable text plus title, final URL, ordinary
   links, `mailto:` links, visible email addresses, mode, and truncation
-  metadata. Links are reported as data and are not followed automatically.
-- Browser mode currently records the requested URL as `final_url`; capturing
-  the redirect target requires a deeper browser protocol integration. The
-  remaining browser closure is tracked in
-  `plans/v0.0.12/phase-2-public-internet-and-browser-reading.md`.
+  metadata. `content_truncated` identifies the extraction cap,
+  `browser_truncated` identifies the rendered DOM cap, and
+  `output_truncated` identifies the agent tool-output cap. Persisted webfetch
+  metadata is capped at 64 KiB. Links are data and are not followed
+  automatically.
+- Browser failures identify missing binary, startup failure, blocked page,
+  empty valid document, renderer crash, navigation timeout, or cancellation.
+  Cancellation stops the local browser, proxy, and request. Providers without
+  a documented cancellation endpoint are not reported as remotely stopped.
 - Browser mode never reuses the user's profile, cookies, saved credentials,
-  extensions, or downloads. It does not submit forms or send email.
+  extensions, downloads, or persistent cache. It does not submit forms or
+  send email. The fixed executable allowlist is `google-chrome`,
+  `google-chrome-stable`, `chromium`, and `chromium-browser` in that order.
 
 ## Task tools (parent only)
 

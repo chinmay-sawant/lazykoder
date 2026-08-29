@@ -162,6 +162,7 @@ func (a *Agent) runTool(ctx context.Context, events chan<- Event, msgID string, 
 const (
 	toolCancelledOutput      = "cancelled"
 	toolCancelPersistTimeout = 2 * time.Second
+	maxWebfetchMetadataBytes = 64 * 1024
 )
 
 func (a *Agent) cancelTool(ctx context.Context, events chan<- Event, partID, title string, tc ChatToolCall) error {
@@ -232,6 +233,9 @@ func toolTitle(tc ChatToolCall) string {
 		}
 	case toolWebfetch:
 		if u := first("url"); u != "" {
+			if strings.EqualFold(first("mode"), "browser") {
+				return truncateRunes("browser  "+u, maxToolTitle)
+			}
 			return u
 		}
 	case toolQuestion:
@@ -502,16 +506,26 @@ func (a *Agent) execWebfetch(ctx context.Context, events chan<- Event, partID, t
 	if err != nil {
 		return a.updateTool(ctx, events, partID, title, tc, "error", errOut(err), errorJSON(err.Error()), nil, nil)
 	}
+	if res.Metadata == nil {
+		res.Metadata = make(map[string]any)
+	}
 	out := res.Output
-	truncated := false
+	outputTruncated := false
 	if len([]rune(out)) > maxToolOutput {
 		out = truncateRunes(out, maxToolOutput)
-		truncated = true
+		outputTruncated = true
 	}
-	res.Metadata["truncated"] = truncated
-	meta, _ := json.Marshal(res.Metadata)
-	metaJSON := string(meta)
+	res.Metadata["output_truncated"] = outputTruncated
+	metaJSON := boundedWebfetchMetadata(res.Metadata)
 	return a.updateTool(ctx, events, partID, title, tc, "completed", &out, toolOutputJSON(out), nil, &metaJSON)
+}
+
+func boundedWebfetchMetadata(metadata map[string]any) string {
+	raw, err := json.Marshal(metadata)
+	if err == nil && len(raw) <= maxWebfetchMetadataBytes {
+		return string(raw)
+	}
+	return `{"metadata_truncated":true}`
 }
 
 func (a *Agent) execQuestion(ctx context.Context, events chan<- Event, partID, title string, tc ChatToolCall) (string, error) {

@@ -27,7 +27,7 @@ a wrapper around the OpenCode CLI or its global `~/.local/share/opencode/opencod
 | `internal/subagent` | Manager + Host + AgentRunner for concurrent children |
 | `internal/policy` | bash classifier returning Allow/Ask/Deny |
 | `internal/agent/toolplugin` | executable contract and registry for compiled or discovered tools |
-| `internal/tools` | declarative shell-tool catalog plus bash, read, grep, write, edit, question, webfetch, and task schemas |
+| `internal/tools` | declarative shell-tool catalog plus bash, read, grep, write, edit, question, bounded HTTP and browser webfetch, and task schemas |
 | `internal/roles` | built-in and discovered child-role registry and policy descriptors |
 | `internal/settings` | project settings: provider, model, orchestration, slot, `agents` caps, tools, `compaction`, `recap`, skills, and API retry policy |
 | `internal/ui/chat` | transcript, prompt, status line, model, provider, tool, and role pickers |

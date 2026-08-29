@@ -1,6 +1,7 @@
 package webfetch
 
 import (
+	"encoding/json"
 	"net/url"
 	"regexp"
 	"strings"
@@ -9,9 +10,14 @@ import (
 )
 
 const (
-	maxExtractedLinks  = 100
-	maxLinkTextRunes   = 200
-	maxExtractedEmails = 100
+	maxExtractedLinks    = 100
+	maxLinkTextRunes     = 200
+	maxLinkURLRunes      = 2048
+	maxExtractedEmails   = 100
+	maxEmailFieldRunes   = 512
+	maxTitleRunes        = 512
+	maxReadableTextBytes = 5 * 1024 * 1024
+	maxMetadataBytes     = 64 * 1024
 )
 
 var visibleEmailPattern = regexp.MustCompile(`[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}`)
@@ -42,27 +48,80 @@ func extractHTML(body []byte, baseURL, format string) (Result, error) {
 	emailLinks := make([]extractedEmailLink, 0)
 	collectLinks(root, baseURL, &links, &emailLinks)
 	content := renderReadableText(root, strings.EqualFold(format, "markdown"))
+	content, contentTruncated := truncateUTF8(content, maxReadableTextBytes)
 	emails := collectVisibleEmails(content)
 	title := strings.TrimSpace(textContent(findFirst(doc, "title")))
 	if title == "" {
 		title = strings.TrimSpace(textContent(findFirst(root, "h1")))
 	}
+	title = truncateRunes(title, maxTitleRunes)
 
 	needsBrowser := strings.TrimSpace(content) == "" ||
 		(len([]rune(content)) < 240 && bytesContainFold(body, "<script") &&
 			findFirst(doc, "article") == nil && findFirst(doc, "main") == nil)
+	metadata := map[string]any{
+		"title":             title,
+		"final_url":         truncateRunes(baseURL, maxLinkURLRunes),
+		"links":             links,
+		"email_links":       emailLinks,
+		"emails":            emails,
+		"needs_browser":     needsBrowser,
+		"readable":          strings.TrimSpace(content) != "",
+		"content_truncated": contentTruncated,
+	}
 	return Result{
-		Output: content,
-		Metadata: map[string]any{
-			"title":         title,
-			"final_url":     baseURL,
-			"links":         links,
-			"email_links":   emailLinks,
-			"emails":        emails,
-			"needs_browser": needsBrowser,
-			"readable":      strings.TrimSpace(content) != "",
-		},
+		Output:   content,
+		Metadata: boundMetadata(metadata),
 	}, nil
+}
+
+func boundMetadata(metadata map[string]any) map[string]any {
+	if metadataSize(metadata) <= maxMetadataBytes {
+		return metadata
+	}
+	metadata["metadata_truncated"] = true
+	for metadataSize(metadata) > maxMetadataBytes {
+		if trimMetadataSlice(metadata, "links") ||
+			trimMetadataSlice(metadata, "email_links") ||
+			trimMetadataSlice(metadata, "emails") {
+			continue
+		}
+		break
+	}
+	return metadata
+}
+
+func metadataSize(metadata map[string]any) int {
+	data, err := json.Marshal(metadata)
+	if err != nil {
+		return maxMetadataBytes + 1
+	}
+	return len(data)
+}
+
+func trimMetadataSlice(metadata map[string]any, key string) bool {
+	switch values := metadata[key].(type) {
+	case []extractedLink:
+		if len(values) == 0 {
+			return false
+		}
+		metadata[key] = values[:len(values)-1]
+		return true
+	case []extractedEmailLink:
+		if len(values) == 0 {
+			return false
+		}
+		metadata[key] = values[:len(values)-1]
+		return true
+	case []string:
+		if len(values) == 0 {
+			return false
+		}
+		metadata[key] = values[:len(values)-1]
+		return true
+	default:
+		return false
+	}
 }
 
 func readableRoot(doc *html.Node) *html.Node {
@@ -176,6 +235,9 @@ func parseHTTPLink(raw, baseURL string) (string, bool) {
 	if resolved.Scheme != "http" && resolved.Scheme != "https" {
 		return "", false
 	}
+	if len([]rune(resolved.String())) > maxLinkURLRunes {
+		return "", false
+	}
 	return resolved.String(), true
 }
 
@@ -193,11 +255,14 @@ func parseEmailLink(raw string) (extractedEmailLink, bool) {
 		return extractedEmailLink{}, false
 	}
 	query := parsed.Query()
+	if len([]rune(parsed.String())) > maxLinkURLRunes {
+		return extractedEmailLink{}, false
+	}
 	return extractedEmailLink{
 		URL:     parsed.String(),
-		Address: address,
-		Subject: query.Get("subject"),
-		Body:    query.Get("body"),
+		Address: truncateRunes(address, maxEmailFieldRunes),
+		Subject: truncateRunes(query.Get("subject"), maxEmailFieldRunes),
+		Body:    truncateRunes(query.Get("body"), maxEmailFieldRunes),
 	}, true
 }
 
@@ -236,7 +301,7 @@ func collectVisibleEmails(content string) []string {
 			}
 		}
 		if !seen && len(emails) < maxExtractedEmails {
-			emails = append(emails, candidate)
+			emails = append(emails, truncateRunes(candidate, maxEmailFieldRunes))
 		}
 	}
 	return emails
@@ -353,4 +418,18 @@ func truncateRunes(value string, limit int) string {
 		return value
 	}
 	return string(runes[:limit])
+}
+
+func truncateUTF8(value string, maxBytes int) (string, bool) {
+	if len(value) <= maxBytes {
+		return value, false
+	}
+	if maxBytes <= 0 {
+		return "", true
+	}
+	end := maxBytes
+	for end > 0 && end < len(value) && value[end]&0xc0 == 0x80 {
+		end--
+	}
+	return value[:end], true
 }

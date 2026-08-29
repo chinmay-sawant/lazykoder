@@ -294,8 +294,8 @@ closure row in the v0.0.12 phase ledgers:
 - The supplied Medium URL reaches Chrome and returns the actual
   `Attention Required! | Cloudflare` page. The implementation does not claim
   that the blocked article body was read.
-- Browser mode currently records the requested URL as `final_url`. Capturing
-  the post-redirect browser target requires a deeper browser protocol seam and
-  remains an open Phase 11 item.
+- The v0.0.12 browser runner now reads the actual final navigation URL from the
+  isolated process's loopback DevTools endpoint. The remaining closure evidence
+  is tracked in the v0.0.12 browser ledger.
 - `go test ./...` remains blocked by pre-existing duplicate declarations in
   the standalone `temp` examples. All `internal/...` packages pass.
