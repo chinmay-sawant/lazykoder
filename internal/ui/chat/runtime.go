@@ -94,6 +94,17 @@ func (m Model) rebuildSubMgr() Model {
 	return m.attachSubMgr(m.projectSettings, true)
 }
 
+// Shutdown stops the active parent turn and all child jobs before the
+// terminal program exits.
+func (m Model) Shutdown() {
+	if m.turnCancel != nil {
+		m.turnCancel()
+	}
+	if m.subMgr != nil {
+		m.subMgr.Shutdown()
+	}
+}
+
 // agentOptions builds Options for the parent agent, including the subagent Host.
 func (m Model) agentOptions() agent.Options {
 	cfg := m.projectSettings.EffectiveCompaction()
@@ -528,7 +539,7 @@ func (m Model) startTurn(start turnStart) (Model, tea.Cmd) {
 	m.pulseOn = true
 	m.activity = start.activity
 	m.turnStarted = time.Now()
-	return m, tea.Batch(sendCmd, m.watchEvents(seq), pulseTick())
+	return m, tea.Batch(sendCmd, m.watchEvents(seq, eventCh, errCh), pulseTick())
 }
 
 func (m Model) successfulTurnEligible(err error) bool {

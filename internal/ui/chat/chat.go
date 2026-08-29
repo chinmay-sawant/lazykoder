@@ -508,12 +508,21 @@ type rolesMsg struct {
 }
 
 type eventMsg struct {
-	seq int
-	ev  agent.Event
+	seq    int
+	ev     agent.Event
+	events <-chan agent.Event
+	errs   <-chan error
 }
 
 type eventDoneMsg struct {
-	seq int
+	seq    int
+	err    error
+	events <-chan agent.Event
+	errs   <-chan error
+}
+
+type subagentCancelDoneMsg struct {
+	id  string
 	err error
 }
 
@@ -853,10 +862,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.askWatch()
 	case eventMsg:
 		if msg.seq != m.turnSeq {
-			return m, nil
+			return m, m.watchEvents(msg.seq, msg.events, msg.errs)
 		}
 		m = m.applyEvent(msg.ev)
-		return m, m.watchEvents(msg.seq)
+		return m, m.watchEvents(msg.seq, msg.events, msg.errs)
 	case eventDoneMsg:
 		if msg.seq != m.turnSeq {
 			return m, nil
@@ -894,6 +903,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(worktreeCmd, memoryCmd, recapCmd, pulseTick())
 		}
 		return m, tea.Batch(worktreeCmd, memoryCmd, recapCmd)
+	case subagentCancelDoneMsg:
+		if msg.err != nil {
+			m.err = msg.err.Error()
+		}
+		m = m.reloadSubagentRows()
+		return m.resizeSubagentDrawer(), nil
 	case pulseMsg:
 		// Keep throbbing for live sub-agents even after the parent turn ends.
 		if !m.busy && !m.hasInFlightTools() && !m.hasLiveSubagents() && !m.recallScanning && !m.skillsScanning && m.memoryScanJobs == 0 {

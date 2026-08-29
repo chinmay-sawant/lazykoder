@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/chinmay-sawant/lazykoder/internal/db"
 	"github.com/chinmay-sawant/lazykoder/internal/policy"
@@ -428,6 +429,83 @@ func TestSendWebfetchBrowserMode(t *testing.T) {
 	}
 }
 
+func TestSendCancellationPersistsCancelledBrowserTool(t *testing.T) {
+	args, _ := json.Marshal(map[string]any{
+		"url":  "https://example.com/article",
+		"mode": "browser",
+	})
+	fake := newFakeProvider(t, respBody("", "", "tool-calls", []fakeToolCall{
+		{ID: "c_browser_cancel", Name: "webfetch", Args: string(args)},
+	}, testUsage))
+	reader := &blockingBrowserReader{started: make(chan struct{})}
+	st, path := newTestEnv(t)
+	a := New(st, newClient(t, fake.srv), t.TempDir(), Options{WebfetchBrowser: reader})
+	ctx, cancel := context.WithCancel(context.Background())
+	events := make(chan Event, 256)
+	result := make(chan error, 1)
+	go func() { result <- a.Send(ctx, "read this page", events) }()
+	select {
+	case <-reader.started:
+		cancel()
+	case <-time.After(time.Second):
+		t.Fatal("browser tool did not start")
+	}
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Send error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Send did not stop after cancellation")
+	}
+	for range events {
+	}
+	rows := queryToolCalls(t, path)
+	if len(rows) != 1 || rows[0].Status != "cancelled" || rows[0].Output == nil || *rows[0].Output != "cancelled" {
+		t.Fatalf("cancelled browser tool rows = %+v", rows)
+	}
+	if fake.requestCount() != 1 {
+		t.Fatalf("provider requests = %d, want 1", fake.requestCount())
+	}
+}
+
+func TestSendCancellationPersistsCancelledBashTool(t *testing.T) {
+	args := `{"command":"sleep 10"}`
+	fake := newFakeProvider(t, respBody("", "", "tool-calls", []fakeToolCall{
+		{ID: "c_bash_cancel", Name: "bash", Args: args},
+	}, testUsage))
+	st, path := newTestEnv(t)
+	a := New(st, newClient(t, fake.srv), t.TempDir(), Options{DisableStreaming: true})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events := make(chan Event, 256)
+	result := make(chan error, 1)
+	go func() { result <- a.Send(ctx, "run the command", events) }()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if rows := queryToolCalls(t, path); len(rows) == 1 {
+			cancel()
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Send error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Send did not stop after bash cancellation")
+	}
+	for range events {
+	}
+	rows := queryToolCalls(t, path)
+	if len(rows) != 1 || rows[0].Status != "cancelled" || rows[0].Output == nil || *rows[0].Output != "cancelled" {
+		t.Fatalf("cancelled bash tool rows = %+v", rows)
+	}
+}
+
 type testBrowserReader struct {
 	result webfetch.Result
 	url    string
@@ -436,6 +514,16 @@ type testBrowserReader struct {
 func (r *testBrowserReader) Read(_ context.Context, url string) (webfetch.Result, error) {
 	r.url = url
 	return r.result, nil
+}
+
+type blockingBrowserReader struct {
+	started chan struct{}
+}
+
+func (r *blockingBrowserReader) Read(ctx context.Context, _ string) (webfetch.Result, error) {
+	close(r.started)
+	<-ctx.Done()
+	return webfetch.Result{}, ctx.Err()
 }
 
 func TestSendQuestionDeclinedAsk(t *testing.T) {

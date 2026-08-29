@@ -87,10 +87,11 @@ human runs them.
   timing, and conversation-aware history ordering. Automated gates are green;
   live provider and terminal scenarios remain human checks. Ledger:
   `plans/v0.0.11/`.
-- v0.0.12: planned public browser access, cancellable goroutine-based
-  sub-agents, explicit local versus provider-side stop semantics, and a
-  screenshot-driven TUI pass. Ledger:
-  `plans/v0.0.12/README.md`.
+- v0.0.12 Phase 1: validated parent and child cancellation, explicit local
+  versus provider-side stop semantics, and durable terminal state. The
+  repository-wide gate remains blocked by duplicate helper entry points in
+  `scripts/`; the later browser, orchestration, screenshot, and release phases
+  remain planned. Ledger: `plans/v0.0.12/README.md`.
 
 ## In progress
 

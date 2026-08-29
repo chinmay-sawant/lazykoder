@@ -149,9 +149,41 @@ func (a *Agent) runTool(ctx context.Context, events chan<- Event, msgID string, 
 	if err := a.store.InsertToolCall(ctx, row); err != nil {
 		return fmt.Errorf("agent: insert tool call: %w", err)
 	}
-	a.emit(events, Event{Kind: EventTool, SessionID: a.sessionID(), MessageID: msgID, Part: partDeltaFromDB(part), Tool: toolDeltaFromDB(row)})
+	a.emit(ctx, events, Event{Kind: EventTool, SessionID: a.sessionID(), MessageID: msgID, Part: partDeltaFromDB(part), Tool: toolDeltaFromDB(row)})
 	_, err = a.executeTool(ctx, events, part.ID, title, tc)
+	if err != nil && ctx.Err() != nil {
+		if cancelErr := a.cancelTool(ctx, events, part.ID, title, tc); cancelErr != nil {
+			return errors.Join(err, cancelErr)
+		}
+	}
 	return err
+}
+
+const (
+	toolCancelledOutput      = "cancelled"
+	toolCancelPersistTimeout = 2 * time.Second
+)
+
+func (a *Agent) cancelTool(ctx context.Context, events chan<- Event, partID, title string, tc ChatToolCall) error {
+	persistCtx, cancel := context.WithTimeout(context.Background(), toolCancelPersistTimeout)
+	defer cancel()
+	changed, err := a.store.CancelToolCall(persistCtx, partID, toolCancelledOutput)
+	if err != nil {
+		return err
+	}
+	if changed {
+		out := toolCancelledOutput
+		a.emit(ctx, events, Event{Kind: EventTool, SessionID: a.sessionID(), Tool: toolDeltaFromDB(db.ToolCall{
+			PartID:    partID,
+			Tool:      tc.Name,
+			CallID:    tc.ID,
+			Status:    "cancelled",
+			Title:     &title,
+			InputJSON: tc.Arguments,
+			Output:    &out,
+		})})
+	}
+	return ctx.Err()
 }
 
 func toolTitle(tc ChatToolCall) string {
@@ -567,7 +599,7 @@ func (a *Agent) updateTool(ctx context.Context, events chan<- Event, partID, tit
 	if err := a.store.UpdateToolCall(ctx, row); err != nil {
 		return "", fmt.Errorf("agent: update tool call: %w", err)
 	}
-	a.emit(events, Event{Kind: EventTool, SessionID: a.sessionID(), Tool: toolDeltaFromDB(row)})
+	a.emit(ctx, events, Event{Kind: EventTool, SessionID: a.sessionID(), Tool: toolDeltaFromDB(row)})
 	return result, nil
 }
 
@@ -590,6 +622,11 @@ func (a *Agent) toolResult(p db.Part, tc db.ToolCall) string {
 			return errorJSON(*tc.Output)
 		}
 		return errorJSON("tool result unavailable")
+	case "cancelled":
+		if tc.Output != nil && *tc.Output != "" {
+			return errorJSON(*tc.Output)
+		}
+		return errorJSON(toolCancelledOutput)
 	}
 	if p.ToolStatus != nil {
 		switch *p.ToolStatus {
@@ -597,6 +634,8 @@ func (a *Agent) toolResult(p db.Part, tc db.ToolCall) string {
 			return deniedJSON()
 		case "error":
 			return errorJSON("tool result unavailable")
+		case "cancelled":
+			return errorJSON(toolCancelledOutput)
 		}
 	}
 	return ""

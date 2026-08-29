@@ -155,9 +155,17 @@ completes with a partial summary and a note instead of status `failed`.
 Background jobs do not inherit cancellation from the parent turn. They keep
 running after the parent response ends and still obey their configured timeout.
 `task_cancel` and manager shutdown cancel them explicitly. The v0.0.12
-ledger adds the proof that cancellation reaches the provider request and
-leaves no pending tool or job row. When a child model has no explicit variant,
-the manager selects the first supported variant in that model's profile.
+Phase 1 ledger proves that cancellation reaches the provider request and
+leaves no pending tool or job row. The UI signals `RequestCancel` without
+waiting for child cleanup. `Cancel`, `CancelAll`, and `Shutdown` wait when the
+caller needs a terminal result. When a child model has no explicit variant, the
+manager selects the first supported variant in that model's profile.
+
+If a tool context ends before its result is written, the agent uses a short
+independent persistence context to write `status = cancelled` and bounded
+output. Terminal tool and job rows are not overwritten by late worker writes.
+The current providers expose no documented remote cancellation endpoint, so
+the product reports local request, stream, retry, browser, and process stop.
 
 Child wall-clock lifetime is **not** a `task` argument. It always comes
 from project settings `agents.default_timeout_sec` (default 600s / 10m).

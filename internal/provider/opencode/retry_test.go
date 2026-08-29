@@ -2,6 +2,7 @@ package opencode
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -54,6 +55,49 @@ func TestChatRetriesTransientServerErrors(t *testing.T) {
 	}
 	if len(waits) != 2 || waits[0] != 10*time.Second || waits[1] != 10*time.Second {
 		t.Fatalf("retry waits = %v, want [10s 10s]", waits)
+	}
+}
+
+func TestChatRetryWaitStopsOnCancellation(t *testing.T) {
+	var calls atomic.Int32
+	waitStarted := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = fmt.Fprint(w, `temporary failure`)
+	}))
+	defer srv.Close()
+
+	c := NewClient("key", WithBaseURL(srv.URL), WithRetryPolicy(RetryPolicy{
+		MaxRetries: 2,
+		Wait: func(ctx context.Context, _ time.Duration) error {
+			close(waitStarted)
+			<-ctx.Done()
+			return ctx.Err()
+		},
+	}))
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := c.Chat(ctx, ChatRequest{Messages: []Message{{Role: "user", Content: "hello"}}})
+		result <- err
+	}()
+	select {
+	case <-waitStarted:
+		cancel()
+	case <-time.After(time.Second):
+		t.Fatal("retry wait did not start")
+	}
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Chat error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Chat did not stop after cancellation")
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("requests = %d, want 1", got)
 	}
 }
 

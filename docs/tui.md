@@ -238,7 +238,9 @@ cost adds those children as `subs $X`; footer cost uses `+$X`.
 - A log opens at its latest output and follows the live tail as new child
   events arrive. After scrolling up, the transparent `▼` row above the
   footer jumps back to the latest output.
-- `d` on a live drawer row cancels it; `esc` closes the drawer.
+- `d` on a live drawer row signals cancellation and returns to the drawer;
+  cleanup finishes through a command and refreshes the row. `esc` closes the
+  drawer.
 
 When recaps are enabled, the drawer includes a separate selectable `recaps`
 row with a semantic success rail for completed work and a danger rail for
@@ -366,7 +368,10 @@ painted section order. Hidden detailed skill rows are skipped until the card
 has enough height to display them.
 
 When sub-agents are running, the footer may show `subs:N/M` (active / max
-concurrent). Cancelling the parent turn also cancels child jobs.
+concurrent). Cancelling the parent turn signals the parent request and all
+live child jobs without waiting in the Bubble Tea update loop. The transcript
+marks in-flight tool cards as `cancelled`, and the drawer refreshes child rows
+when cleanup reaches a terminal state.
 
 | Control | Action |
 | --- | --- |

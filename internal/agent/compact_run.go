@@ -17,7 +17,7 @@ func (a *Agent) Compact(ctx context.Context, events chan<- Event, reason, extra 
 		defer close(events)
 		defer func() {
 			if err == nil {
-				a.emit(events, Event{Kind: EventDone, SessionID: a.sessionID()})
+				a.emit(ctx, events, Event{Kind: EventDone, SessionID: a.sessionID()})
 			}
 		}()
 	}
@@ -25,10 +25,10 @@ func (a *Agent) Compact(ctx context.Context, events chan<- Event, reason, extra 
 		a.sess = a.opts.Session
 	}
 	if a.sessionID() == "" {
-		return a.fail(events, fmt.Errorf("agent: compact requires an existing session"))
+		return a.fail(ctx, events, fmt.Errorf("agent: compact requires an existing session"))
 	}
 	if err = a.runCompact(ctx, events, reason, extra); err != nil {
-		return a.fail(events, err)
+		return a.fail(ctx, events, err)
 	}
 	return nil
 }
@@ -57,7 +57,7 @@ func (a *Agent) maybeCompact(ctx context.Context, events chan<- Event, history [
 }
 
 func (a *Agent) runCompact(ctx context.Context, events chan<- Event, reason, extra string) error {
-	a.emit(events, Event{Kind: EventCompacting, SessionID: a.sessionID()})
+	a.emit(ctx, events, Event{Kind: EventCompacting, SessionID: a.sessionID()})
 	entries, byPart, err := a.sessionEntries(ctx)
 	if err != nil {
 		return err
@@ -133,11 +133,11 @@ func (a *Agent) runCompact(ctx context.Context, events chan<- Event, reason, ext
 	part.Text = &text
 	a.opts.TokensUsed = used
 	a.opts.CompactReason = ""
-	a.emit(events, Event{
+	a.emit(ctx, events, Event{
 		Kind:       EventCompacted,
 		SessionID:  a.sessionID(),
 		MessageID:  part.MessageID,
-		Part: partDeltaFromDB(part),
+		Part:       partDeltaFromDB(part),
 		TokensUsed: used,
 	})
 	return nil
@@ -212,13 +212,13 @@ func (a *Agent) persistCheckpoint(ctx context.Context, events chan<- Event, mode
 	if err != nil {
 		return db.Part{}, fmt.Errorf("agent: insert compact message: %w", err)
 	}
-	a.emit(events, Event{Kind: EventMessage, SessionID: a.sessionID(), MessageID: msg.ID, Role: "assistant"})
+	a.emit(ctx, events, Event{Kind: EventMessage, SessionID: a.sessionID(), MessageID: msg.ID, Role: "assistant"})
 	text := EncodeCompactText(env)
 	part, err := a.store.InsertPart(ctx, db.Part{MessageID: msg.ID, Type: CompactPartType, Text: &text})
 	if err != nil {
 		return db.Part{}, fmt.Errorf("agent: insert compact part: %w", err)
 	}
-	a.emit(events, Event{Kind: EventPart, SessionID: a.sessionID(), MessageID: msg.ID, Part: partDeltaFromDB(part)})
+	a.emit(ctx, events, Event{Kind: EventPart, SessionID: a.sessionID(), MessageID: msg.ID, Part: partDeltaFromDB(part)})
 	return part, nil
 }
 

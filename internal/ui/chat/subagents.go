@@ -1766,11 +1766,16 @@ func (m Model) cancelSelectedSubagent() (Model, tea.Cmd) {
 	if !row.Live || !strings.HasPrefix(row.ID, "sub_") {
 		return m, nil
 	}
-	if _, err := m.subMgr.Cancel(row.ID); err != nil {
+	manager := m.subMgr
+	if _, err := manager.RequestCancel(row.ID); err != nil {
 		m.err = err.Error()
+		return m.resizeSubagentDrawer(), nil
 	}
 	m = m.reloadSubagentRows()
-	return m.resizeSubagentDrawer(), nil
+	return m.resizeSubagentDrawer(), func() tea.Msg {
+		_, err := manager.Cancel(row.ID)
+		return subagentCancelDoneMsg{id: row.ID, err: err}
+	}
 }
 
 // subagentDrawerTop is the first screen row of the sub-agent drawer (header).

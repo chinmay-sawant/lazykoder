@@ -422,20 +422,20 @@ func (m Model) resumeAfterLimit() (Model, tea.Cmd) {
 	})
 }
 
-func (m Model) watchEvents(seq int) tea.Cmd {
+func (m Model) watchEvents(seq int, events <-chan agent.Event, errs <-chan error) tea.Cmd {
 	return func() tea.Msg {
-		if m.eventCh == nil {
-			return eventDoneMsg{seq: seq}
+		if events == nil {
+			return eventDoneMsg{seq: seq, events: events, errs: errs}
 		}
-		ev, ok := <-m.eventCh
+		ev, ok := <-events
 		if !ok {
 			var err error
-			if m.errCh != nil {
-				err = <-m.errCh
+			if errs != nil {
+				err = <-errs
 			}
-			return eventDoneMsg{seq: seq, err: err}
+			return eventDoneMsg{seq: seq, err: err, events: events, errs: errs}
 		}
-		return eventMsg{seq: seq, ev: ev}
+		return eventMsg{seq: seq, ev: ev, events: events, errs: errs}
 	}
 }
 
@@ -449,7 +449,7 @@ func (m Model) cancelTurn() Model {
 			parentID = m.session.ID
 		}
 		if parentID != "" {
-			_ = m.subMgr.CancelAll(parentID)
+			m.subMgr.RequestCancelAll(parentID)
 		}
 	}
 	m.turnSeq++
@@ -459,6 +459,7 @@ func (m Model) cancelTurn() Model {
 	m.activity = ""
 	m.pulseOn = false
 	m.err = "cancelled"
+	m = m.markInFlightToolsCancelled()
 	m.items = append(m.items, transcriptItem{kind: itemNote, text: "cancelled"})
 	m.syncTranscript()
 	m.turnCancel = nil
@@ -481,7 +482,7 @@ func (m Model) forceSend(text string) (Model, tea.Cmd) {
 			m.turnCancel()
 		}
 		if m.subMgr != nil && m.session != nil {
-			_ = m.subMgr.CancelAll(m.session.ID)
+			m.subMgr.RequestCancelAll(m.session.ID)
 		}
 		m.turnSeq++
 		m.busy = false
@@ -493,6 +494,7 @@ func (m Model) forceSend(text string) (Model, tea.Cmd) {
 		m.eventCh = nil
 		m.errCh = nil
 		m.err = ""
+		m = m.markInFlightToolsCancelled()
 		m.items = append(m.items, transcriptItem{kind: itemNote, text: "interrupted · sending now"})
 		m.syncTranscript()
 	}

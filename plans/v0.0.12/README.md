@@ -1,7 +1,7 @@
 # v0.0.12 - Browser access, cancellable sub-agents, and TUI refresh
 
 > **Parent:** `plans/v0.0.11/README.md` - follow-on work for browser access and orchestration
-> **Status:** proposed; planning only, no implementation rows are closed
+> **Status:** Phase 1 implementation is validated; repository closure is blocked by an unrelated scripts package error
 > **Estimated effort:** 10-15 working days, excluding screenshot review and provider availability
 > **Priority:** P1
 > **Skill:** `skills/phase-wise-checklist/SKILLS.md`
@@ -45,21 +45,25 @@ The current code already has these pieces:
   launches an isolated browser through a local validating proxy.
 - `internal/subagent.Manager` creates per-job contexts, runs jobs in
   goroutines, limits concurrency, serializes general-role writers by default,
-  persists job handles, and exposes `Cancel`, `CancelAll`, and `Shutdown`.
-- `internal/ui/chat` owns the parent `context.WithCancel`, forwards parent
-  cancellation to child jobs, and renders live child rows in the `/agents`
-  drawer.
-- Provider HTTP and stream calls already receive a `context.Context` through
-  `http.NewRequestWithContext`; the new work must prove the full stop path and
-  close the remaining lifecycle gaps.
+  persists job handles, and exposes immediate `RequestCancel` methods plus
+  wait-for-terminal `Cancel`, `CancelAll`, and `Shutdown` methods.
+- `internal/ui/chat` owns the parent `context.WithCancel`, signals child
+  cancellation without waiting in `Update`, drains stale event channels, and
+  renders terminal child rows in the `/agents` drawer.
+- Provider HTTP and stream calls receive a `context.Context` through
+  `http.NewRequestWithContext`; Phase 1 proves local request, stream, retry,
+  browser, tool, and child cleanup. The current protocols expose no documented
+  remote cancellation endpoint, so the product reports local transport stop.
 
-These facts are starting points, not closure evidence for this plan.
+Phase 1 is closed by its [cancellation ledger](phase-1-cancellation-contract-and-lifecycle.md).
+Later phases still need their own matching implementation and verification
+evidence.
 
 ## Phase index
 
 | Phase | Ledger | Responsibility | Status |
 | --- | --- | --- | --- |
-| 1 | [`phase-1-cancellation-contract-and-lifecycle.md`](phase-1-cancellation-contract-and-lifecycle.md) | Parent and child cancellation, provider stop semantics, durable terminal state | `[ ]` planned |
+| 1 | [`phase-1-cancellation-contract-and-lifecycle.md`](phase-1-cancellation-contract-and-lifecycle.md) | Parent and child cancellation, provider stop semantics, durable terminal state | `[~]` implementation validated; final gate blocked by unrelated scripts |
 | 2 | [`phase-2-public-internet-and-browser-reading.md`](phase-2-public-internet-and-browser-reading.md) | Public HTTP access, isolated browser reads, egress safety, fixtures | `[ ]` planned |
 | 3 | [`phase-3-subagent-goroutines-and-parent-orchestration.md`](phase-3-subagent-goroutines-and-parent-orchestration.md) | Bounded goroutines, task controls, recovery, and sibling behavior | `[ ]` planned |
 | 4 | [`phase-4-screenshot-driven-tui-enhancements.md`](phase-4-screenshot-driven-tui-enhancements.md) | Screenshot-led cancellation, browser status, and responsive TUI work | `[~]` awaiting screenshots |

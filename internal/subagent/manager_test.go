@@ -25,6 +25,20 @@ type blockingRunner struct {
 	maxSeen    atomic.Int32
 }
 
+type stubbornRunner struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (r *stubbornRunner) Run(_ context.Context, job Job) (Result, error) {
+	select {
+	case r.started <- struct{}{}:
+	default:
+	}
+	<-r.release
+	return Result{ID: job.ID, Name: job.Name, Role: job.Role, Status: string(StatusCompleted)}, nil
+}
+
 func newBlockingRunner(summary string) *blockingRunner {
 	return &blockingRunner{
 		started: make(chan struct{}, 64),
@@ -174,6 +188,174 @@ func TestCancelBeforeFinish(t *testing.T) {
 	}
 	if res.Status != string(StatusCancelled) {
 		t.Fatalf("result status = %q", res.Status)
+	}
+}
+
+func TestRequestCancelDoesNotWaitForWorkerCleanup(t *testing.T) {
+	r := &stubbornRunner{started: make(chan struct{}, 1), release: make(chan struct{})}
+	m := NewManager(NewConfig(), r)
+	snap, err := m.Spawn(context.Background(), "ses_request_cancel", "", Spec{Background: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-r.started:
+	case <-time.After(time.Second):
+		t.Fatal("runner did not start")
+	}
+	done := make(chan struct{})
+	go func() {
+		_, _ = m.RequestCancel(snap.ID)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("RequestCancel waited for worker cleanup")
+	}
+	close(r.release)
+	result, err := m.Wait(context.Background(), snap.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != string(StatusCancelled) {
+		t.Fatalf("result status = %q, want cancelled", result.Status)
+	}
+}
+
+func TestWriterWaitCancellationReleasesSemaphore(t *testing.T) {
+	r := newBlockingRunner("done")
+	cfg := NewConfig()
+	cfg.MaxConcurrent = 2
+	cfg.MaxQueued = 4
+	m := NewManager(cfg, r)
+	first, err := m.Spawn(context.Background(), "ses_writer", "", Spec{Role: RoleGeneral, Background: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-r.started:
+	case <-time.After(time.Second):
+		t.Fatal("first writer did not start")
+	}
+	second, err := m.Spawn(context.Background(), "ses_writer", "", Spec{Role: RoleGeneral, Background: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := m.RequestCancel(second.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status == string(StatusCompleted) {
+		t.Fatalf("cancelled writer already completed: %+v", got)
+	}
+	result, err := m.Wait(context.Background(), second.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != string(StatusCancelled) {
+		t.Fatalf("waiting writer status = %q, want cancelled", result.Status)
+	}
+	close(r.release)
+	if _, err := m.Wait(context.Background(), first.ID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTimeoutBecomesTerminalTimedOut(t *testing.T) {
+	r := newBlockingRunner("late")
+	cfg := NewConfig()
+	cfg.Timeout = 20 * time.Millisecond
+	m := NewManager(cfg, r)
+	snap, err := m.Spawn(context.Background(), "ses_timeout", "", Spec{Background: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := m.Wait(context.Background(), snap.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != string(StatusTimedOut) {
+		t.Fatalf("result status = %q, want timed_out", result.Status)
+	}
+}
+
+func TestCancelAllIsIdempotentAndReleasesSlot(t *testing.T) {
+	r := newBlockingRunner("done")
+	cfg := NewConfig()
+	cfg.MaxConcurrent = 1
+	cfg.MaxQueued = 3
+	m := NewManager(cfg, r)
+	first, err := m.Spawn(context.Background(), "ses_cancel_all", "", Spec{Background: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := m.Spawn(context.Background(), "ses_cancel_all", "", Spec{Background: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-r.started:
+	case <-time.After(time.Second):
+		t.Fatal("first runner did not start")
+	}
+	if got := m.CancelAll("ses_cancel_all"); got != 2 {
+		t.Fatalf("first CancelAll count = %d, want 2", got)
+	}
+	if got := m.CancelAll("ses_cancel_all"); got != 0 {
+		t.Fatalf("repeated CancelAll count = %d, want 0", got)
+	}
+	close(r.release)
+	for _, id := range []string{first.ID, second.ID} {
+		result, err := m.Wait(context.Background(), id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Status != string(StatusCancelled) {
+			t.Fatalf("job %s status = %q, want cancelled", id, result.Status)
+		}
+	}
+	third, err := m.Spawn(context.Background(), "ses_cancel_all", "", Spec{Background: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := m.Wait(context.Background(), third.ID)
+	if err != nil || result.Status != string(StatusCompleted) {
+		t.Fatalf("post-cancel job = %+v, err=%v", result, err)
+	}
+}
+
+func TestCancelAllCancelsDurableOnlyJobs(t *testing.T) {
+	ctx := context.Background()
+	st := openSubagentTestStore(t)
+	parent, err := st.CreateSession(ctx, db.Session{Directory: t.TempDir(), Title: "parent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"sub_durable_cancel_a", "sub_durable_cancel_b"} {
+		if err := st.UpsertSubagentJob(ctx, db.SubagentJob{
+			ID: id, ParentSessionID: parent.ID, Name: id, Role: RoleExplore,
+			Status: string(StatusQueued), Prompt: "wait",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := NewManager(NewConfig(), nil)
+	m.SetStore(st)
+	if got := m.CancelAll(parent.ID); got != 2 {
+		t.Fatalf("CancelAll count = %d, want 2", got)
+	}
+	if got := m.CancelAll(parent.ID); got != 0 {
+		t.Fatalf("repeated CancelAll count = %d, want 0", got)
+	}
+	rows, err := st.ListSubagentJobs(ctx, parent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range rows {
+		if row.Status != string(StatusCancelled) {
+			t.Fatalf("durable row = %+v", row)
+		}
 	}
 }
 

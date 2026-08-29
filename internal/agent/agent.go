@@ -295,8 +295,8 @@ func (a *Agent) persistPlan(ctx context.Context, plan orchestrator.Plan, events 
 	if err != nil {
 		return fmt.Errorf("agent: insert orchestration plan part: %w", err)
 	}
-	a.emit(events, Event{Kind: EventMessage, SessionID: a.sessionID(), MessageID: message.ID, Role: "assistant"})
-	a.emit(events, Event{Kind: EventPart, SessionID: a.sessionID(), MessageID: message.ID, Part: partDeltaFromDB(part)})
+	a.emit(ctx, events, Event{Kind: EventMessage, SessionID: a.sessionID(), MessageID: message.ID, Role: "assistant"})
+	a.emit(ctx, events, Event{Kind: EventPart, SessionID: a.sessionID(), MessageID: message.ID, Part: partDeltaFromDB(part)})
 	return nil
 }
 
@@ -489,7 +489,7 @@ func (a *Agent) Send(ctx context.Context, userText string, events chan<- Event) 
 		defer close(events)
 		defer func() {
 			if err == nil {
-				a.emit(events, Event{Kind: EventDone, SessionID: a.sessionID()})
+				a.emit(ctx, events, Event{Kind: EventDone, SessionID: a.sessionID()})
 			}
 		}()
 	}
@@ -500,14 +500,14 @@ func (a *Agent) Send(ctx context.Context, userText string, events chan<- Event) 
 		return err
 	}
 	a.prepareSelections(ctx, userText)
-	a.emit(events, Event{Kind: EventRecallStarted, SessionID: a.sessionID()})
+	a.emit(ctx, events, Event{Kind: EventRecallStarted, SessionID: a.sessionID()})
 	a.prepareRecall(ctx, userText)
-	a.emit(events, Event{Kind: EventRecallFinished, SessionID: a.sessionID()})
+	a.emit(ctx, events, Event{Kind: EventRecallFinished, SessionID: a.sessionID()})
 	a.prepareMemory(ctx, userText)
 	a.preparePlan(ctx, userText, events)
-	a.emit(events, Event{Kind: EventSkillsStarted, SessionID: a.sessionID()})
+	a.emit(ctx, events, Event{Kind: EventSkillsStarted, SessionID: a.sessionID()})
 	selected := a.prepareSkills(ctx, userText)
-	a.emit(events, Event{Kind: EventSkillsFinished, SessionID: a.sessionID(), Skills: selected})
+	a.emit(ctx, events, Event{Kind: EventSkillsFinished, SessionID: a.sessionID(), Skills: selected})
 	return a.runSteps(ctx, events)
 }
 
@@ -542,7 +542,7 @@ func (a *Agent) SendHidden(ctx context.Context, prompt string, events chan<- Eve
 		defer close(events)
 		defer func() {
 			if err == nil {
-				a.emit(events, Event{Kind: EventDone, SessionID: a.sessionID()})
+				a.emit(ctx, events, Event{Kind: EventDone, SessionID: a.sessionID()})
 			}
 		}()
 	}
@@ -550,7 +550,7 @@ func (a *Agent) SendHidden(ctx context.Context, prompt string, events chan<- Eve
 		a.sess = a.opts.Session
 	}
 	if a.sessionID() == "" {
-		return a.fail(events, errors.New("agent: hidden turn requires an existing session"))
+		return a.fail(ctx, events, errors.New("agent: hidden turn requires an existing session"))
 	}
 	return a.runSteps(ctx, events)
 }
@@ -567,7 +567,7 @@ func (a *Agent) Continue(ctx context.Context, events chan<- Event) (err error) {
 		defer close(events)
 		defer func() {
 			if err == nil {
-				a.emit(events, Event{Kind: EventDone, SessionID: a.sessionID()})
+				a.emit(ctx, events, Event{Kind: EventDone, SessionID: a.sessionID()})
 			}
 		}()
 	}
@@ -575,7 +575,7 @@ func (a *Agent) Continue(ctx context.Context, events chan<- Event) (err error) {
 		a.sess = a.opts.Session
 	}
 	if a.sessionID() == "" {
-		return a.fail(events, fmt.Errorf("agent: continue requires an existing session"))
+		return a.fail(ctx, events, fmt.Errorf("agent: continue requires an existing session"))
 	}
 	return a.runSteps(ctx, events)
 }
@@ -588,13 +588,13 @@ func (a *Agent) runSteps(ctx context.Context, events chan<- Event) error {
 	for step := 0; step < maxSteps; step++ {
 		resp, err := a.stepOnce(ctx, events)
 		if err != nil {
-			return a.fail(events, err)
+			return a.fail(ctx, events, err)
 		}
 		if resp.FinishReason != "tool-calls" && len(resp.ToolCalls) == 0 {
 			break
 		}
 		if step == maxSteps-1 {
-			return a.fail(events, fmt.Errorf("%w (max %d)", ErrStepLimit, maxSteps))
+			return a.fail(ctx, events, fmt.Errorf("%w (max %d)", ErrStepLimit, maxSteps))
 		}
 	}
 	return nil
@@ -681,8 +681,8 @@ func (a *Agent) callModel(
 	return a.streamStep(ctx, events, req)
 }
 
-func (a *Agent) fail(events chan<- Event, err error) error {
-	a.emit(events, Event{Kind: EventError, SessionID: a.sessionID(), Err: err})
+func (a *Agent) fail(ctx context.Context, events chan<- Event, err error) error {
+	a.emit(ctx, events, Event{Kind: EventError, SessionID: a.sessionID(), Err: err})
 	return err
 }
 
@@ -693,9 +693,17 @@ func (a *Agent) sessionID() string {
 	return a.sess.ID
 }
 
-func (a *Agent) emit(events chan<- Event, ev Event) {
-	if events != nil {
+func (a *Agent) emit(ctx context.Context, events chan<- Event, ev Event) {
+	if events == nil {
+		return
+	}
+	if ctx == nil {
 		events <- ev
+		return
+	}
+	select {
+	case events <- ev:
+	case <-ctx.Done():
 	}
 }
 
@@ -715,10 +723,10 @@ func (a *Agent) ensureSession(ctx context.Context, userText string, events chan<
 		Variant:   strPtr(a.opts.Variant),
 	})
 	if err != nil {
-		return a.fail(events, fmt.Errorf("agent: create session: %w", err))
+		return a.fail(ctx, events, fmt.Errorf("agent: create session: %w", err))
 	}
 	a.sess = &sess
-	a.emit(events, Event{Kind: EventSessionCreated, SessionID: sess.ID})
+	a.emit(ctx, events, Event{Kind: EventSessionCreated, SessionID: sess.ID})
 	return nil
 }
 
@@ -734,13 +742,13 @@ func (a *Agent) writeUserTurn(ctx context.Context, userText string, events chan<
 	if err != nil {
 		return fmt.Errorf("agent: insert user message: %w", err)
 	}
-	a.emit(events, Event{Kind: EventMessage, SessionID: a.sessionID(), MessageID: m.ID, Role: "user"})
+	a.emit(ctx, events, Event{Kind: EventMessage, SessionID: a.sessionID(), MessageID: m.ID, Role: "user"})
 	text := userText
 	part, err := a.store.InsertPart(ctx, db.Part{MessageID: m.ID, Type: "text", Text: &text})
 	if err != nil {
 		return fmt.Errorf("agent: insert user part: %w", err)
 	}
-	a.emit(events, Event{Kind: EventPart, SessionID: a.sessionID(), MessageID: m.ID, Part: partDeltaFromDB(part)})
+	a.emit(ctx, events, Event{Kind: EventPart, SessionID: a.sessionID(), MessageID: m.ID, Part: partDeltaFromDB(part)})
 	return nil
 }
 

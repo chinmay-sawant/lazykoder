@@ -160,19 +160,53 @@ func (s *Store) UpdateToolCall(ctx context.Context, tc ToolCall) error {
 ON CONFLICT(part_id) DO UPDATE SET tool = excluded.tool, call_id = excluded.call_id, status = excluded.status,
 title = excluded.title, time_start = excluded.time_start, time_end = excluded.time_end,
 exit_code = excluded.exit_code, input_json = excluded.input_json, output = excluded.output,
-metadata_json = excluded.metadata_json`,
+metadata_json = excluded.metadata_json
+WHERE tool_calls.status IN ('pending', 'running')`,
 		tc.PartID, tc.Tool, tc.CallID, tc.Status, tc.Title, tc.TimeStart, tc.TimeEnd, tc.ExitCode,
 		tc.InputJSON, tc.Output, tc.MetadataJSON)
 	if err != nil {
 		return fmt.Errorf("db: upsert tool call: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE parts SET tool_status = ? WHERE id = ?`, tc.Status, tc.PartID); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE parts SET tool_status =
+		(SELECT status FROM tool_calls WHERE part_id = ?) WHERE id = ?`, tc.PartID, tc.PartID); err != nil {
 		return fmt.Errorf("db: update part tool_status: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("db: commit tool call update: %w", err)
 	}
 	return nil
+}
+
+// CancelToolCall records a bounded terminal result without overwriting a
+// result that completed concurrently. It returns true when this call won the
+// pending/running to cancelled transition.
+func (s *Store) CancelToolCall(ctx context.Context, partID, output string) (bool, error) {
+	now := time.Now().UnixMilli()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("db: begin tool call cancellation: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	result, err := tx.ExecContext(ctx, `UPDATE tool_calls
+SET status = 'cancelled', time_end = ?, exit_code = NULL, output = ?
+WHERE part_id = ? AND status IN ('pending', 'running')`, now, output, partID)
+	if err != nil {
+		return false, fmt.Errorf("db: cancel tool call: %w", err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("db: count cancelled tool call: %w", err)
+	}
+	if changed == 0 {
+		return false, nil
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE parts SET tool_status = 'cancelled' WHERE id = ?`, partID); err != nil {
+		return false, fmt.Errorf("db: update cancelled part status: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("db: commit tool call cancellation: %w", err)
+	}
+	return true, nil
 }
 
 // ListMessages returns the messages of a session ordered by seq.

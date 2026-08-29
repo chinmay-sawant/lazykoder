@@ -104,6 +104,9 @@ func parseEventStream(ctx context.Context, r io.Reader, onDelta func(Delta) erro
 			return acc.result(), err
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		return acc.result(), err
+	}
 	if err := sc.Err(); err != nil {
 		return acc.result(), fmt.Errorf("opencode: stream: %w", err)
 	}

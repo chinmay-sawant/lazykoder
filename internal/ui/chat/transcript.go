@@ -1043,6 +1043,20 @@ func (m Model) hasInFlightTools() bool {
 	return false
 }
 
+func (m Model) markInFlightToolsCancelled() Model {
+	for i := range m.items {
+		if m.items[i].kind != itemTool || !toolInFlight(toolItemStatus(m.items[i])) {
+			continue
+		}
+		status := "cancelled"
+		output := "cancelled"
+		m.items[i].tool.Status = status
+		m.items[i].tool.Output = &output
+		m.items[i].part.ToolStatus = &status
+	}
+	return m
+}
+
 // toolItemStatus resolves the effective status of a transcript tool item,
 // preferring the live ToolCall status over the part snapshot.
 func toolItemStatus(it transcriptItem) string {

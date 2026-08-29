@@ -22,7 +22,7 @@ func (a *Agent) streamStep(ctx context.Context, events chan<- Event, req opencod
 	resp, err := a.client.ChatStream(ctx, req, func(d opencode.Delta) error {
 		chunk := estimateTokenDelta(d.Reasoning + d.Content)
 		if chunk > 0 {
-			a.emit(events, Event{Kind: EventTokenDelta, SessionID: a.sessionID(), TokenDelta: chunk,
+			a.emit(ctx, events, Event{Kind: EventTokenDelta, SessionID: a.sessionID(), TokenDelta: chunk,
 				ElapsedMS: time.Since(started).Milliseconds()})
 		}
 		if err := a.appendPartDelta(ctx, events, m.ID, "reasoning", d.Reasoning, &reasonPart); err != nil {
@@ -79,12 +79,12 @@ func (a *Agent) beginAssistant(ctx context.Context, events chan<- Event) (db.Mes
 	if err != nil {
 		return db.Message{}, fmt.Errorf("agent: insert assistant message: %w", err)
 	}
-	a.emit(events, Event{Kind: EventMessage, SessionID: a.sessionID(), MessageID: m.ID, Role: "assistant"})
+	a.emit(ctx, events, Event{Kind: EventMessage, SessionID: a.sessionID(), MessageID: m.ID, Role: "assistant"})
 	part, err := a.store.InsertPart(ctx, db.Part{MessageID: m.ID, Type: "step-start"})
 	if err != nil {
 		return db.Message{}, fmt.Errorf("agent: insert step-start: %w", err)
 	}
-	a.emit(events, Event{Kind: EventPart, SessionID: a.sessionID(), MessageID: m.ID, Part: partDeltaFromDB(part)})
+	a.emit(ctx, events, Event{Kind: EventPart, SessionID: a.sessionID(), MessageID: m.ID, Part: partDeltaFromDB(part)})
 	return m, nil
 }
 
@@ -93,7 +93,7 @@ func (a *Agent) writeTextPart(ctx context.Context, events chan<- Event, msgID, t
 	if err != nil {
 		return fmt.Errorf("agent: insert %s: %w", typ, err)
 	}
-	a.emit(events, Event{Kind: EventPart, SessionID: a.sessionID(), MessageID: msgID, Part: partDeltaFromDB(part)})
+	a.emit(ctx, events, Event{Kind: EventPart, SessionID: a.sessionID(), MessageID: msgID, Part: partDeltaFromDB(part)})
 	return nil
 }
 
@@ -122,10 +122,10 @@ func (a *Agent) writeStepFinish(ctx context.Context, events chan<- Event, msgID 
 	if err != nil {
 		return fmt.Errorf("agent: insert step-finish: %w", err)
 	}
-	a.emit(events, Event{Kind: EventPart, SessionID: a.sessionID(), MessageID: msgID, Part: partDeltaFromDB(inserted)})
+	a.emit(ctx, events, Event{Kind: EventPart, SessionID: a.sessionID(), MessageID: msgID, Part: partDeltaFromDB(inserted)})
 	var output int64
 	output = resp.Usage.TokensOutput
-	a.emit(events, Event{Kind: EventStepMetrics, SessionID: a.sessionID(), MessageID: msgID,
+	a.emit(ctx, events, Event{Kind: EventStepMetrics, SessionID: a.sessionID(), MessageID: msgID,
 		TokensOutput: output, ElapsedMS: endMS - startMS})
 	return nil
 }
@@ -141,7 +141,7 @@ func (a *Agent) appendPartDelta(ctx context.Context, events chan<- Event, msgID,
 			return fmt.Errorf("agent: insert %s: %w", typ, err)
 		}
 		*slot = &part
-		a.emit(events, Event{Kind: EventPart, SessionID: a.sessionID(), MessageID: msgID, Part: partDeltaFromDB(part)})
+		a.emit(ctx, events, Event{Kind: EventPart, SessionID: a.sessionID(), MessageID: msgID, Part: partDeltaFromDB(part)})
 		return nil
 	}
 	text := chunk
@@ -152,7 +152,7 @@ func (a *Agent) appendPartDelta(ctx context.Context, events chan<- Event, msgID,
 		return err
 	}
 	(*slot).Text = &text
-	a.emit(events, Event{Kind: EventPart, SessionID: a.sessionID(), MessageID: msgID, Part: partDeltaFromDB(**slot)})
+	a.emit(ctx, events, Event{Kind: EventPart, SessionID: a.sessionID(), MessageID: msgID, Part: partDeltaFromDB(**slot)})
 	return nil
 }
 
@@ -170,6 +170,6 @@ func (a *Agent) ensurePartText(ctx context.Context, events chan<- Event, msgID, 
 		return err
 	}
 	(*slot).Text = &want
-	a.emit(events, Event{Kind: EventPart, SessionID: a.sessionID(), MessageID: msgID, Part: partDeltaFromDB(**slot)})
+	a.emit(ctx, events, Event{Kind: EventPart, SessionID: a.sessionID(), MessageID: msgID, Part: partDeltaFromDB(**slot)})
 	return nil
 }
