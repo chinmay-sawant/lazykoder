@@ -102,7 +102,7 @@ func (m Model) buildLayout(key layoutKey) layoutSnap {
 	railW, _ := m.settingsWorkspaceWidths()
 	snap.settingsRailX0 = cardX + 1 + settingsCardHorzPad
 	snap.settingsRailX1 = snap.settingsRailX0 + railW
-	snap.settingsContentX0 = snap.settingsRailX1 + 1
+	snap.settingsContentX0 = snap.settingsRailX1 + 1 + settingsWorkspaceGap
 	for i, line := range strings.Split(paint, "\n") {
 		plain := ansi.Strip(line)
 		if !snap.settingsCloseOK && strings.Contains(plain, "SETTINGS") && strings.Contains(plain, "[x]") {

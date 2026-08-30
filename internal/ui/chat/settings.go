@@ -88,11 +88,6 @@ const (
 	settingsAllowlistMinBudget = 8
 	// settingsKVRowMinLeftW is the floor width for a KV row label.
 	settingsKVRowMinLeftW = 4
-	// settingsKVValueStart keeps controls close to their labels instead of
-	// pushing values to the far edge of the settings pane.
-	settingsKVValueStart = 28
-	// settingsKVValueMinW preserves a readable control value on compact cards.
-	settingsKVValueMinW = 12
 	// settingsTimeoutMinute is seconds per minute.
 	settingsTimeoutMinute = 60
 )
@@ -209,7 +204,7 @@ func (m Model) settingsCardView() string {
 
 	filter := m.settingsFilterLine(innerW)
 	workspace := m.settingsWorkspaceView()
-	foot := "/ filter  •  [ and ] category  •  j/k move  •  ←/→ adjust  •  enter pick  •  esc close"
+	foot := "/ filter  •  [ and ] category  •  j/k/↑↓ move  •  ←/→ adjust  •  enter pick  •  esc close"
 	if m.settingsFilterActive() {
 		foot = "type to filter  •  j/k result  •  enter keep result  •  esc clear"
 	} else if m.settingsAllowlistEditing() {
@@ -271,7 +266,11 @@ func (m Model) moveSettingsCursor(delta int) Model {
 			index = len(rows) - 1
 		}
 	} else {
-		index += delta
+		next := index + delta
+		if !m.settingsFilterActive() && (next < 0 || next >= len(rows)) {
+			return m.moveSettingsSection(delta)
+		}
+		index = next
 		if index < 0 {
 			index = 0
 		}
@@ -563,10 +562,9 @@ func settingsKVRow(selected, hovered bool, label, value string, width int) strin
 		prefix = "• "
 	}
 	left := prefix + label
-	valueStart := min(settingsKVValueStart, max(settingsKVRowMinLeftW+1, width-settingsKVValueMinW))
-	left = truncateRunes(left, max(settingsKVRowMinLeftW, valueStart-1))
-	right := truncateSettingsValue(value, max(1, width-valueStart))
-	gap := max(1, valueStart-lipgloss.Width(left))
+	right := truncateSettingsValue(value, max(1, width-settingsKVRowMinLeftW-1))
+	left = truncateRunes(left, max(settingsKVRowMinLeftW, width-lipgloss.Width(right)-1))
+	gap := max(1, width-lipgloss.Width(left)-lipgloss.Width(right))
 	return left + strings.Repeat(" ", gap) + right
 }
 

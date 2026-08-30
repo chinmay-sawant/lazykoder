@@ -15,6 +15,7 @@ const (
 	settingsRailMaxWidth       = 18
 	settingsRailWidthDivisor   = 4
 	settingsRailMaxPaneDivisor = 3
+	settingsWorkspaceGap       = 2
 	settingsNoMatchQuoteWidth  = 20
 )
 
@@ -307,7 +308,7 @@ func (m Model) settingsWorkspaceWidths() (railW, paneW int) {
 	innerW := m.settingsInnerWidth()
 	railW = min(settingsRailMaxWidth, max(settingsRailMinWidth, innerW/settingsRailWidthDivisor))
 	railW = min(railW, max(1, innerW/settingsRailMaxPaneDivisor))
-	paneW = max(1, innerW-railW-1)
+	paneW = max(1, innerW-railW-1-settingsWorkspaceGap)
 	return railW, paneW
 }
 
@@ -449,7 +450,8 @@ func (m Model) settingsWorkspaceView() string {
 	rail = lipgloss.NewStyle().Width(railW).Height(height).Render(rail)
 	pane = lipgloss.NewStyle().Width(paneW).Height(height).Render(pane)
 	divider := lipgloss.NewStyle().Foreground(theme.ColorBorder()).Render(strings.Repeat("│\n", max(0, height-1)) + "│")
-	return lipgloss.JoinHorizontal(lipgloss.Top, rail, divider, pane)
+	gap := strings.Repeat(" ", settingsWorkspaceGap)
+	return lipgloss.JoinHorizontal(lipgloss.Top, rail, divider, gap, pane)
 }
 
 func (m Model) settingsFilterLine(width int) string {

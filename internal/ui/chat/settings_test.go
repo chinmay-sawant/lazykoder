@@ -816,6 +816,35 @@ func TestSettingsKeyboardNavigationFollowsSelectedCategory(t *testing.T) {
 	}
 }
 
+func TestSettingsKeyboardNavigationCrossesCategoryBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		down rune
+		up   rune
+	}{
+		{name: "arrows", down: tea.KeyDown, up: tea.KeyUp},
+		{name: "vim keys", down: 'j', up: 'k'},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := New(Options{
+				Store:   newTestStore(t),
+				Client:  deadClient(),
+				Workdir: t.TempDir(),
+			}).openSettings()
+
+			m = upd(m, tea.KeyPressMsg{Code: tc.down})
+			if m.settingsCurrentSection() != settingsSectionModel || m.settingsCursor != settingsRowModel {
+				t.Fatalf("down from appearance = section %d row %d", m.settingsCurrentSection(), m.settingsCursor)
+			}
+
+			m = upd(m, tea.KeyPressMsg{Code: tc.up})
+			if m.settingsCurrentSection() != settingsSectionAppearance || m.settingsCursor != settingsRowTheme {
+				t.Fatalf("up from model = section %d row %d", m.settingsCurrentSection(), m.settingsCursor)
+			}
+		})
+	}
+}
+
 func TestSettingsFilterAndCategoryRailKeepFocusVisible(t *testing.T) {
 	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
 	mm, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 36})
