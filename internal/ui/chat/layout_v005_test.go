@@ -148,6 +148,20 @@ func TestExpandedToolHasOutputSplit(t *testing.T) {
 	}
 }
 
+func TestCollapsedToolDisclosesLongCommand(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	command := "rg --glob '*.go' " + strings.Repeat("very-long-pattern-", 8)
+	body := stripANSI(m.renderTool(db.ToolCall{Tool: "bash", Status: "completed", Title: &command}, db.Part{}, true, 0))
+	if !strings.Contains(body, "click to expand and view the full command") {
+		t.Fatalf("collapsed tool did not disclose the full command: %q", body)
+	}
+	expanded := stripANSI(m.renderTool(db.ToolCall{Tool: "bash", Status: "completed", Title: &command}, db.Part{}, false, 0))
+	compact := strings.ReplaceAll(strings.ReplaceAll(expanded, "\n", ""), " ", "")
+	if !strings.Contains(compact, strings.ReplaceAll(command, " ", "")) {
+		t.Fatalf("expanded tool did not show the full command: %q", expanded)
+	}
+}
+
 func TestStatusChipRectMatchesPaintedLine(t *testing.T) {
 	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
 	mm, _ := m.Update(tea.WindowSizeMsg{Width: 140, Height: 36})

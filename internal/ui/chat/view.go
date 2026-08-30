@@ -38,21 +38,24 @@ const (
 // View layout quantities. Names follow each use site so semantically distinct
 // values that happen to be equal are not collapsed into one const.
 const (
-	percent         = 100  // percentage scale (100%)
-	tipsMinWidth    = 100  // min terminal width to show rotating tips
-	twoColMinWidth  = 100  // min terminal width for the two-column keys layout
-	minCentDisplay  = 0.01 // smallest USD to print with 4 decimals
-	overlayMaxW     = 96   // max inner width of the keys overlay
-	overlayColMin   = 28   // min column width in the two-column keys layout
-	minAvailW       = 8    // min header space before dropping title onto row 2
-	cardHorzPad     = 2    // horizontal card padding
-	cardBorderPad   = 4    // two card-border columns on each side
-	footerChipMin   = 4    // min budget left before truncating a footer chip
-	footerBudgetMin = 4    // min budget for the footer row
-	footerStatGap   = 2    // gap between a footer chip and its stats
-	layoutHalf      = 2    // halving divisor
-	twoColPad       = 2    // space reserved between the two key columns
-	keyColPad       = 2    // gap around a key label in the keys overlay
+	percent          = 100  // percentage scale (100%)
+	tipsMinWidth     = 100  // min terminal width to show rotating tips
+	twoColMinWidth   = 100  // min terminal width for the two-column keys layout
+	minCentDisplay   = 0.01 // smallest USD to print with 4 decimals
+	overlayMaxW      = 96   // max inner width of the keys overlay
+	askCardMaxW      = 74   // widest question dialog, even on a wide terminal
+	askCardWidthPct  = 64   // share of the terminal available to a question
+	emptySessionMaxW = 64   // readable first-action measure on a wide terminal
+	overlayColMin    = 28   // min column width in the two-column keys layout
+	minAvailW        = 8    // min header space before dropping title onto row 2
+	cardHorzPad      = 2    // horizontal card padding
+	cardBorderPad    = 4    // two card-border columns on each side
+	footerChipMin    = 4    // min budget left before truncating a footer chip
+	footerBudgetMin  = 4    // min budget for the footer row
+	footerStatGap    = 2    // gap between a footer chip and its stats
+	layoutHalf       = 2    // halving divisor
+	twoColPad        = 2    // space reserved between the two key columns
+	keyColPad        = 2    // gap around a key label in the keys overlay
 )
 
 // View renders the picker card, slash menu, confirm overlay, or the chat layout.
@@ -389,7 +392,7 @@ func (m Model) alertText() string {
 // tipsVisible reports whether the rotating usage tip should show.
 // Compact terminals keep tips out of the transcript gutter (they collide).
 func (m Model) tipsVisible() bool {
-	if m.busy || m.quitConfirm || m.copyNotice != "" || m.projectInstructionsNotice != "" {
+	if len(m.items) == 0 || m.busy || m.quitConfirm || m.copyNotice != "" || m.projectInstructionsNotice != "" {
 		return false
 	}
 	if m.width < tipsMinWidth {
@@ -850,13 +853,14 @@ func (m Model) transcriptView() string {
 		lines := []string{
 			lazykoderLogo,
 			lipgloss.NewStyle().Foreground(theme.ColorText()).Bold(true).Render("new session"),
-			hintStyle.Render("ask anything about this project"),
+			hintStyle.Render("start with a request about this project"),
 			hintStyle.Render("/ commands   @ files   ? help   /settings"),
 		}
 		if m.projectInstructionsNotice != "" {
 			lines = append(lines, hintStyle.Render(m.projectInstructionsNotice))
 		}
 		empty := strings.Join(lines, "\n")
+		empty = lipgloss.NewStyle().Width(min(w, emptySessionMaxW)).Align(lipgloss.Center).Render(empty)
 		return lipgloss.NewStyle().Width(w).Height(h).Align(lipgloss.Center, lipgloss.Center).Render(empty)
 	}
 	vp := m.paintedTranscript()
@@ -1085,7 +1089,7 @@ type askOptionSpan struct {
 // askOverlayLines builds the dialog content and the option row spans from the
 // same wrapped lines used by askOverlay, keeping pointer hit-testing aligned.
 func (m Model) askOverlayLines() (innerW, cardW int, lines []string, spans []askOptionSpan) {
-	cardW = max(minPaneWidth, m.overlayWidth())
+	cardW = m.askCardWidth()
 	innerW = max(1, cardW-cardBorder-cardBorderPad)
 	appendText := func(text string, style lipgloss.Style) {
 		for _, line := range wrapAskText(text, innerW) {
@@ -1144,6 +1148,11 @@ func (m Model) askOverlayLines() (innerW, cardW int, lines []string, spans []ask
 	spans = append(spans, askOptionSpan{index: customIdx, start: start, end: len(lines)})
 	appendText("j/k select  •  enter confirm  •  esc cancel  •  custom writes to LLM", hintStyle)
 	return innerW, cardW, lines, spans
+}
+
+func (m Model) askCardWidth() int {
+	width := min(m.overlayWidth(), min(askCardMaxW, m.width*askCardWidthPct/percent))
+	return max(minPaneWidth, width)
 }
 
 func wrapAskText(text string, width int) []string {

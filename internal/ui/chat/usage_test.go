@@ -40,7 +40,7 @@ func TestSettingsDisplaysOpenCodeUsage(t *testing.T) {
 		Monthly: opencode.BillingWindow{Percent: 63, Status: "ok"},
 	}
 	m.usageLoaded = true
-	m = m.openSettings()
+	m = m.openSettingsAt(settingsSectionModel, settingsRowModel)
 	v := stripANSI(viewText(m))
 	for _, want := range []string{"opencode usage", "rolling", "weekly", "monthly", "26%", "10%", "63%"} {
 		if !strings.Contains(v, want) {

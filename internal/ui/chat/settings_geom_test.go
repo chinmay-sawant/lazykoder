@@ -18,19 +18,13 @@ func TestSettingsGeomMatchesPaintedView(t *testing.T) {
 	view := stripANSI(viewText(m))
 	lines := strings.Split(view, "\n")
 
-	var xLine, modelLine, stepsLine = -1, -1, -1
+	var xLine = -1
 	for i, line := range lines {
 		if strings.Contains(line, "SETTINGS") && strings.Contains(line, "[x]") {
 			xLine = i
 		}
-		if settingsLineHasLabel(line, "new-session model") {
-			modelLine = i
-		}
-		if settingsLineHasLabel(line, "parent max steps") {
-			stepsLine = i
-		}
 	}
-	if xLine < 0 || modelLine < 0 || stepsLine < 0 {
+	if xLine < 0 {
 		t.Fatalf("controls missing in view:\n%s", view)
 	}
 
@@ -55,7 +49,7 @@ func TestSettingsGeomMatchesPaintedView(t *testing.T) {
 		t.Fatalf("click painted [x] at (%d,%d) did not close", cx0, xLine)
 	}
 
-	m = m.openSettings()
+	m = m.openSettingsAt(settingsSectionAgentLoop, settingsRowSteps)
 	before := m.projectSettings.Slot.MaxSteps
 	stepsLine, decX := paintedControlCol(stripANSI(viewText(m)), "parent max steps", "◂")
 	if stepsLine < 0 || decX < 0 {
@@ -81,7 +75,7 @@ func TestSettingsGeomMatchesPaintedView(t *testing.T) {
 	}
 
 	// Model row y is the first focusable painted row.
-	m = m.openSettings()
+	m = m.openSettingsAt(settingsSectionModel, settingsRowModel)
 	if modelLine := findLineLabel(stripANSI(viewText(m)), "new-session model"); modelLine != m.settingsListScreenTop() {
 		t.Fatalf("model Y: painted=%d computed=%d", modelLine, m.settingsListScreenTop())
 	}

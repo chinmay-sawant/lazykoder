@@ -114,9 +114,9 @@ func (m Model) mousePress(msg tea.MouseClickMsg) (Model, tea.Cmd) {
 				return m.openStatusDrawer(), nil
 			}
 			if which == "variant" {
-				return m.openVariantPicker(), nil
+				return m.openSettingsAt(settingsSectionModel, settingsRowVariant), nil
 			}
-			return m.openPicker(), nil
+			return m.openSettingsAt(settingsSectionModel, settingsRowModel), nil
 		}
 	}
 	if mu.Button == tea.MouseLeft && m.statusMode {

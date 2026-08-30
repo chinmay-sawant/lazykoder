@@ -485,8 +485,8 @@ func TestClickRunsSlashCommand(t *testing.T) {
 	if m.slashMode {
 		t.Fatal("slash menu still open after click")
 	}
-	if !m.pickerMode {
-		t.Fatal("click on /model did not open the picker")
+	if !m.settingsMode || m.pickerMode || m.settingsCurrentSection() != settingsSectionModel || m.settingsCursor != settingsRowModel {
+		t.Fatalf("click on /model state = settings=%v picker=%v section=%d row=%d", m.settingsMode, m.pickerMode, m.settingsCurrentSection(), m.settingsCursor)
 	}
 }
 

@@ -77,9 +77,9 @@ const (
 	// settingsUsageMinHeight keeps the settings card from clipping its footer
 	// when the optional usage section would not fit in the terminal.
 	settingsUsageMinHeight = 42
-	// settingsContentFixedRows are the header, spacer, and footer inside the
-	// card. Borders and vertical padding are added separately.
-	settingsContentFixedRows = 3
+	// settingsContentFixedRows are the header, filter, spacer, and footer
+	// inside the card. Borders and vertical padding are added separately.
+	settingsContentFixedRows = 4
 	// settingsUsageMaxCorners is the extra width kept for the error line.
 	settingsUsageMaxCorners = 16
 	// settingsUsageMinTextW is the floor width for the usage text row.
@@ -88,6 +88,11 @@ const (
 	settingsAllowlistMinBudget = 8
 	// settingsKVRowMinLeftW is the floor width for a KV row label.
 	settingsKVRowMinLeftW = 4
+	// settingsKVValueStart keeps controls close to their labels instead of
+	// pushing values to the far edge of the settings pane.
+	settingsKVValueStart = 28
+	// settingsKVValueMinW preserves a readable control value on compact cards.
+	settingsKVValueMinW = 12
 	// settingsTimeoutMinute is seconds per minute.
 	settingsTimeoutMinute = 60
 )
@@ -155,13 +160,19 @@ var settingsRowDefinitions = [...]settingsRowDefinition{
 	{id: settingsRowAllowlist, label: "allowed executables"},
 }
 
-// openSettings opens the full-screen settings card (same layout family as
-// /resume and /help: centered bordered card over the chat). It marks usage as
-// loading when the plan usage has not been loaded yet; the caller kicks off
-// the fetch via maybeFetchUsage.
+// openSettings opens the settings workspace at its default category.
 func (m Model) openSettings() Model {
+	return m.openSettingsAt(settingsSectionAppearance, settingsRowTheme)
+}
+
+// openSettingsAt opens the settings workspace with one visible, focused row.
+func (m Model) openSettingsAt(section settingsSection, row int) Model {
+	definition := settingsSectionDefinitionFor(section)
+	if !containsInt(definition.rows, row) {
+		row = definition.rows[0]
+	}
 	m = m.setFocus(focusSettings)
-	m.settingsCursor = settingsRowTheme
+	m.settingsCursor = row
 	m.settingsHover = -1
 	m.settingsEdit = false
 	m.settingsEditValue = ""
@@ -186,7 +197,7 @@ func (m Model) settingsScreen() string {
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, m.settingsCardView())
 }
 
-// settingsCardView is the bordered settings card (resume / help style).
+// settingsCardView is the bordered settings workspace.
 func (m Model) settingsCardView() string {
 	innerW := m.settingsInnerWidth()
 	cardW := m.overlayWidth()
@@ -196,50 +207,20 @@ func (m Model) settingsCardView() string {
 	gap := max(1, innerW-lipgloss.Width(title)-lipgloss.Width(closeBtn))
 	header := title + strings.Repeat(" ", gap) + closeBtn
 
-	sel := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText()).Background(theme.ColorBorder())
-	hover := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorText())
-	normal := lipgloss.NewStyle().Foreground(theme.ColorMute())
-	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(theme.ColorAccent())
-	mute := hintStyle
-	dim := lipgloss.NewStyle().Foreground(theme.ColorMute()).Faint(true)
-
-	lines := m.visibleSettingsPaintLines(innerW)
-	var body strings.Builder
-	for i, line := range lines {
-		if i > 0 {
-			body.WriteString("\n")
-		}
-		text := line.text
-		if line.kind == settingsLineHint || line.kind == settingsLineHeader {
-			text = truncateRunes(text, innerW)
-		}
-		switch {
-		case line.kind == settingsLineHeader:
-			body.WriteString(headerStyle.MaxWidth(innerW).Render(text))
-		case line.kind == settingsLineHint:
-			body.WriteString(mute.MaxWidth(innerW).Render(text))
-		case line.kind == settingsLineRow && line.row == m.settingsCursor:
-			body.WriteString(sel.MaxWidth(innerW).Render(text))
-		case line.kind == settingsLineRow && line.row == m.settingsHover:
-			body.WriteString(hover.MaxWidth(innerW).Render(text))
-		case line.dim:
-			body.WriteString(dim.MaxWidth(innerW).Render(text))
-		default:
-			body.WriteString(normal.MaxWidth(innerW).Render(text))
-		}
-	}
-
-	foot := "j/k move  •  ←/→ adjust  •  enter pick  •  click  •  esc/[x] close"
-	if m.settingsEdit {
+	filter := m.settingsFilterLine(innerW)
+	workspace := m.settingsWorkspaceView()
+	foot := "/ filter  •  [ and ] category  •  j/k move  •  ←/→ adjust  •  enter pick  •  esc close"
+	if m.settingsFilterActive() {
+		foot = "type to filter  •  j/k result  •  enter keep result  •  esc clear"
+	} else if m.settingsAllowlistEditing() {
 		foot = "enter save  •  esc cancel"
 	}
 	footer := hintStyle.Width(innerW).Render(truncateRunes(foot, innerW))
 
-	// Blank row after SETTINGS, then the sectioned body, then the footer.
-	content := lipgloss.JoinVertical(lipgloss.Left, header, "", body.String(), footer)
+	content := lipgloss.JoinVertical(lipgloss.Left, header, filter, "", workspace, footer)
 	minInner := m.settingsCardMinInnerHeight()
 	if extra := minInner - lipgloss.Height(content); extra > 0 {
-		content = lipgloss.JoinVertical(lipgloss.Left, header, "", body.String(), strings.Repeat("\n", extra-1), footer)
+		content = lipgloss.JoinVertical(lipgloss.Left, header, filter, "", workspace, strings.Repeat("\n", extra-1), footer)
 	}
 	content = keepBackground(content, theme.ColorSurface())
 
@@ -264,7 +245,7 @@ func (m Model) settingsInnerWidth() int {
 func (m Model) settingsNavigationRows() []int {
 	seen := make(map[int]bool)
 	rows := make([]int, 0, len(settingsRowDefinitions))
-	for _, line := range m.settingsPaintLines(m.settingsInnerWidth()) {
+	for _, line := range m.settingsWorkspacePaintLines(m.settingsContentWidth()) {
 		if line.kind != settingsLineRow || line.row < 0 || seen[line.row] {
 			continue
 		}
@@ -282,7 +263,8 @@ func (m Model) moveSettingsCursor(delta int) Model {
 	if len(rows) == 0 {
 		return m
 	}
-	index := indexOfInt(rows, m.settingsCursor)
+	selected := m.selectedSettingsRow()
+	index := indexOfInt(rows, selected)
 	if index < 0 {
 		index = 0
 		if delta < 0 {
@@ -296,6 +278,10 @@ func (m Model) moveSettingsCursor(delta int) Model {
 		if index >= len(rows) {
 			index = len(rows) - 1
 		}
+	}
+	if m.settingsFilterActive() {
+		m.settingsHover = rows[index]
+		return m
 	}
 	m.settingsCursor = rows[index]
 	return m
@@ -325,7 +311,7 @@ func (m Model) settingsBodyMaxRows() int {
 }
 
 func (m Model) visibleSettingsPaintLines(innerW int) []settingsPaintLine {
-	lines := m.settingsPaintLines(innerW)
+	lines := m.settingsWorkspacePaintLines(innerW)
 	maxRows := m.settingsBodyMaxRows()
 	if len(lines) <= maxRows {
 		return lines
@@ -333,7 +319,7 @@ func (m Model) visibleSettingsPaintLines(innerW int) []settingsPaintLine {
 
 	selected := 0
 	for i, line := range lines {
-		if line.kind == settingsLineRow && line.row == m.settingsCursor {
+		if line.kind == settingsLineRow && line.row == m.selectedSettingsRow() {
 			selected = i
 			break
 		}
@@ -414,7 +400,7 @@ func (m Model) settingsPaintLines(innerW int) []settingsPaintLine {
 		confirmVal = "deny"
 	}
 	allowlistVal := formatAllowlistValue(m.projectSettings.Agents.BashAllowlist, innerW)
-	if m.settingsEdit {
+	if m.settingsAllowlistEditing() {
 		allowlistVal = m.settingsEditValue
 	}
 
@@ -524,7 +510,7 @@ func (m Model) settingsPaintRow(row int, value string, innerW int, dim bool) set
 	return settingsPaintLine{
 		kind: settingsLineRow,
 		row:  row,
-		text: settingsKVRow(m.settingsCursor == row, m.settingsHover == row, settingsRowLabel(row), value, innerW),
+		text: settingsKVRow(m.selectedSettingsRow() == row, m.settingsHover == row && !m.settingsFilterActive(), settingsRowLabel(row), value, innerW),
 		dim:  dim,
 	}
 }
@@ -577,19 +563,48 @@ func settingsKVRow(selected, hovered bool, label, value string, width int) strin
 		prefix = "• "
 	}
 	left := prefix + label
-	right := value
-	gap := width - lipgloss.Width(left) - lipgloss.Width(right)
-	if gap < 1 {
-		left = truncateRunes(left, max(settingsKVRowMinLeftW, width-lipgloss.Width(right)-1))
-		gap = width - lipgloss.Width(left) - lipgloss.Width(right)
-	}
-	if gap < 1 {
-		gap = 1
-	}
+	valueStart := min(settingsKVValueStart, max(settingsKVRowMinLeftW+1, width-settingsKVValueMinW))
+	left = truncateRunes(left, max(settingsKVRowMinLeftW, valueStart-1))
+	right := truncateSettingsValue(value, max(1, width-valueStart))
+	gap := max(1, valueStart-lipgloss.Width(left))
 	return left + strings.Repeat(" ", gap) + right
 }
 
+func truncateSettingsValue(value string, width int) string {
+	if lipgloss.Width(value) <= width {
+		return value
+	}
+	const stepPrefix = "◂ "
+	const stepSuffix = " ▸"
+	if strings.HasPrefix(value, stepPrefix) && strings.HasSuffix(value, stepSuffix) {
+		inner := strings.TrimSuffix(strings.TrimPrefix(value, stepPrefix), stepSuffix)
+		innerW := max(1, width-lipgloss.Width(stepPrefix)-lipgloss.Width(stepSuffix))
+		return stepPrefix + truncateRunes(inner, innerW) + stepSuffix
+	}
+	return truncateRunes(value, width)
+}
+
 func (m Model) updateSettingsKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
+	if m.settingsFilterActive() {
+		switch key.Code {
+		case tea.KeyEscape, tea.KeyEnter:
+			return m.clearSettingsFilter(), nil
+		case tea.KeyBackspace:
+			if len(m.settingsEditValue) > 0 {
+				m.settingsEditValue = m.settingsEditValue[:len(m.settingsEditValue)-1]
+			}
+			return m.ensureSettingsFilterSelection(), nil
+		case 'j', tea.KeyDown:
+			return m.moveSettingsCursor(1), nil
+		case 'k', tea.KeyUp:
+			return m.moveSettingsCursor(-1), nil
+		}
+		if key.Text != "" {
+			m.settingsEditValue += key.Text
+			return m.ensureSettingsFilterSelection(), nil
+		}
+		return m, nil
+	}
 	if m.settingsEdit {
 		if key.Code == tea.KeyEscape {
 			m.settingsEdit = false
@@ -617,6 +632,12 @@ func (m Model) updateSettingsKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 	switch key.Code {
 	case tea.KeyEscape, 'q', 'Q', 'x', 'X':
 		return m.closeSettings(), nil
+	case '/':
+		return m.startSettingsFilter(), nil
+	case '[':
+		return m.moveSettingsSection(-1), nil
+	case ']':
+		return m.moveSettingsSection(1), nil
 	case 'j', tea.KeyDown:
 		return m.moveSettingsCursor(1), nil
 	case 'k', tea.KeyUp:
@@ -1522,7 +1543,7 @@ func (m Model) settingsRowAtScreenY(y int) (row int, ok bool) {
 	if paint == "" {
 		paint = m.settingsScreen()
 	}
-	return settingsRowFromPaintedLine(plainLine(paint, y))
+	return settingsRowFromPaintedLine(plainFromDisplayColumn(plainLine(paint, y), m.layout.settingsContentX0))
 }
 
 func settingsRowFromPaintedLine(plain string) (row int, ok bool) {
@@ -1585,11 +1606,22 @@ func (m Model) settingsHit(x, y int, button tea.MouseButton) (Model, tea.Cmd, bo
 	if x0, cy, x1, ok := m.settingsCloseRect(); ok && y == cy && x >= x0 && x < x1 {
 		return m.closeSettings(), nil, true
 	}
+	if button == tea.MouseLeft && y == m.layout.settingsFilterY {
+		return m.startSettingsFilter(), nil, true
+	}
+	if button == tea.MouseLeft && x >= m.layout.settingsRailX0 && x < m.layout.settingsRailX1 {
+		if section, ok := m.layout.settingsSectionByY[y]; ok {
+			return m.selectSettingsSection(section), nil, true
+		}
+	}
 	row, ok := m.settingsRowAtScreenY(y)
 	if !ok {
 		// Click outside the list but on the card: still consume so the
 		// dimmed chat underneath is not selected.
 		return m, nil, true
+	}
+	if m.settingsFilterActive() {
+		m = m.clearSettingsFilter()
 	}
 	m.settingsCursor = row
 	paint := m.layout.settingsPaint

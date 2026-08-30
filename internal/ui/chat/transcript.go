@@ -956,15 +956,18 @@ func (m Model) renderToolMode(tool db.ToolCall, part db.Part, collapsed bool, wh
 	if status == "" {
 		status = "pending"
 	}
-	title := toolCommand(tool)
+	command := toolCommand(tool)
+	title := command
 	if title == "" {
 		title = name
 	}
 	// File tools: full path relative to the project folder (never truncated
 	// here; alignMeta still trims only if the clock would collide).
+	commandTruncated := false
 	if name == "edit" || name == "write" || name == "read" {
 		title = m.relWorkPath(title)
 	} else {
+		commandTruncated = len([]rune(title)) > maxToolTitle
 		title = truncateRunes(title, maxToolTitle)
 	}
 	chevron := "▸"
@@ -993,7 +996,11 @@ func (m Model) renderToolMode(tool db.ToolCall, part db.Part, collapsed bool, wh
 
 	card := toolCardStyle.Width(bodyWidth).Background(theme.ColorBg())
 	if collapsed {
-		return card.Render(keepBackground(header, theme.ColorBg()))
+		body := header
+		if commandTruncated {
+			body += "\n" + hintStyle.Width(bodyWidth).Render("  click to expand and view the full command")
+		}
+		return card.Render(keepBackground(body, theme.ColorBg()))
 	}
 	body := []string{header}
 	switch tool.Tool {
