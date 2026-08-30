@@ -1,7 +1,7 @@
 # v0.0.12 / Phase 4 - Screenshot-driven TUI enhancements
 
 > **Parent:** `plans/v0.0.12/README.md` - v0.0.12 index
-> **Status:** `[~]` active. The screenshot handoff and source map are complete. Code and terminal proof are pending.
+> **Status:** `[~]` active. The screenshot handoff and source map are complete. The composer footer contrast slice is validated; remaining layout and closure work is pending.
 > **Estimated effort:** 3-5 working days
 > **Priority:** P1
 
@@ -97,6 +97,12 @@ file.
       reducing the transcript width. Owners: `transcript.go`, `view.go`, and
       the theme package. Proof: transcript, selection, and tool-card tests
       retain their current geometry.
+- [x] Render the composer footer's idle send hint, selected model, variant,
+      metrics, and status control with the primary theme text token. Keep
+      placeholder and active-state colors semantic. Proof:
+      `TestComposerFooterUsesPrimaryTextColor`, `go test ./internal/ui/chat`,
+      `make test`, `make vet`, `go build ./...`, `make lint`, and tmux captures
+      at `120x36` and `80x24` on 2026-08-30.
 
 ## 4.4 Cancellation and browser status surfaces
 

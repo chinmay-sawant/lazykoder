@@ -47,8 +47,10 @@ CLI-owned signed-in catalog and adds its current model rows under `Grok`.
   always type into the composer. Tool-card header clicks toggle their body;
   thinking headers select rows without toggling them.
 - Composer: a rounded input box on the near-black graphite canvas. Its charcoal input
-  surface fills the complete box, including the footer labels and status chips, and
-  receives a muted sage focus border while editing. Long prompts
+  surface fills the complete box, including the footer labels and status chips. The
+  idle send hint, selected model, variant, metrics, and status control use the
+  primary text color for legibility, while placeholder and active-state colors stay
+  semantic. The composer receives a muted sage focus border while editing. Long prompts
   grow up to six rows and scroll inside the box. Up/down move the
   cursor through that text first; at the top of a multi-line draft, up
   stays there instead of jumping to a previous message. After browsing

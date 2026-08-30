@@ -117,28 +117,30 @@ const (
 )
 
 var (
-	errStyle           lipgloss.Style
-	busyStyle          lipgloss.Style
-	hintStyle          lipgloss.Style
-	userStyle          lipgloss.Style
-	userRoleStyle      lipgloss.Style
-	assistantRoleStyle lipgloss.Style
-	roleStyle          lipgloss.Style
-	reasoningStyle     lipgloss.Style
-	toolCardStyle      lipgloss.Style
-	toolOutputStyle    lipgloss.Style
-	editCardStyle      lipgloss.Style
-	selectionStyle     lipgloss.Style
-	diffAddStyle       lipgloss.Style
-	diffDelStyle       lipgloss.Style
-	diffMetaStyle      lipgloss.Style
-	diffCtxStyle       lipgloss.Style
+	errStyle            lipgloss.Style
+	busyStyle           lipgloss.Style
+	hintStyle           lipgloss.Style
+	composerFooterStyle lipgloss.Style
+	userStyle           lipgloss.Style
+	userRoleStyle       lipgloss.Style
+	assistantRoleStyle  lipgloss.Style
+	roleStyle           lipgloss.Style
+	reasoningStyle      lipgloss.Style
+	toolCardStyle       lipgloss.Style
+	toolOutputStyle     lipgloss.Style
+	editCardStyle       lipgloss.Style
+	selectionStyle      lipgloss.Style
+	diffAddStyle        lipgloss.Style
+	diffDelStyle        lipgloss.Style
+	diffMetaStyle       lipgloss.Style
+	diffCtxStyle        lipgloss.Style
 )
 
 func configureThemeStyles() {
 	errStyle = lipgloss.NewStyle().Foreground(theme.ColorDanger())
 	busyStyle = lipgloss.NewStyle().Foreground(theme.ColorAccent())
 	hintStyle = lipgloss.NewStyle().Foreground(theme.ColorMute())
+	composerFooterStyle = lipgloss.NewStyle().Foreground(theme.ColorText())
 	userStyle = lipgloss.NewStyle().Foreground(theme.ColorAccent())
 	userRoleStyle = lipgloss.NewStyle().Foreground(theme.ColorAccent()).Bold(true)
 	assistantRoleStyle = lipgloss.NewStyle().Foreground(theme.ColorAssistantBorder()).Bold(true)

@@ -492,8 +492,8 @@ func embedComposerBorderLabels(boxed, footer string, border color.Color) string 
 	if plain == "" {
 		return boxed
 	}
-	// Render label with transparent/muted look on the border: faint + muted fg, border bg.
-	label := lipgloss.NewStyle().Foreground(theme.ColorMute()).Faint(true).Background(theme.ColorComposer()).Render(" " + plain + " ")
+	// Keep the footer label legible against the composer surface.
+	label := composerFooterStyle.Background(theme.ColorComposer()).Render(" " + plain + " ")
 	labelPlain := " " + plain + " "
 	labelW := lipgloss.Width(labelPlain)
 	idx := len(lines) - 1
@@ -516,7 +516,7 @@ func embedComposerBorderLabels(boxed, footer string, border color.Color) string 
 		}
 	}
 	_ = string(runes)
-	// Re-style bottom border with border color, but keep label faint/muted via embedded ANSI.
+	// Re-style the bottom border with border color while preserving the footer label.
 	// Build colored bottom: border color for border chars, label already has its own ANSI.
 	borderStyle := lipgloss.NewStyle().Foreground(border).Background(theme.ColorComposer())
 	// Split newBottomPlain around label to color border parts separately
@@ -542,7 +542,7 @@ func (m Model) composerFooter(width int) string {
 	if gap < 1 {
 		gap = 1
 	}
-	return left + strings.Repeat(" ", gap) + hintStyle.Render(right)
+	return left + strings.Repeat(" ", gap) + composerFooterStyle.Render(right)
 }
 
 func (m Model) footerPieces() (tokens, cache, cost, tps string) {
@@ -787,12 +787,12 @@ func (m Model) composerLeft() string {
 		if strings.TrimSpace(m.prompt.Value()) != "" {
 			return busyStyle.Render("enter send now")
 		}
-		return hintStyle.Render("edit")
+		return composerFooterStyle.Render("edit")
 	default:
 		if _, ok := m.selectedHistoryItem(); ok {
-			return hintStyle.Render("history: ↑/↓ previous/next")
+			return composerFooterStyle.Render("history: ↑/↓ previous/next")
 		}
-		return hintStyle.Render("enter send")
+		return composerFooterStyle.Render("enter send")
 	}
 }
 

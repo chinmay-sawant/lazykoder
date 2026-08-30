@@ -603,15 +603,11 @@ func (m *Manager) finish(h *handle, res Result) {
 func terminalFromCtx(ctx context.Context, res Result) Result {
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		res.Status = string(StatusTimedOut)
-		if res.Err == "" {
-			res.Err = "subagent: timed out"
-		}
+		res.Err = "subagent: timed out"
 		return res
 	}
 	res.Status = string(StatusCancelled)
-	if res.Err == "" {
-		res.Err = "subagent: cancelled"
-	}
+	res.Err = "subagent: cancelled"
 	return res
 }
 

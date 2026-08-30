@@ -156,9 +156,11 @@ When `settings.agents.enabled` is true, the parent agent gets:
 | `task_wait` | Wait for one id or all |
 | `task_cancel` | Signal cancellation for one id or all |
 
-Default `task` waits until the child finishes and returns a JSON summary.
-`background: true` returns a handle immediately (preferred for parallel
-spawns; follow with `task_wait`). Default child step budget is 1000
+Default `task` waits until the child finishes and returns a JSON summary. A
+foreground child follows the current parent turn, so interrupting that turn
+cancels the child. `background: true` returns a handle immediately and lets the
+child continue after the parent response or a new parent turn (preferred for
+parallel spawns; follow with `task_wait`). Default child step budget is 1000
 (configurable via settings `agents.child_max_steps` or per-spawn
 `max_steps`). If a child hits its step limit after doing work, the job
 completes with a partial summary and a note instead of status `failed`.

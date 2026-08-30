@@ -128,6 +128,8 @@ func specTask() opencode.ToolSpec {
 	return opencode.ToolSpec{
 		Name: ToolTask,
 		Description: "Spawn a sub-agent on a focused prompt. Prefer background=true for parallel work, then task_wait. " +
+			"Foreground tasks follow the current parent turn and are cancelled if that turn is interrupted; " +
+			"set background=true when the parent may receive new input or close. " +
 			"Raise max_steps for multi-file explores (default is higher than parent chat but still finite). " +
 			"Ask the child to finish with a short written report before the step budget ends.",
 		Parameters: map[string]any{

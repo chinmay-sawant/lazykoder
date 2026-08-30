@@ -566,6 +566,39 @@ func TestBackgroundSpawnSurvivesParentCancellation(t *testing.T) {
 	}
 }
 
+func TestTerminalFromCtxNormalizesProviderCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	got := terminalFromCtx(ctx, Result{
+		Status: string(StatusFailed),
+		Err:    "agent: provider: context canceled",
+	})
+	if got.Status != string(StatusCancelled) {
+		t.Fatalf("status = %q, want cancelled", got.Status)
+	}
+	if got.Err != "subagent: cancelled" {
+		t.Fatalf("error = %q, want normalized cancellation", got.Err)
+	}
+}
+
+func TestTerminalFromCtxNormalizesProviderTimeout(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
+	defer cancel()
+	time.Sleep(time.Millisecond)
+
+	got := terminalFromCtx(ctx, Result{
+		Status: string(StatusFailed),
+		Err:    "agent: provider: context deadline exceeded",
+	})
+	if got.Status != string(StatusTimedOut) {
+		t.Fatalf("status = %q, want timed_out", got.Status)
+	}
+	if got.Err != "subagent: timed out" {
+		t.Fatalf("error = %q, want normalized timeout", got.Err)
+	}
+}
+
 func TestModelProfileUsesFirstVariantWhenDefaultIsSelected(t *testing.T) {
 	profile := ModelProfile{ID: "child-model", Variants: []string{"low", "medium"}}
 	if got := profile.variant("", ""); got != "low" {
