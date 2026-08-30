@@ -1762,8 +1762,8 @@ func isCancelErr(err error) bool {
 }
 
 const (
-	promptMaxRows = 6
-	promptMinRows = 1
+	promptMaxRows = 7
+	promptMinRows = 2
 )
 
 func newPromptArea(width int) textarea.Model {
