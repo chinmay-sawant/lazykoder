@@ -1,0 +1,8 @@
+{
+  "name": "task_list",
+  "description": "List sub-agent jobs for the current parent session (includes completed jobs from SQLite after restart).",
+  "parameters": {
+    "type": "object",
+    "properties": {}
+  }
+}

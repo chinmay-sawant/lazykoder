@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/chinmay-sawant/lazykoder/internal/prompts"
 )
 
 const (
@@ -1067,6 +1069,12 @@ func WriteMemoryDocument(ctx context.Context, workdir string, document MemoryDoc
 }
 
 func BuildMemoryPrompt(snapshot Snapshot, document MemoryDocument, relatedRecaps string) (string, error) {
+	return BuildMemoryPromptFor("", snapshot, document, relatedRecaps)
+}
+
+// BuildMemoryPromptFor renders the memory request using prompt files from
+// workdir while keeping evidence serialization typed in Go.
+func BuildMemoryPromptFor(workdir string, snapshot Snapshot, document MemoryDocument, relatedRecaps string) (string, error) {
 	// Keep the prompt focused: only snapshot messages plus recent_context
 	// (and skills) are sent for memory creation. Preferences, decisions,
 	// things_to_avoid, questions and source ledger are dropped to keep the
@@ -1085,7 +1093,7 @@ func BuildMemoryPrompt(snapshot Snapshot, document MemoryDocument, relatedRecaps
 	}
 	// Enforce ~5000 tokens (~20000 runes) with priority to snapshot + recent_context
 	const memoryPromptMaxRunes = 20000
-	promptLimit := memoryPromptLimit()
+	promptLimit := memoryPromptLimitFor(prompts.New(workdir).Must("recap/memory-repair.md"))
 	if promptLimit > memoryPromptMaxRunes {
 		promptLimit = memoryPromptMaxRunes
 	}
@@ -1127,8 +1135,8 @@ func filterMemoryDocumentForPrompt(document MemoryDocument) MemoryDocument {
 	return filtered
 }
 
-func memoryPromptLimit() int {
-	limit := maxPromptText - len([]rune(memoryRepairInstruction))
+func memoryPromptLimitFor(repairInstruction string) int {
+	limit := maxPromptText - len([]rune(repairInstruction))
 	if limit < 1 {
 		return maxPromptText
 	}

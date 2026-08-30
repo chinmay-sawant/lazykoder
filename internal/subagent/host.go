@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/chinmay-sawant/lazykoder/internal/orchestrator"
+	"github.com/chinmay-sawant/lazykoder/internal/prompts"
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/task"
 )
@@ -17,6 +18,7 @@ import (
 type Host struct {
 	Mgr             *Manager
 	ParentSessionID string
+	Workdir         string
 	plan            orchestrator.Plan
 	reviewPlan      bool
 	retried         map[string]bool
@@ -39,7 +41,10 @@ func (h *Host) SetPlan(plan orchestrator.Plan, review bool) {
 
 // Specs returns the parent task tool advertisements (owned by tools/task).
 func (h *Host) Specs() []opencode.ToolSpec {
-	return task.Specs()
+	if h == nil {
+		return task.Specs()
+	}
+	return task.SpecsFor(h.Workdir)
 }
 
 // Execute dispatches a task tool. status is completed, denied, or error.
@@ -165,7 +170,7 @@ func (h *Host) reviewAndRespawn(ctx context.Context, parentSessionID string, res
 			continue
 		}
 		h.retried[result.ID] = true
-		spec := retrySpec(h.plan, result)
+		spec := retrySpec(h.Workdir, h.plan, result)
 		if spec.Prompt == "" {
 			continue
 		}
@@ -182,12 +187,13 @@ func (h *Host) reviewAndRespawn(ctx context.Context, parentSessionID string, res
 	return results
 }
 
-func retrySpec(plan orchestrator.Plan, result Result) Spec {
+func retrySpec(workdir string, plan orchestrator.Plan, result Result) Spec {
+	promptStore := prompts.New(workdir)
 	for _, task := range plan.Subtasks {
 		if task.ID == result.Name || task.Name == result.Name {
 			return Spec{
 				Name:        result.Name + " retry",
-				Prompt:      task.Prompt + "\n\nThis is the single allowed retry. Re-check the work and finish with a concise summary.",
+				Prompt:      task.Prompt + "\n\n" + promptStore.Must("subagent/retry.md"),
 				Description: task.Name,
 				Role:        task.Role,
 				ModelClass:  task.ModelClass,
@@ -196,7 +202,7 @@ func retrySpec(plan orchestrator.Plan, result Result) Spec {
 	}
 	return Spec{
 		Name:        result.Name + " retry",
-		Prompt:      "Re-check the assigned sub-agent task and finish with a concise summary.\n\nPrevious error: " + result.Err,
+		Prompt:      promptStore.Render("subagent/retry-fallback.md", map[string]string{"Error": result.Err}),
 		Description: result.Name,
 		Role:        result.Role,
 	}

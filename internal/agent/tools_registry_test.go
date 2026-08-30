@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/chinmay-sawant/lazykoder/internal/agent/toolplugin"
@@ -40,5 +42,21 @@ func TestToolRegistryEnablesOnlyAllowed(t *testing.T) {
 	}
 	if got := toolSpecsFor([]string{"read"}, nil); len(got) != 1 || got[0].Name != "read" {
 		t.Fatalf("filtered specs = %+v", got)
+	}
+}
+
+func TestToolSpecsForReadsWorkspaceSchema(t *testing.T) {
+	workdir := t.TempDir()
+	path := filepath.Join(workdir, ".lazykoder", "prompts", "tools", "bash.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	custom := `{"name":"bash","description":"custom shell guidance","parameters":{"type":"object","properties":{},"required":[]}}`
+	if err := os.WriteFile(path, []byte(custom), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	specs := toolSpecsForWorkdir(workdir, []string{"bash"}, nil)
+	if len(specs) != 1 || specs[0].Description != "custom shell guidance" {
+		t.Fatalf("custom specs = %+v", specs)
 	}
 }

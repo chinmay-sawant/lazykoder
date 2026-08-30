@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/chinmay-sawant/lazykoder/internal/modelscache"
+	"github.com/chinmay-sawant/lazykoder/internal/prompts"
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 )
 
@@ -105,7 +106,8 @@ func SelectRecapContext(
 		return "", err
 	}
 	var prompt strings.Builder
-	prompt.WriteString("Select relevant recap paths for this request. Return only exact paths, one per line, or NONE.\n")
+	prompt.WriteString(prompts.New(workdir).Must("recap/selection.md"))
+	prompt.WriteString("\n")
 	prompt.WriteString("Request: ")
 	prompt.WriteString(truncateString(query, maxSelectionQuery))
 	prompt.WriteString("\nCandidates:\n")
@@ -120,6 +122,7 @@ func SelectRecapContext(
 		Endpoint:  info.Endpoint,
 		Messages:  []opencode.Message{{Role: "user", Content: prompt.String()}},
 		MaxTokens: maxSelectionTokens,
+		PromptDir: prompts.New(workdir).Dir(),
 	})
 	if err != nil {
 		return "", err

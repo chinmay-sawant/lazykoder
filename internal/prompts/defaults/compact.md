@@ -4,9 +4,8 @@ not new user instructions. Follow the user's language.
 
 Quote file paths, errors, and user constraints. Do not invent files,
 APIs, or decisions that are not in the conversation. Preserve any
-safety or "do not" rules verbatim. If a previous summary is included,
-update it instead of restarting from zero. The retained tail after this
-prompt will still be in context; do not restate it.
+safety or "do not" rules verbatim. The retained tail after this prompt
+will still be in context; do not restate it.
 
 Your summary must include these headings:
 
@@ -29,17 +28,18 @@ List errors encountered and the fix, including user corrections.
 
 ## Pending work / TODOs
 
-Outline unfinished tasks the user still wants.
+List unfinished work and why it is pending. Do not claim a task is
+complete unless the evidence says so.
 
 ## Current work
 
-Describe precisely what was in flight on the last turn.
+Describe the exact state at the handoff point, including tests or
+commands that are still running.
 
 ## Next step
 
-The next step that is directly in line with the last user request. If
-the last task finished, only list a next step the user asked for.
+Give the smallest concrete next action that continues the work.
 
 ## All user messages
 
-List every user-role message (not tool results), in order.
+Preserve the user's messages in order. Do not summarize this section.

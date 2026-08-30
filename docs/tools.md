@@ -4,6 +4,21 @@ Base tools plus an optional task control plane for sub-agents. Every tool
 call is persisted as a `parts` row (type `tool`) plus a `tool_calls` row,
 and the result is sent back to the model for the next loop step.
 
+## Customizing prompts and schemas
+
+Workspace startup creates `<workdir>/.lazykoder/prompts/`. The Markdown files
+there contain the authored instructions used for compaction, orchestration,
+recaps, memory, sub-agents, subscription providers, and the commit-and-push
+action. The `tools/` subdirectory contains one JSON description and parameter
+schema for each built-in tool. Edit these files to change model-facing wording
+without changing the Go handlers. See [prompts.md](prompts.md) for the full
+file map and template variables.
+
+Missing, empty, malformed, or incompatible custom files use the embedded
+default. Tool schemas must keep the same filename and `name`, and their
+parameters must remain compatible with the corresponding handler. The prompt
+files are local workspace state under `.lazykoder/`.
+
 ## Dispatch
 
 `internal/agent` advertises tools from an allowlist (`ToolNames`, default

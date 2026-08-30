@@ -86,12 +86,13 @@ func (a *Agent) runCompact(ctx context.Context, events chan<- Event, reason, ext
 		Endpoint: a.opts.OutgoingEndpoint,
 	}
 	serialized := serializeEntries(a, head, byPart)
-	prompt := prompts.Must("compact.md")
+	promptStore := prompts.New(a.workdir)
+	prompt := promptStore.Must("compact.md")
 	if prev := previousSummary(entries); prev != "" {
-		prompt += "\n\nPrevious summary:\n" + prev
+		prompt += "\n\n" + promptStore.Must("agent/previous-summary-lead.md") + prev
 	}
 	if extra = strings.TrimSpace(extra); extra != "" {
-		prompt += "\n\n## Compact instructions\n\n" + extra
+		prompt += "\n\n" + promptStore.Must("agent/compact-instructions-lead.md") + extra
 	}
 	reserve := int64(DefaultSummarizerReserve)
 	estimate := EstimateTokens(prompt) + EstimateTokens(serialized)
@@ -144,6 +145,7 @@ func (a *Agent) runCompact(ctx context.Context, events chan<- Event, reason, ext
 }
 
 func (a *Agent) summarize(ctx context.Context, model ModelRef, prompt, conversation string, reserve int64) (string, error) {
+	promptStore := prompts.New(a.workdir)
 	budget := model.Context - reserve - EstimateTokens(prompt) - summarizerSlack
 	if model.Context <= 0 {
 		budget = EstimateTokens(conversation) + 1
@@ -165,7 +167,11 @@ func (a *Agent) summarize(ctx context.Context, model ModelRef, prompt, conversat
 	for i, chunk := range chunks {
 		label := chunk
 		if len(chunks) > 1 {
-			label = fmt.Sprintf("Chunk %d of %d:\n\n%s", i+1, len(chunks), chunk)
+			label = promptStore.Render("agent/chunk-lead.md", map[string]any{
+				"Number":  i + 1,
+				"Total":   len(chunks),
+				"Content": chunk,
+			})
 		}
 		text, err := a.callSummarizer(ctx, model, prompt+"\n\n"+label)
 		if err != nil {
@@ -177,7 +183,9 @@ func (a *Agent) summarize(ctx context.Context, model ModelRef, prompt, conversat
 		return pieces[0], nil
 	}
 	joined := strings.Join(pieces, "\n\n")
-	text, err := a.callSummarizer(ctx, model, prompt+"\n\nCombine these chunk summaries into one checkpoint:\n\n"+joined)
+	text, err := a.callSummarizer(ctx, model, prompt+"\n\n"+promptStore.Render("agent/combine-chunks.md", map[string]string{
+		"Summaries": joined,
+	}))
 	if err != nil {
 		return "", err
 	}
@@ -190,6 +198,7 @@ func (a *Agent) callSummarizer(ctx context.Context, model ModelRef, content stri
 		Endpoint:  model.Endpoint,
 		Messages:  toWireMessages([]ChatMessage{{Role: "user", Content: content}}),
 		MaxTokens: int(DefaultSummarizerReserve),
+		PromptDir: prompts.New(a.workdir).Dir(),
 	}
 	resp, err := a.client.Chat(ctx, req)
 	if err != nil {

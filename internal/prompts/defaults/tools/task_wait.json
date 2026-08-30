@@ -1,0 +1,10 @@
+{
+  "name": "task_wait",
+  "description": "Wait for one sub-agent (id) or all jobs for this parent session. Returns durable summaries from SQLite when jobs already finished (including after a crash/restart). Always call this after background task spawns.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "id": {"type": "string", "description": "Job id; omit or empty to wait for all"}
+    }
+  }
+}

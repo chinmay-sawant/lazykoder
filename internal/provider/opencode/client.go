@@ -353,6 +353,9 @@ type ToolSpec struct {
 
 // ChatRequest is a single chat-completions request.
 type ChatRequest struct {
+	// PromptDir points provider adapters at the workspace prompt directory.
+	// It is not sent to remote model APIs.
+	PromptDir string
 	// Model overrides the client default model id when non-empty.
 	Model string
 	// Endpoint is the full provider endpoint. Empty uses the client chat base.

@@ -1,0 +1,12 @@
+{
+  "name": "bash",
+  "description": "Run a shell command. Dangerous commands are gated by a human confirm.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "command": {"type": "string", "description": "shell command to run"},
+      "workdir": {"type": "string", "description": "working directory"}
+    },
+    "required": ["command"]
+  }
+}

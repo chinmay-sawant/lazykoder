@@ -4,14 +4,17 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/chinmay-sawant/lazykoder/internal/prompts"
 )
 
 const (
 	// maxProjectInstructionsBytes caps AGENTS.md on the wire so a huge file
 	// cannot dominate the request alone.
 	maxProjectInstructionsBytes = 200_000
-	projectInstructionsHeader   = "Project instructions from AGENTS.md (follow these conventions for this workdir):"
 )
+
+var projectInstructionsHeader = prompts.Must("agent/project-instructions-header.md")
 
 // LoadProjectInstructions reads AGENTS.md (then agents.md) from workdir.
 // ok is false when missing, empty, or unreadable.
@@ -37,9 +40,15 @@ func LoadProjectInstructions(workdir string) (content, path string, ok bool) {
 
 // FormatProjectInstructionsMessage builds the system-message body.
 func FormatProjectInstructionsMessage(content string) string {
+	return FormatProjectInstructionsMessageFor("", content)
+}
+
+// FormatProjectInstructionsMessageFor builds the system-message body using
+// the prompt customization for workdir.
+func FormatProjectInstructionsMessageFor(workdir, content string) string {
 	content = strings.TrimSpace(content)
 	if content == "" {
 		return ""
 	}
-	return projectInstructionsHeader + "\n\n" + content
+	return prompts.New(workdir).Must("agent/project-instructions-header.md") + "\n\n" + content
 }

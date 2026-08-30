@@ -12,12 +12,11 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/chinmay-sawant/lazykoder/internal/agent"
+	"github.com/chinmay-sawant/lazykoder/internal/prompts"
 	"github.com/chinmay-sawant/lazykoder/internal/ui/theme"
 )
 
 const commitActionLifetime = 90 * time.Second
-
-const commitActionPrompt = "Inspect the current worktree before acting. Run git status --porcelain, git diff, and git log -5. Summarize the user-scoped changes, write a detailed conventional commit message, then ask for the existing bash policy confirmation before running git add -A, git commit, and git push on the current upstream branch. Do not discard, reset, or clean unrelated changes. If status, commit, or push fails, explain the exact error and stop."
 
 type WorktreeFile struct {
 	Path    string
@@ -388,7 +387,7 @@ func (m Model) activateCommitPush() (Model, tea.Cmd) {
 	return m.startTurn(turnStart{
 		activity: "reviewing worktree",
 		run: func(ctx context.Context, ag *agent.Agent, eventCh chan agent.Event) error {
-			return ag.SendHidden(ctx, commitActionPrompt, eventCh)
+			return ag.SendHidden(ctx, prompts.New(m.workdir).Must("ui/commit-action.md"), eventCh)
 		},
 	})
 }

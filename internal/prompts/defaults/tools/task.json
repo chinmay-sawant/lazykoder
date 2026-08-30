@@ -1,0 +1,19 @@
+{
+  "name": "task",
+  "description": "Spawn a sub-agent on a focused prompt. Prefer background=true for parallel work, then task_wait. Foreground tasks follow the current parent turn and are cancelled if that turn is interrupted; set background=true when the parent may receive new input or close. Raise max_steps for multi-file explores (default is higher than parent chat but still finite). Ask the child to finish with a short written report before the step budget ends.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "prompt": {"type": "string", "description": "Full instructions for the sub-agent (include: write a final summary before stopping)"},
+      "description": {"type": "string", "description": "Short label shown in the UI"},
+      "name": {"type": "string", "description": "Optional stable name for the job"},
+      "role": {"type": "string", "description": "explore | plan | general (default explore)", "enum": ["explore", "plan", "general"]},
+      "model": {"type": "string", "description": "Optional model override"},
+      "model_class": {"type": "string", "description": "Optional strength class from the orchestration plan: flash or pro"},
+      "variant": {"type": "string", "description": "Optional reasoning variant"},
+      "max_steps": {"type": "integer", "description": "Child tool-round budget (0 = config default, typically 1000). Use 48-64 for large audits."},
+      "background": {"type": "boolean", "description": "If true, return immediately while the job runs (recommended for parallel agents)"}
+    },
+    "required": ["prompt"]
+  }
+}

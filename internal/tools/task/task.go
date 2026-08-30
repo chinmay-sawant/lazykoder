@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/chinmay-sawant/lazykoder/internal/prompts"
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 	"github.com/chinmay-sawant/lazykoder/internal/roles"
 )
@@ -115,134 +116,19 @@ type CancelResult struct {
 // Specs returns the five task tool definitions for provider advertising.
 // Keep in sync with what subagent.Host actually executes.
 func Specs() []opencode.ToolSpec {
-	return []opencode.ToolSpec{
-		specTask(),
-		specTaskList(),
-		specTaskStatus(),
-		specTaskWait(),
-		specTaskCancel(),
-	}
+	return SpecsFor("")
 }
 
-func specTask() opencode.ToolSpec {
-	return opencode.ToolSpec{
-		Name: ToolTask,
-		Description: "Spawn a sub-agent on a focused prompt. Prefer background=true for parallel work, then task_wait. " +
-			"Foreground tasks follow the current parent turn and are cancelled if that turn is interrupted; " +
-			"set background=true when the parent may receive new input or close. " +
-			"Raise max_steps for multi-file explores (default is higher than parent chat but still finite). " +
-			"Ask the child to finish with a short written report before the step budget ends.",
-		Parameters: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"prompt": map[string]any{
-					"type":        "string",
-					"description": "Full instructions for the sub-agent (include: write a final summary before stopping)",
-				},
-				"description": map[string]any{
-					"type":        "string",
-					"description": "Short label shown in the UI",
-				},
-				"name": map[string]any{
-					"type":        "string",
-					"description": "Optional stable name for the job",
-				},
-				"role": map[string]any{
-					"type":        "string",
-					"description": "explore | plan | general (default explore)",
-					"enum":        []string{RoleExplore, RolePlan, RoleGeneral},
-				},
-				"model": map[string]any{
-					"type":        "string",
-					"description": "Optional model override",
-				},
-				"model_class": map[string]any{
-					"type":        "string",
-					"description": "Optional strength class from the orchestration plan: flash or pro",
-				},
-				"variant": map[string]any{
-					"type":        "string",
-					"description": "Optional reasoning variant",
-				},
-				"max_steps": map[string]any{
-					"type":        "integer",
-					"description": "Child tool-round budget (0 = config default, typically 1000). Use 48-64 for large audits.",
-				},
-				"background": map[string]any{
-					"type":        "boolean",
-					"description": "If true, return immediately while the job runs (recommended for parallel agents)",
-				},
-				// Wall-clock lifetime is not model-controlled: Host always
-				// uses Config.Timeout from settings (default_timeout_sec).
-			},
-			"required": []string{"prompt"},
-		},
+// SpecsFor returns task tool definitions customized by the workspace prompt
+// files. Execution and argument validation remain in this package.
+func SpecsFor(workdir string) []opencode.ToolSpec {
+	store := prompts.New(workdir)
+	names := []string{ToolTask, ToolTaskList, ToolTaskStatus, ToolTaskWait, ToolTaskCancel}
+	specs := make([]opencode.ToolSpec, 0, len(names))
+	for _, name := range names {
+		specs = append(specs, store.ToolSpec(name))
 	}
-}
-
-func specTaskList() opencode.ToolSpec {
-	return opencode.ToolSpec{
-		Name: ToolTaskList,
-		Description: "List sub-agent jobs for the current parent session " +
-			"(includes completed jobs from SQLite after restart).",
-		Parameters: map[string]any{
-			"type":       "object",
-			"properties": map[string]any{},
-		},
-	}
-}
-
-func specTaskStatus() opencode.ToolSpec {
-	return opencode.ToolSpec{
-		Name: ToolTaskStatus,
-		Description: "Get status for one sub-agent by id " +
-			"(works for finished jobs persisted in SQLite).",
-		Parameters: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"id": map[string]any{"type": "string", "description": "Job id (sub_...)"},
-			},
-			"required": []string{"id"},
-		},
-	}
-}
-
-func specTaskWait() opencode.ToolSpec {
-	return opencode.ToolSpec{
-		Name: ToolTaskWait,
-		Description: "Wait for one sub-agent (id) or all jobs for this parent session. " +
-			"Returns durable summaries from SQLite when jobs already finished " +
-			"(including after a crash/restart). Always call this after background task spawns.",
-		Parameters: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"id": map[string]any{
-					"type":        "string",
-					"description": "Job id; omit or empty to wait for all",
-				},
-			},
-		},
-	}
-}
-
-func specTaskCancel() opencode.ToolSpec {
-	return opencode.ToolSpec{
-		Name:        ToolTaskCancel,
-		Description: "Cancel one sub-agent (id) or all non-terminal jobs for this parent session.",
-		Parameters: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"id": map[string]any{
-					"type":        "string",
-					"description": "Job id; omit or empty to cancel all",
-				},
-				"cancel_all": map[string]any{
-					"type":        "boolean",
-					"description": "If true, cancel every non-terminal job (same as omitting id)",
-				},
-			},
-		},
-	}
+	return specs
 }
 
 // IsTaskTool reports whether name is one of the five task tools.

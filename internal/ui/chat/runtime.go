@@ -139,6 +139,7 @@ func (m Model) agentOptions() agent.Options {
 			ExploreClass:     m.projectSettings.EffectiveOrchestrator().ExploreClass,
 			PlanClass:        m.projectSettings.EffectiveOrchestrator().PlanClass,
 			GeneralClass:     m.projectSettings.EffectiveOrchestrator().GeneralClass,
+			Workdir:          m.workdir,
 		},
 	}
 	opts.ToolProvider = func(_ context.Context, _, _ string) ([]string, error) {
@@ -161,6 +162,7 @@ func (m Model) agentOptions() agent.Options {
 	}
 	m.wireSubMgrRuntime()
 	host := subagent.NewHost(m.subMgr)
+	host.Workdir = m.workdir
 	if m.session != nil {
 		host.ParentSessionID = m.session.ID
 	}
@@ -621,6 +623,7 @@ func (m Model) scheduleRecap() tea.Cmd {
 			return recapDoneMsg{}
 		}
 		worker := recap.NewWorker(client, model, info, m.effectiveVariantFor(model, m.projectSettings.EffectiveProvider(), ""))
+		worker.Workdir = workdir
 		_, _ = recap.Run(ctx, recap.RunInput{
 			Store:    store,
 			Record:   record,
@@ -712,6 +715,7 @@ func (m Model) scheduleMemoryUpdate() tea.Cmd {
 			workerInfo = m.recapModelInfo(workerModel)
 		}
 		worker := recap.NewMemoryWorker(client, workerModel, workerInfo, m.effectiveVariantFor(workerModel, m.projectSettings.EffectiveProvider(), ""))
+		worker.Workdir = workdir
 		runErr := recap.RunMemoryUpdate(ctx, recap.MemoryRunInput{
 			Store:            store,
 			Record:           record,
@@ -801,6 +805,7 @@ func (m Model) recoverRecaps() tea.Msg {
 			continue
 		}
 		worker := recap.NewWorker(m.client, record.Model, m.recapModelInfo(record.Model), m.effectiveVariantFor(record.Model, m.projectSettings.EffectiveProvider(), ""))
+		worker.Workdir = m.workdir
 		_, _ = recap.Run(ctx, recap.RunInput{
 			Store:    m.store,
 			Record:   record,
@@ -848,6 +853,7 @@ func (m Model) recoverMemoryUpdates() tea.Msg {
 			continue
 		}
 		worker := recap.NewMemoryWorker(m.client, update.Model, m.recapModelInfo(update.Model), m.effectiveVariantFor(update.Model, m.projectSettings.EffectiveProvider(), ""))
+		worker.Workdir = workdir
 		_ = recap.RunMemoryUpdate(ctx, recap.MemoryRunInput{
 			Store:            m.store,
 			Record:           update,

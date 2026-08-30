@@ -1,6 +1,8 @@
 package prompts
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -43,4 +45,45 @@ func TestMustUnknownPanics(t *testing.T) {
 		}
 	}()
 	_ = Must("missing-prompt.md")
+}
+
+func TestStorePrefersWorkspacePrompt(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "custom.md"), []byte("workspace prompt\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := NewDir(dir).Must("custom.md"); got != "workspace prompt\n" {
+		t.Fatalf("custom prompt = %q", got)
+	}
+}
+
+func TestStoreFallsBackForInvalidToolSpec(t *testing.T) {
+	dir := t.TempDir()
+	toolsDir := filepath.Join(dir, "tools")
+	if err := os.MkdirAll(toolsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(toolsDir, "bash.json"), []byte(`{"name":"wrong"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	spec := NewDir(dir).ToolSpec("bash")
+	if spec.Name != "bash" || !strings.Contains(spec.Description, "shell command") {
+		t.Fatalf("fallback tool spec = %+v", spec)
+	}
+}
+
+func TestDefaultFilesIncludeToolSchemas(t *testing.T) {
+	files := DefaultFiles()
+	if len(files) < 20 {
+		t.Fatalf("default file count = %d, want prompt and tool defaults", len(files))
+	}
+	foundBash := false
+	for _, file := range files {
+		if file.Name == "tools/bash.json" {
+			foundBash = true
+		}
+	}
+	if !foundBash {
+		t.Fatal("bash tool schema was not embedded")
+	}
 }

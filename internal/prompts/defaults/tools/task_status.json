@@ -1,0 +1,11 @@
+{
+  "name": "task_status",
+  "description": "Get status for one sub-agent by id (works for finished jobs persisted in SQLite).",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "id": {"type": "string", "description": "Job id (sub_...)"}
+    },
+    "required": ["id"]
+  }
+}
