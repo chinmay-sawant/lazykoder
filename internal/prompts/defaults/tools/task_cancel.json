@@ -1,0 +1,11 @@
+{
+  "name": "task_cancel",
+  "description": "Cancel one sub-agent (id) or all non-terminal jobs for this parent session.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "id": {"type": "string", "description": "Job id; omit or empty to cancel all"},
+      "cancel_all": {"type": "boolean", "description": "If true, cancel every non-terminal job (same as omitting id)"}
+    }
+  }
+}

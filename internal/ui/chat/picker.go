@@ -633,7 +633,7 @@ func (m Model) selectPickerItem(idx int) (Model, tea.Cmd) {
 		goto normalSelection
 	}
 	m = m.finishPickerSelection()
-	return m.openSettings(), nil
+	return m, nil
 
 normalSelection:
 	if m.pickerKind == pickerKindTools {
@@ -750,7 +750,7 @@ func (m Model) closePicker() Model {
 	m.dragOn = false
 	m.settingsPickerTarget = settingsPickerNone
 	if reopenSettings {
-		return m.openSettings()
+		return m.reopenSettingsFromPicker()
 	}
 	return m
 }

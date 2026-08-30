@@ -8,6 +8,7 @@ import (
 
 	"github.com/chinmay-sawant/lazykoder/internal/agent"
 	"github.com/chinmay-sawant/lazykoder/internal/db"
+	"github.com/chinmay-sawant/lazykoder/internal/prompts"
 	"github.com/chinmay-sawant/lazykoder/internal/provider"
 	"github.com/chinmay-sawant/lazykoder/internal/skills"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/question"
@@ -121,15 +122,12 @@ func (r AgentRunner) Run(ctx context.Context, job Job) (Result, error) {
 	// Nudge the child to emit a final text answer inside its step budget.
 	// Without this, multi-tool explores often burn every step on tools and
 	// look like crashes to the parent (status failed / step limit).
-	prompt := strings.TrimSpace(job.Prompt) + "\n\n" +
-		"Finish with a concise written report as plain assistant text before your step budget ends. " +
-		"Do not keep calling tools once you have enough evidence."
+	promptStore := prompts.New(workdir)
+	prompt := strings.TrimSpace(job.Prompt) + "\n\n" + promptStore.Must("subagent/report-nudge.md")
 	if job.Resume {
-		prompt = "You were interrupted mid-task (process restart). Continue from the transcript above. " +
-			"Finish with a concise written report as plain assistant text. " +
-			"Do not redo completed work; do not keep calling tools once you have enough evidence."
+		prompt = promptStore.Must("subagent/resume-nudge.md")
 		if strings.TrimSpace(job.Prompt) != "" {
-			prompt = "Original task:\n" + strings.TrimSpace(job.Prompt) + "\n\n" + prompt
+			prompt = promptStore.Must("subagent/original-task-lead.md") + "\n" + strings.TrimSpace(job.Prompt) + "\n\n" + prompt
 		}
 	}
 	if err := ag.Send(ctx, prompt, nil); err != nil {

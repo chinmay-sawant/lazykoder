@@ -4,6 +4,21 @@ Base tools plus an optional task control plane for sub-agents. Every tool
 call is persisted as a `parts` row (type `tool`) plus a `tool_calls` row,
 and the result is sent back to the model for the next loop step.
 
+## Customizing prompts and schemas
+
+Workspace startup creates `<workdir>/.lazykoder/prompts/`. The Markdown files
+there contain the authored instructions used for compaction, orchestration,
+recaps, memory, sub-agents, subscription providers, and the commit-and-push
+action. The `tools/` subdirectory contains one JSON description and parameter
+schema for each built-in tool. Edit these files to change model-facing wording
+without changing the Go handlers. See [prompts.md](prompts.md) for the full
+file map and template variables.
+
+Missing, empty, malformed, or incompatible custom files use the embedded
+default. Tool schemas must keep the same filename and `name`, and their
+parameters must remain compatible with the corresponding handler. The prompt
+files are local workspace state under `.lazykoder/`.
+
 ## Dispatch
 
 `internal/agent` advertises tools from an allowlist (`ToolNames`, default
@@ -113,8 +128,11 @@ fallback otherwise). Prefer this over reading many files to find symbols.
 ## webfetch
 
 - Input: `{"url": "...", "format": "markdown"|"text", "mode": "auto"|"http"|"browser"}`.
-- http/https only (file:// and other schemes rejected). 30s timeout, 5 MiB
-  body cap, `truncated` + `content_type` in metadata.
+- Only public `http` and `https` URLs are accepted. Local, private, link-local,
+  multicast, metadata, and IPv4-mapped private destinations are rejected.
+  URLs are limited to 8192 characters.
+- HTTP mode has a 30-second timeout and a 5 MiB response cap. The metadata
+  includes `truncated` and `content_type` when the response is capped.
 - Local, private, link-local, multicast, and metadata destinations are
   rejected before the request and again at dial time. Redirects use the same
   check. `webfetch` copies a supplied client and never changes its redirect
@@ -122,15 +140,24 @@ fallback otherwise). Prefer this over reading many files to find symbols.
 - Auto mode uses the guarded HTTP path first and falls back to an isolated
   Google Chrome process, with Chromium as fallback, for blocked or
   JavaScript-rendered pages. The browser uses a local validating proxy for
-  page requests, redirects, and subresource origins.
-- HTML responses return readable text plus bounded title, final URL, ordinary
+  page requests, redirects, and subresource origins. The browser also exposes
+  a loopback DevTools endpoint only for the active isolated process so the
+  reader can capture the rendered DOM and actual final navigation URL.
+- HTML responses return bounded readable text plus title, final URL, ordinary
   links, `mailto:` links, visible email addresses, mode, and truncation
-  metadata. Links are reported as data and are not followed automatically.
-- Browser mode records the requested URL as `final_url`; redirect-target
-  capture requires a deeper browser protocol integration and remains open in
-  the phase ledger.
+  metadata. `content_truncated` identifies the extraction cap,
+  `browser_truncated` identifies the rendered DOM cap, and
+  `output_truncated` identifies the agent tool-output cap. Persisted webfetch
+  metadata is capped at 64 KiB. Links are data and are not followed
+  automatically.
+- Browser failures identify missing binary, startup failure, blocked page,
+  empty valid document, renderer crash, navigation timeout, or cancellation.
+  Cancellation stops the local browser, proxy, and request. Providers without
+  a documented cancellation endpoint are not reported as remotely stopped.
 - Browser mode never reuses the user's profile, cookies, saved credentials,
-  extensions, or downloads. It does not submit forms or send email.
+  extensions, downloads, or persistent cache. It does not submit forms or
+  send email. The fixed executable allowlist is `google-chrome`,
+  `google-chrome-stable`, `chromium`, and `chromium-browser` in that order.
 
 ## Task tools (parent only)
 
@@ -142,20 +169,32 @@ When `settings.agents.enabled` is true, the parent agent gets:
 | `task_list` | List jobs for this parent session |
 | `task_status` | Status for one id |
 | `task_wait` | Wait for one id or all |
-| `task_cancel` | Cancel one id or all |
+| `task_cancel` | Signal cancellation for one id or all |
 
-Default `task` waits until the child finishes and returns a JSON summary.
-`background: true` returns a handle immediately (preferred for parallel
-spawns; follow with `task_wait`). Default child step budget is 1000
+Default `task` waits until the child finishes and returns a JSON summary. A
+foreground child follows the current parent turn, so interrupting that turn
+cancels the child. `background: true` returns a handle immediately and lets the
+child continue after the parent response or a new parent turn (preferred for
+parallel spawns; follow with `task_wait`). Default child step budget is 1000
 (configurable via settings `agents.child_max_steps` or per-spawn
 `max_steps`). If a child hits its step limit after doing work, the job
 completes with a partial summary and a note instead of status `failed`.
 
 Background jobs do not inherit cancellation from the parent turn. They keep
 running after the parent response ends and still obey their configured timeout.
-`task_cancel` and manager shutdown cancel them explicitly. When a child model
-has no explicit variant, the manager selects the first supported variant in
-that model's profile.
+`task_cancel` signals cancellation and returns without waiting for child
+cleanup. Follow it with `task_status` or `task_wait` to observe the terminal
+row. Manager shutdown and the `/agents` drawer use the same manager-owned
+signal path. `Cancel`, `CancelAll`, and `Shutdown` wait when the caller needs
+a terminal result. Task controls are scoped to the current parent session.
+When a child model has no explicit variant, the manager selects the first
+supported variant in that model's profile.
+
+If a tool context ends before its result is written, the agent uses a short
+independent persistence context to write `status = cancelled` and bounded
+output. Terminal tool and job rows are not overwritten by late worker writes.
+The current providers expose no documented remote cancellation endpoint, so
+the product reports local request, stream, retry, browser, and process stop.
 
 Child wall-clock lifetime is **not** a `task` argument. It always comes
 from project settings `agents.default_timeout_sec` (default 600s / 10m).

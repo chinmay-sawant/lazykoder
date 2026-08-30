@@ -252,6 +252,9 @@ func parseResponsesEventStream(ctx context.Context, reader io.Reader, onDelta fu
 			data += part
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		return acc.result(), err
+	}
 	if err := scanner.Err(); err != nil {
 		return acc.result(), fmt.Errorf("opencode: responses stream: %w", err)
 	}

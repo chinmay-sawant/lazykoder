@@ -1,0 +1,21 @@
+{
+  "name": "todowrite",
+  "description": "Replace the session todo checklist with the full list you pass. Send every item every time (replace-all). Status: pending, in_progress, completed, cancelled. Use this to plan multi-step work and keep the user-visible tracker in sync.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "todos": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "content": {"type": "string", "description": "short checklist item"},
+            "status": {"type": "string", "description": "pending|in_progress|completed|cancelled"}
+          },
+          "required": ["content"]
+        }
+      }
+    },
+    "required": ["todos"]
+  }
+}

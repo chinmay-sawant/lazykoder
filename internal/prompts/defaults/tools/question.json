@@ -1,0 +1,22 @@
+{
+  "name": "question",
+  "description": "Ask the human a multiple-choice question via the TUI.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "questions": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "question": {"type": "string"},
+            "header": {"type": "string"},
+            "options": {"type": "array", "items": {"type": "string"}}
+          },
+          "required": ["question", "options"]
+        }
+      }
+    },
+    "required": ["questions"]
+  }
+}

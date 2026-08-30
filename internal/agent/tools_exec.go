@@ -149,9 +149,42 @@ func (a *Agent) runTool(ctx context.Context, events chan<- Event, msgID string, 
 	if err := a.store.InsertToolCall(ctx, row); err != nil {
 		return fmt.Errorf("agent: insert tool call: %w", err)
 	}
-	a.emit(events, Event{Kind: EventTool, SessionID: a.sessionID(), MessageID: msgID, Part: partDeltaFromDB(part), Tool: toolDeltaFromDB(row)})
+	a.emit(ctx, events, Event{Kind: EventTool, SessionID: a.sessionID(), MessageID: msgID, Part: partDeltaFromDB(part), Tool: toolDeltaFromDB(row)})
 	_, err = a.executeTool(ctx, events, part.ID, title, tc)
+	if err != nil && ctx.Err() != nil {
+		if cancelErr := a.cancelTool(ctx, events, part.ID, title, tc); cancelErr != nil {
+			return errors.Join(err, cancelErr)
+		}
+	}
 	return err
+}
+
+const (
+	toolCancelledOutput      = "cancelled"
+	toolCancelPersistTimeout = 2 * time.Second
+	maxWebfetchMetadataBytes = 64 * 1024
+)
+
+func (a *Agent) cancelTool(ctx context.Context, events chan<- Event, partID, title string, tc ChatToolCall) error {
+	persistCtx, cancel := context.WithTimeout(context.Background(), toolCancelPersistTimeout)
+	defer cancel()
+	changed, err := a.store.CancelToolCall(persistCtx, partID, toolCancelledOutput)
+	if err != nil {
+		return err
+	}
+	if changed {
+		out := toolCancelledOutput
+		a.emit(ctx, events, Event{Kind: EventTool, SessionID: a.sessionID(), Tool: toolDeltaFromDB(db.ToolCall{
+			PartID:    partID,
+			Tool:      tc.Name,
+			CallID:    tc.ID,
+			Status:    "cancelled",
+			Title:     &title,
+			InputJSON: tc.Arguments,
+			Output:    &out,
+		})})
+	}
+	return ctx.Err()
 }
 
 func toolTitle(tc ChatToolCall) string {
@@ -200,6 +233,9 @@ func toolTitle(tc ChatToolCall) string {
 		}
 	case toolWebfetch:
 		if u := first("url"); u != "" {
+			if strings.EqualFold(first("mode"), "browser") {
+				return truncateRunes("browser  "+u, maxToolTitle)
+			}
 			return u
 		}
 	case toolQuestion:
@@ -470,16 +506,26 @@ func (a *Agent) execWebfetch(ctx context.Context, events chan<- Event, partID, t
 	if err != nil {
 		return a.updateTool(ctx, events, partID, title, tc, "error", errOut(err), errorJSON(err.Error()), nil, nil)
 	}
+	if res.Metadata == nil {
+		res.Metadata = make(map[string]any)
+	}
 	out := res.Output
-	truncated := false
+	outputTruncated := false
 	if len([]rune(out)) > maxToolOutput {
 		out = truncateRunes(out, maxToolOutput)
-		truncated = true
+		outputTruncated = true
 	}
-	res.Metadata["truncated"] = truncated
-	meta, _ := json.Marshal(res.Metadata)
-	metaJSON := string(meta)
+	res.Metadata["output_truncated"] = outputTruncated
+	metaJSON := boundedWebfetchMetadata(res.Metadata)
 	return a.updateTool(ctx, events, partID, title, tc, "completed", &out, toolOutputJSON(out), nil, &metaJSON)
+}
+
+func boundedWebfetchMetadata(metadata map[string]any) string {
+	raw, err := json.Marshal(metadata)
+	if err == nil && len(raw) <= maxWebfetchMetadataBytes {
+		return string(raw)
+	}
+	return `{"metadata_truncated":true}`
 }
 
 func (a *Agent) execQuestion(ctx context.Context, events chan<- Event, partID, title string, tc ChatToolCall) (string, error) {
@@ -567,7 +613,7 @@ func (a *Agent) updateTool(ctx context.Context, events chan<- Event, partID, tit
 	if err := a.store.UpdateToolCall(ctx, row); err != nil {
 		return "", fmt.Errorf("agent: update tool call: %w", err)
 	}
-	a.emit(events, Event{Kind: EventTool, SessionID: a.sessionID(), Tool: toolDeltaFromDB(row)})
+	a.emit(ctx, events, Event{Kind: EventTool, SessionID: a.sessionID(), Tool: toolDeltaFromDB(row)})
 	return result, nil
 }
 
@@ -590,6 +636,11 @@ func (a *Agent) toolResult(p db.Part, tc db.ToolCall) string {
 			return errorJSON(*tc.Output)
 		}
 		return errorJSON("tool result unavailable")
+	case "cancelled":
+		if tc.Output != nil && *tc.Output != "" {
+			return errorJSON(*tc.Output)
+		}
+		return errorJSON(toolCancelledOutput)
 	}
 	if p.ToolStatus != nil {
 		switch *p.ToolStatus {
@@ -597,6 +648,8 @@ func (a *Agent) toolResult(p db.Part, tc db.ToolCall) string {
 			return deniedJSON()
 		case "error":
 			return errorJSON("tool result unavailable")
+		case "cancelled":
+			return errorJSON(toolCancelledOutput)
 		}
 	}
 	return ""

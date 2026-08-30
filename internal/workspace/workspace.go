@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/chinmay-sawant/lazykoder/internal/db"
+	"github.com/chinmay-sawant/lazykoder/internal/prompts"
 	"github.com/chinmay-sawant/lazykoder/internal/settings"
 )
 
@@ -52,6 +53,12 @@ func Init(cwd string) (*Env, error) {
 		store.Close()
 		return nil, fmt.Errorf("workspace: catalog bootstrap: %w", err)
 	}
+	promptCreated, err := ensurePromptFiles(dir)
+	if err != nil {
+		store.Close()
+		return nil, fmt.Errorf("workspace: prompt bootstrap: %w", err)
+	}
+	created = append(created, promptCreated...)
 	return &Env{Dir: dir, DB: store, Created: created}, nil
 }
 
@@ -87,6 +94,33 @@ func ensureCatalogFiles(dir string) ([]string, error) {
 				return nil, err
 			}
 		} else if err := os.WriteFile(path, []byte("[]\n"), catalogFileMode); err != nil {
+			return nil, err
+		}
+		created = append(created, path)
+	}
+	return created, nil
+}
+
+// ensurePromptFiles creates the editable prompt and built-in tool-schema
+// files without touching existing user customizations.
+func ensurePromptFiles(dir string) ([]string, error) {
+	promptDir := filepath.Join(dir, "prompts")
+	if err := os.MkdirAll(promptDir, dirMode); err != nil {
+		return nil, err
+	}
+	defaults := prompts.DefaultFiles()
+	created := make([]string, 0, len(defaults))
+	for _, prompt := range defaults {
+		path := filepath.Join(promptDir, filepath.FromSlash(prompt.Name))
+		if _, err := os.Lstat(path); err == nil {
+			continue
+		} else if !os.IsNotExist(err) {
+			return nil, err
+		}
+		if err := os.MkdirAll(filepath.Dir(path), dirMode); err != nil {
+			return nil, err
+		}
+		if err := os.WriteFile(path, prompt.Data, catalogFileMode); err != nil {
 			return nil, err
 		}
 		created = append(created, path)

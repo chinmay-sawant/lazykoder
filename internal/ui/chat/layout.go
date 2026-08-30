@@ -2,7 +2,9 @@ package chat
 
 import (
 	"strings"
+	"unicode/utf8"
 
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -17,47 +19,55 @@ type layoutSnap struct {
 	jumpBarRow    int
 
 	// settings card (only meaningful when settingsMode)
-	settingsPaint   string
-	settingsCloseX0 int
-	settingsCloseY  int
-	settingsCloseX1 int
-	settingsCloseOK bool
-	settingsRowByY  map[int]int // screen Y -> settings control row
+	settingsPaint      string
+	settingsCloseX0    int
+	settingsCloseY     int
+	settingsCloseX1    int
+	settingsCloseOK    bool
+	settingsRowByY     map[int]int // screen Y -> settings control row
+	settingsSectionByY map[int]settingsSection
+	settingsFilterY    int
+	settingsRailX0     int
+	settingsRailX1     int
+	settingsContentX0  int
 }
 
 // layoutKey fingerprints Model fields that change outer bands or settings paint.
 type layoutKey struct {
-	w, h                        int
-	focus                       focusKind
-	slash, picker, subs, status bool
-	subLog, subCompact, history bool
-	hasErr, hasTodo             bool
-	settingsEdit                bool
-	settingsCursor              int
-	todosExpanded               bool
-	busy                        bool
-	pushPrompt                  bool
+	w, h                          int
+	focus                         focusKind
+	slash, picker, subs, status   bool
+	subLog, subCompact, history   bool
+	hasErr, hasTodo               bool
+	settingsEdit                  bool
+	settingsEditValue             string
+	settingsCursor, settingsHover int
+	todosExpanded                 bool
+	busy                          bool
+	pushPrompt                    bool
 }
 
 func (m Model) layoutKey() layoutKey {
 	return layoutKey{
-		w:              m.width,
-		h:              m.height,
-		focus:          m.currentFocus(),
-		slash:          m.slashMode,
-		picker:         m.pickerMode,
-		subs:           m.subagentPickerMode && !m.subagentLogMode,
-		status:         m.statusMode,
-		subLog:         m.subagentLogMode,
-		subCompact:     m.subagentDrawerCompact,
-		history:        m.memoryHistoryMode,
-		hasErr:         m.err != "",
-		hasTodo:        len(m.todos) > 0,
-		settingsEdit:   m.settingsEdit,
-		settingsCursor: m.settingsCursor,
-		todosExpanded:  m.todosExpanded,
-		busy:           m.busy,
-		pushPrompt:     m.commitPushVisible(),
+		w:                 m.width,
+		h:                 m.height,
+		focus:             m.currentFocus(),
+		slash:             m.slashMode,
+		picker:            m.pickerMode,
+		subs:              m.subagentPickerMode && !m.subagentLogMode,
+		status:            m.statusMode,
+		subLog:            m.subagentLogMode,
+		subCompact:        m.subagentDrawerCompact,
+		history:           m.memoryHistoryMode,
+		hasErr:            m.err != "",
+		hasTodo:           len(m.todos) > 0,
+		settingsEdit:      m.settingsEdit,
+		settingsEditValue: m.settingsEditValue,
+		settingsCursor:    m.settingsCursor,
+		settingsHover:     m.settingsHover,
+		todosExpanded:     m.todosExpanded,
+		busy:              m.busy,
+		pushPrompt:        m.commitPushVisible(),
 	}
 }
 
@@ -86,6 +96,13 @@ func (m Model) buildLayout(key layoutKey) layoutSnap {
 	paint := m.settingsScreen()
 	snap.settingsPaint = paint
 	snap.settingsRowByY = make(map[int]int)
+	snap.settingsSectionByY = make(map[int]settingsSection)
+	cardW := lipgloss.Width(m.settingsCardView())
+	cardX := max(0, (m.width-cardW)/centerDiv)
+	railW, _ := m.settingsWorkspaceWidths()
+	snap.settingsRailX0 = cardX + 1 + settingsCardHorzPad
+	snap.settingsRailX1 = snap.settingsRailX0 + railW
+	snap.settingsContentX0 = snap.settingsRailX1 + 1 + settingsWorkspaceGap
 	for i, line := range strings.Split(paint, "\n") {
 		plain := ansi.Strip(line)
 		if !snap.settingsCloseOK && strings.Contains(plain, "SETTINGS") && strings.Contains(plain, "[x]") {
@@ -96,9 +113,33 @@ func (m Model) buildLayout(key layoutKey) layoutSnap {
 				snap.settingsCloseOK = true
 			}
 		}
-		if row, ok := settingsRowFromPaintedLine(plain); ok {
+		if strings.Contains(plain, "filter settings [/]") {
+			snap.settingsFilterY = i
+		}
+		if section, ok := settingsSectionFromPaintedLine(plain); ok {
+			snap.settingsSectionByY[i] = section
+		}
+		if row, ok := settingsRowFromPaintedLine(plainFromDisplayColumn(plain, snap.settingsContentX0)); ok {
 			snap.settingsRowByY[i] = row
 		}
 	}
 	return snap
+}
+
+func plainFromDisplayColumn(line string, column int) string {
+	if column <= 0 {
+		return line
+	}
+	width := 0
+	for index, r := range line {
+		runeWidth := lipgloss.Width(string(r))
+		if width+runeWidth > column {
+			return line[index:]
+		}
+		width += runeWidth
+		if width == column {
+			return line[index+utf8.RuneLen(r):]
+		}
+	}
+	return ""
 }

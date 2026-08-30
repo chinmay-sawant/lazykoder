@@ -13,6 +13,7 @@ status and closure gates, these pages explain the design and usage.
 | [storage.md](storage.md) | SQLite schema, migrations, store API, ids and timestamps |
 | [safety.md](safety.md) | policy classifier, the confirm view, the executor gate |
 | [tools.md](tools.md) | base tools, task tools, agent loop wiring, part types |
+| [prompts.md](prompts.md) | workspace prompt files, built-in tool schemas, templates, and fallback behavior |
 | [tui.md](tui.md) | screens, keys, `/compact`, `/settings`, `/status`, session replay |
 | [development.md](development.md) | build, run, test, environment, project layout |
 | [plans.md](plans.md) | how the plan ledgers work and what is shipped |
@@ -29,7 +30,7 @@ internal/provider/openai        OpenAI-compatible client wrapper
 internal/provider/subscription  Codex and Grok subscription CLI adapters
 internal/provider               provider catalog, factory, and shared contract
 internal/agent                  turn loop, history, compact checkpoint
-internal/prompts                go:embed compact.md summarizer prompt
+internal/prompts                workspace prompt loader plus embedded defaults
 internal/settings               project defaults: provider, model, agents, orchestration, compaction, retries
 internal/policy                 bash classifier + Decision (allow/deny/ask)
 internal/tools                  bash, read, grep, write, edit, question, webfetch, task

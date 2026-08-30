@@ -106,7 +106,8 @@ provider, repair, merge/write, no-op, and total durations in microseconds.
 `subagent_jobs` is the durable task registry: spawn/status/finish are
 upserted so `task_list`, `task_status`, and `task_wait` still work after a
 process restart. Open (`queued`/`running`) rows are resumed on startup via
-`Manager.Recover`.
+`Manager.Recover`. Conditional cancellation changes only open rows, and stale
+recovery writes cannot replace a terminal row.
 
 ## Conventions
 
@@ -175,7 +176,9 @@ assigns `seq` from zero. `ListTodos` returns the rows in display order.
 
 A tool call starts as a `parts` row (`tool_status=pending`) plus a
 `tool_calls` row (`status=pending`, `input_json` = raw tool arguments). After
-execution or denial the rows are updated in place: `status` (`completed`,
-`denied`, `error`), `output`, `exit_code`, start/end times, and tool-specific
+execution, cancellation, or denial the rows are updated in place: `status`
+(`completed`, `cancelled`, `denied`, `error`), `output`, `exit_code`, start/end
+times, and tool-specific
 `metadata_json` (diff, answers, byte counts, truncated flags). Denied calls
-keep `exit_code` NULL.
+keep `exit_code` NULL. A terminal tool status is immutable, so a late update
+cannot replace a cancelled result.

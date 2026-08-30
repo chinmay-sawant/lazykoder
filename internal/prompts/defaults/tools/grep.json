@@ -1,0 +1,15 @@
+{
+  "name": "grep",
+  "description": "Search file contents under the workdir with ripgrep (fast). Prefer this over reading many files. Returns path:line:match hits.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "pattern": {"type": "string", "description": "regex pattern to search for"},
+      "path": {"type": "string", "description": "file or directory under workdir (default: workdir root)"},
+      "glob": {"type": "string", "description": "filename glob filter, e.g. *.go"},
+      "caseInsensitive": {"type": "boolean", "description": "case-insensitive search"},
+      "maxMatches": {"type": "integer", "description": "max hits to return (default 50, max 200)"}
+    },
+    "required": ["pattern"]
+  }
+}

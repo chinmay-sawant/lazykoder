@@ -530,6 +530,63 @@ func TestUpdateToolCall(t *testing.T) {
 	}
 }
 
+func TestCancelToolCallIsConditional(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	sess, err := s.CreateSession(ctx, Session{Directory: "/work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg, err := s.InsertMessage(ctx, Message{SessionID: sess.ID, Role: "assistant"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := "pending"
+	part, err := s.InsertPart(ctx, Part{MessageID: msg.ID, Type: "tool", ToolName: strPtr("bash"), ToolStatus: &status})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.InsertToolCall(ctx, ToolCall{PartID: part.ID, Tool: "bash", CallID: "call_cancel", Status: "pending"}); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := s.CancelToolCall(ctx, part.ID, "cancelled")
+	if err != nil || !changed {
+		t.Fatalf("CancelToolCall = %v, %v; want true, nil", changed, err)
+	}
+	changed, err = s.CancelToolCall(ctx, part.ID, "cancelled again")
+	if err != nil || changed {
+		t.Fatalf("repeated CancelToolCall = %v, %v; want false, nil", changed, err)
+	}
+	parts, err := s.ListParts(ctx, msg.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parts[0].ToolStatus == nil || *parts[0].ToolStatus != "cancelled" {
+		t.Fatalf("part status = %+v, want cancelled", parts[0].ToolStatus)
+	}
+	var gotStatus, gotOutput string
+	if err := s.db.QueryRowContext(ctx, `SELECT status, output FROM tool_calls WHERE part_id = ?`, part.ID).
+		Scan(&gotStatus, &gotOutput); err != nil {
+		t.Fatal(err)
+	}
+	if gotStatus != "cancelled" || gotOutput != "cancelled" {
+		t.Fatalf("tool call = status %q output %q", gotStatus, gotOutput)
+	}
+	lateOutput := "late result"
+	if err := s.UpdateToolCall(ctx, ToolCall{
+		PartID: part.ID, Tool: "bash", CallID: "call_cancel", Status: "completed", Output: &lateOutput,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.QueryRowContext(ctx, `SELECT status, output FROM tool_calls WHERE part_id = ?`, part.ID).
+		Scan(&gotStatus, &gotOutput); err != nil {
+		t.Fatal(err)
+	}
+	if gotStatus != "cancelled" || gotOutput != "cancelled" {
+		t.Fatalf("late update changed terminal tool call: status=%q output=%q", gotStatus, gotOutput)
+	}
+}
+
 func TestListSessionsByDirOrder(t *testing.T) {
 	ctx := context.Background()
 	s := openTestStore(t)
@@ -1145,6 +1202,46 @@ func TestSubagentJobRoundTrip(t *testing.T) {
 	}
 	if len(open) != 0 {
 		t.Fatalf("open should be empty after completed, got %#v", open)
+	}
+}
+
+func TestCancelSubagentJobCannotBeResurrected(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	parent, err := s.CreateSession(ctx, Session{Directory: "/work", Title: "parent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := SubagentJob{
+		ID:              "sub_cancel_job01",
+		ParentSessionID: parent.ID,
+		Name:            "cancel me",
+		Role:            "explore",
+		Status:          "queued",
+		Prompt:          "wait",
+	}
+	if err := s.UpsertSubagentJob(ctx, job); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := s.CancelSubagentJob(ctx, job.ID)
+	if err != nil || !changed {
+		t.Fatalf("CancelSubagentJob = %v, %v; want true, nil", changed, err)
+	}
+	job.Status = "running"
+	job.Summary = "resurrected"
+	if err := s.UpsertSubagentJob(ctx, job); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetSubagentJob(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != "cancelled" || got.Summary != "" {
+		t.Fatalf("job after stale upsert = %+v", got)
+	}
+	changed, err = s.CancelSubagentJob(ctx, job.ID)
+	if err != nil || changed {
+		t.Fatalf("repeated CancelSubagentJob = %v, %v; want false, nil", changed, err)
 	}
 }
 

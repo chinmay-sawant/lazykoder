@@ -37,8 +37,9 @@ type Manager struct {
 	mu      sync.Mutex
 	handles map[string]*handle
 	sem     chan struct{}
-	// writerMu serializes general-role children when parallel writers are off.
-	writerMu sync.Mutex
+	// writerGate serializes general-role children without a non-cancellable
+	// mutex wait when parallel writers are off.
+	writerGate chan struct{}
 
 	rt Runtime
 
@@ -64,11 +65,18 @@ type handle struct {
 func NewManager(cfg Config, runner Runner) *Manager {
 	cfg = cfg.Normalize()
 	return &Manager{
-		cfg:     cfg,
-		runner:  runner,
-		handles: make(map[string]*handle),
-		sem:     make(chan struct{}, cfg.MaxConcurrent),
+		cfg:        cfg,
+		runner:     runner,
+		handles:    make(map[string]*handle),
+		sem:        make(chan struct{}, cfg.MaxConcurrent),
+		writerGate: newWriterGate(),
 	}
+}
+
+func newWriterGate() chan struct{} {
+	gate := make(chan struct{}, 1)
+	gate <- struct{}{}
+	return gate
 }
 
 // SetStore attaches the SQLite store used for durable job records.
@@ -254,6 +262,16 @@ func (m *Manager) Recover(ctx context.Context) error {
 }
 
 func (m *Manager) resumeJob(ctx context.Context, row db.SubagentJob, runner Runner, rt Runtime) error {
+	if m.store != nil {
+		latest, err := m.store.GetSubagentJob(ctx, row.ID)
+		if err != nil {
+			return err
+		}
+		if IsTerminalStatus(latest.Status) {
+			return nil
+		}
+		row = latest
+	}
 	m.mu.Lock()
 	if _, exists := m.handles[row.ID]; exists {
 		m.mu.Unlock()
@@ -494,7 +512,7 @@ func (m *Manager) execute(jobCtx context.Context, h *handle, job Job, role strin
 			}))
 			return
 		}
-		defer m.writerMu.Unlock()
+		defer m.releaseWriter()
 	}
 
 	h.mu.Lock()
@@ -535,26 +553,18 @@ func (m *Manager) execute(jobCtx context.Context, h *handle, job Job, role strin
 	m.finish(h, res)
 }
 
-// acquireWriter locks writerMu or returns ctx.Err() if cancelled while waiting.
+// acquireWriter waits for the single-writer slot or returns ctx.Err().
 func (m *Manager) acquireWriter(ctx context.Context) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	done := make(chan struct{})
-	go func() {
-		m.writerMu.Lock()
-		close(done)
-	}()
 	select {
-	case <-done:
+	case <-m.writerGate:
 		return nil
 	case <-ctx.Done():
-		go func() {
-			<-done
-			m.writerMu.Unlock()
-		}()
 		return ctx.Err()
 	}
+}
+
+func (m *Manager) releaseWriter() {
+	m.writerGate <- struct{}{}
 }
 
 func (m *Manager) finish(h *handle, res Result) {
@@ -593,15 +603,11 @@ func (m *Manager) finish(h *handle, res Result) {
 func terminalFromCtx(ctx context.Context, res Result) Result {
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		res.Status = string(StatusTimedOut)
-		if res.Err == "" {
-			res.Err = "subagent: timed out"
-		}
+		res.Err = "subagent: timed out"
 		return res
 	}
 	res.Status = string(StatusCancelled)
-	if res.Err == "" {
-		res.Err = "subagent: cancelled"
-	}
+	res.Err = "subagent: cancelled"
 	return res
 }
 
@@ -666,29 +672,56 @@ func (m *Manager) List(parentSessionID string) []Snapshot {
 	return out
 }
 
-// Cancel requests cancellation of a job and waits until it is terminal.
-func (m *Manager) Cancel(id string) (Snapshot, error) {
+// RequestCancel signals a live job without waiting for worker cleanup. A
+// durable-only open job is marked cancelled immediately because it has no
+// in-memory worker to signal. It is safe to call repeatedly and is intended
+// for UI and task-tool callers that return before cleanup completes.
+func (m *Manager) RequestCancel(id string) (Snapshot, error) {
 	m.mu.Lock()
 	h, ok := m.handles[id]
 	store := m.store
 	m.mu.Unlock()
 	if ok {
 		h.cancel()
+		return h.snapshot(), nil
+	}
+	if store != nil {
+		changed, err := store.CancelSubagentJob(context.Background(), id)
+		if err != nil {
+			m.recordPersistenceError(fmt.Errorf("subagent: persist cancellation for %q: %w", id, err))
+			return Snapshot{}, err
+		}
+		if row, err := store.GetSubagentJob(context.Background(), id); err == nil && (changed || IsTerminalStatus(row.Status)) {
+			return snapshotFromRow(row), nil
+		}
+	}
+	return Snapshot{}, fmt.Errorf("subagent: unknown id %q", id)
+}
+
+// Cancel requests cancellation of a job and waits until it is terminal.
+func (m *Manager) Cancel(id string) (Snapshot, error) {
+	if _, err := m.RequestCancel(id); err != nil {
+		return Snapshot{}, err
+	}
+	m.mu.Lock()
+	h, ok := m.handles[id]
+	store := m.store
+	m.mu.Unlock()
+	if ok {
 		<-h.done
 		return h.snapshot(), nil
 	}
-	// Durable-only terminal or unknown job.
 	if store != nil {
-		if row, err := store.GetSubagentJob(context.Background(), id); err == nil {
-			if IsTerminalStatus(row.Status) {
-				return snapshotFromRow(row), nil
-			}
-			// Mark cancelled in store when not live (crashed mid-flight, never recovered).
-			row = rowWithStatus(row, string(StatusCancelled), row.Summary, "subagent: cancelled")
-			if err := m.writeSubagentJob(context.Background(), row); err != nil {
-				m.recordPersistenceError(fmt.Errorf("subagent: persist cancellation for %q: %w", id, err))
-				return Snapshot{}, err
-			}
+		changed, err := store.CancelSubagentJob(context.Background(), id)
+		if err != nil {
+			m.recordPersistenceError(fmt.Errorf("subagent: persist cancellation for %q: %w", id, err))
+			return Snapshot{}, err
+		}
+		row, err := store.GetSubagentJob(context.Background(), id)
+		if err != nil {
+			return Snapshot{}, err
+		}
+		if changed || IsTerminalStatus(row.Status) {
 			return snapshotFromRow(row), nil
 		}
 	}
@@ -805,8 +838,7 @@ func (m *Manager) WaitAll(ctx context.Context, parentSessionID string) ([]Result
 	return out, nil
 }
 
-// CancelAll cancels every non-terminal job for parentSessionID. Returns count cancelled.
-func (m *Manager) CancelAll(parentSessionID string) int {
+func (m *Manager) requestCancelHandles(parentSessionID string) []*handle {
 	m.mu.Lock()
 	var hs []*handle
 	for _, h := range m.handles {
@@ -818,13 +850,88 @@ func (m *Manager) CancelAll(parentSessionID string) int {
 		}
 	}
 	m.mu.Unlock()
+	return hs
+}
+
+// RequestCancelAll signals every non-terminal job for a parent without
+// waiting for live workers. Durable-only open rows are marked cancelled.
+func (m *Manager) RequestCancelAll(parentSessionID string) int {
+	hs := m.requestCancelHandles(parentSessionID)
+	for _, h := range hs {
+		h.cancel()
+	}
+	count := len(hs)
+	liveIDs := make(map[string]struct{}, len(hs))
+	for _, h := range hs {
+		liveIDs[h.id] = struct{}{}
+	}
+	m.mu.Lock()
+	store := m.store
+	m.mu.Unlock()
+	if store == nil {
+		return count
+	}
+	rows, err := store.ListSubagentJobs(context.Background(), parentSessionID)
+	if err != nil {
+		m.recordPersistenceError(fmt.Errorf("subagent: list jobs for cancellation: %w", err))
+		return count
+	}
+	for _, row := range rows {
+		if _, ok := liveIDs[row.ID]; ok || IsTerminalStatus(row.Status) {
+			continue
+		}
+		changed, err := store.CancelSubagentJob(context.Background(), row.ID)
+		if err != nil {
+			m.recordPersistenceError(fmt.Errorf("subagent: persist cancellation for %q: %w", row.ID, err))
+			continue
+		}
+		if changed {
+			count++
+		}
+	}
+	return count
+}
+
+// CancelAll cancels every non-terminal job for parentSessionID and waits for
+// live workers. Durable-only rows are conditionally cancelled as well.
+func (m *Manager) CancelAll(parentSessionID string) int {
+	hs := m.requestCancelHandles(parentSessionID)
 	for _, h := range hs {
 		h.cancel()
 	}
 	for _, h := range hs {
 		<-h.done
 	}
-	return len(hs)
+	count := len(hs)
+	liveIDs := make(map[string]struct{}, len(hs))
+	for _, h := range hs {
+		liveIDs[h.id] = struct{}{}
+	}
+	m.mu.Lock()
+	store := m.store
+	m.mu.Unlock()
+	if store == nil {
+		return count
+	}
+	rows, err := store.ListSubagentJobs(context.Background(), parentSessionID)
+	if err != nil {
+		m.recordPersistenceError(fmt.Errorf("subagent: list jobs for cancellation: %w", err))
+		return count
+	}
+	for _, row := range rows {
+		if _, ok := liveIDs[row.ID]; ok || IsTerminalStatus(row.Status) {
+			continue
+		}
+		changed, err := store.CancelSubagentJob(context.Background(), row.ID)
+		if err != nil {
+			m.recordPersistenceError(fmt.Errorf("subagent: persist cancellation for %q: %w", row.ID, err))
+			continue
+		}
+		if changed {
+			count++
+		}
+	}
+	return count
 }
 
 // Shutdown cancels every in-flight job and waits for them to finish.
@@ -845,6 +952,22 @@ func (m *Manager) Shutdown() {
 	}
 	for _, h := range hs {
 		<-h.done
+	}
+	m.mu.Lock()
+	store := m.store
+	m.mu.Unlock()
+	if store == nil {
+		return
+	}
+	rows, err := store.ListOpenSubagentJobs(context.Background())
+	if err != nil {
+		m.recordPersistenceError(fmt.Errorf("subagent: list open jobs during shutdown: %w", err))
+		return
+	}
+	for _, row := range rows {
+		if _, err := store.CancelSubagentJob(context.Background(), row.ID); err != nil {
+			m.recordPersistenceError(fmt.Errorf("subagent: persist shutdown cancellation for %q: %w", row.ID, err))
+		}
 	}
 }
 

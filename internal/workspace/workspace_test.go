@@ -65,6 +65,54 @@ func TestInitCreatesEmptyCatalogFiles(t *testing.T) {
 	}
 }
 
+func TestInitCreatesPromptFiles(t *testing.T) {
+	cwd := t.TempDir()
+	env, err := Init(cwd)
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	defer env.DB.Close()
+
+	promptDir := filepath.Join(env.Dir, "prompts")
+	for _, name := range []string{"compact.md", "agent/recall-header.md", "tools/bash.json", "tools/task.json"} {
+		path := filepath.Join(promptDir, filepath.FromSlash(name))
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("stat %s: %v", name, err)
+		}
+		if info.Mode().Perm() != 0o600 {
+			t.Errorf("%s mode = %o, want 600", name, info.Mode().Perm())
+		}
+		if info.Size() == 0 {
+			t.Errorf("%s is empty", name)
+		}
+	}
+}
+
+func TestInitDoesNotOverwriteExistingPrompt(t *testing.T) {
+	cwd := t.TempDir()
+	path := filepath.Join(cwd, ".lazykoder", "prompts", "compact.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	want := []byte("local compact prompt\n")
+	if err := os.WriteFile(path, want, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env, err := Init(cwd)
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	defer env.DB.Close()
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("compact.md changed to %q", got)
+	}
+}
+
 func TestInitDoesNotOverwriteExistingProviders(t *testing.T) {
 	cwd := t.TempDir()
 	dir := filepath.Join(cwd, ".lazykoder")

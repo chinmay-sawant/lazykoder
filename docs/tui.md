@@ -47,8 +47,10 @@ CLI-owned signed-in catalog and adds its current model rows under `Grok`.
   always type into the composer. Tool-card header clicks toggle their body;
   thinking headers select rows without toggling them.
 - Composer: a rounded input box on the near-black graphite canvas. Its charcoal input
-  surface fills the complete box, including the footer labels and status chips, and
-  receives a muted sage focus border while editing. Long prompts
+  surface fills the complete box, including the footer labels and status chips. The
+  idle send hint, selected model, variant, metrics, and status control use the
+  primary text color for legibility, while placeholder and active-state colors stay
+  semantic. The composer receives a muted sage focus border while editing. Long prompts
   grow up to six rows and scroll inside the box. Up/down move the
   cursor through that text first; at the top of a multi-line draft, up
   stays there instead of jumping to a previous message. After browsing
@@ -238,7 +240,9 @@ cost adds those children as `subs $X`; footer cost uses `+$X`.
 - A log opens at its latest output and follows the live tail as new child
   events arrive. After scrolling up, the transparent `▼` row above the
   footer jumps back to the latest output.
-- `d` on a live drawer row cancels it; `esc` closes the drawer.
+- `d` on a live drawer row signals cancellation and returns to the drawer;
+  cleanup finishes through a command and refreshes the row. `esc` closes the
+  drawer.
 
 When recaps are enabled, the drawer includes a separate selectable `recaps`
 row with a semantic success rail for completed work and a danger rail for
@@ -361,12 +365,16 @@ shorter terminal, use `/usage` for the same information. Opening `/settings`
 loads usage when it has not already been fetched; `/usage` can refresh it.
 
 At 24 rows, the settings card keeps its header, footer, and focused row on
-screen. Use `j` and `k` or the arrow keys to move through controls in their
-painted section order. Hidden detailed skill rows are skipped until the card
-has enough height to display them.
+screen. Use `j` and `k` or the arrow keys to move through controls in the
+selected section. The selected row's help text stays in a fixed detail line so
+moving the cursor does not shift the other labels. Hidden detailed skill rows
+are skipped until the card has enough height to display them.
 
 When sub-agents are running, the footer may show `subs:N/M` (active / max
-concurrent). Cancelling the parent turn also cancels child jobs.
+concurrent). Cancelling the parent turn signals the parent request and all
+live child jobs without waiting in the Bubble Tea update loop. The transcript
+marks in-flight tool cards as `cancelled`, and the drawer refreshes child rows
+when cleanup reaches a terminal state.
 
 | Control | Action |
 | --- | --- |

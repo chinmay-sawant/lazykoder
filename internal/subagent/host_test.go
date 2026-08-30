@@ -3,6 +3,7 @@ package subagent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -463,5 +464,131 @@ func TestHostEncodesDeclaredTaskResults(t *testing.T) {
 	var cancel task.CancelResult
 	if err := json.Unmarshal([]byte(cancelJSON), &cancel); err != nil || cancel.ID != spawn.ID {
 		t.Fatalf("cancel result = %s, err=%v", cancelJSON, err)
+	}
+}
+
+type declaredResultRunner struct {
+	results map[string]Result
+}
+
+func (r declaredResultRunner) Run(_ context.Context, job Job) (Result, error) {
+	result := r.results[job.Name]
+	result.ID = job.ID
+	result.Name = job.Name
+	result.Role = job.Role
+	if result.Status == string(StatusFailed) {
+		return result, errors.New(result.Err)
+	}
+	return result, nil
+}
+
+func TestHostTaskWaitPreservesTerminalStatuses(t *testing.T) {
+	parentID := "ses_wait_statuses"
+	runner := declaredResultRunner{results: map[string]Result{
+		"complete": {Status: string(StatusCompleted), Summary: "complete"},
+		"partial":  {Status: string(StatusCompleted), Summary: "partial [note: child step limit reached; results may be incomplete]"},
+		"failed":   {Status: string(StatusFailed), Err: "failed"},
+		"timeout":  {Status: string(StatusTimedOut), Err: "subagent: timed out"},
+		"cancel":   {Status: string(StatusCancelled), Err: "subagent: cancelled"},
+	}}
+	h := NewHost(NewManager(NewConfig(), runner))
+	for name := range runner.results {
+		result, _, status, err := h.Execute(context.Background(), parentID, task.ToolTask, `{"name":"`+name+`","prompt":"work","background":true}`, "")
+		if err != nil || status != "completed" {
+			t.Fatalf("spawn %s: status=%q err=%v result=%s", name, status, err, result)
+		}
+	}
+	waitJSON, _, status, err := h.Execute(context.Background(), parentID, task.ToolTaskWait, `{}`, "")
+	if err != nil || status != "completed" {
+		t.Fatalf("task_wait: status=%q err=%v result=%s", status, err, waitJSON)
+	}
+	var wait task.WaitResult
+	if err := json.Unmarshal([]byte(waitJSON), &wait); err != nil {
+		t.Fatalf("decode task_wait: %v", err)
+	}
+	if len(wait.Tasks) != len(runner.results) {
+		t.Fatalf("task_wait tasks = %+v", wait.Tasks)
+	}
+	got := make(map[string]task.TaskInfo, len(wait.Tasks))
+	for _, info := range wait.Tasks {
+		got[info.Name] = info
+	}
+	for name, want := range runner.results {
+		info, ok := got[name]
+		if !ok || info.Status != want.Status || info.Summary != want.Summary || info.Error != want.Err {
+			t.Fatalf("task_wait[%q] = %+v, want status=%q summary=%q error=%q", name, info, want.Status, want.Summary, want.Err)
+		}
+	}
+}
+
+func TestHostTaskCancelReturnsBeforeCleanup(t *testing.T) {
+	runner := &stubbornRunner{started: make(chan struct{}, 1), release: make(chan struct{})}
+	h := NewHost(NewManager(NewConfig(), runner))
+	parentID := "ses_cancel_prompt"
+	spawnJSON, _, status, err := h.Execute(context.Background(), parentID, task.ToolTask, `{"prompt":"wait","background":true}`, "")
+	if err != nil || status != "completed" {
+		t.Fatalf("task: status=%q err=%v result=%s", status, err, spawnJSON)
+	}
+	var spawn task.SpawnResult
+	if err := json.Unmarshal([]byte(spawnJSON), &spawn); err != nil {
+		t.Fatalf("decode spawn: %v", err)
+	}
+	select {
+	case <-runner.started:
+	case <-time.After(time.Second):
+		t.Fatal("runner did not start")
+	}
+	cancelDone := make(chan struct {
+		result string
+		status string
+		err    error
+	}, 1)
+	go func() {
+		result, _, status, err := h.Execute(context.Background(), parentID, task.ToolTaskCancel, `{"id":"`+spawn.ID+`"}`, "")
+		cancelDone <- struct {
+			result string
+			status string
+			err    error
+		}{result: result, status: status, err: err}
+	}()
+	select {
+	case out := <-cancelDone:
+		if out.err != nil || out.status != "completed" {
+			t.Fatalf("task_cancel: status=%q err=%v result=%s", out.status, out.err, out.result)
+		}
+		var cancel task.CancelResult
+		if err := json.Unmarshal([]byte(out.result), &cancel); err != nil || cancel.ID != spawn.ID {
+			t.Fatalf("cancel result = %s, err=%v", out.result, err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("task_cancel waited for worker cleanup")
+	}
+	close(runner.release)
+	result, err := h.Mgr.Wait(context.Background(), spawn.ID)
+	if err != nil || result.Status != string(StatusCancelled) {
+		t.Fatalf("cancelled job = %+v, err=%v", result, err)
+	}
+}
+
+func TestHostTaskControlsStayWithinParent(t *testing.T) {
+	runner := newBlockingRunner("done")
+	h := NewHost(NewManager(NewConfig(), runner))
+	spawnJSON, _, _, err := h.Execute(context.Background(), "ses_owner", task.ToolTask, `{"prompt":"work","background":true}`, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var spawn task.SpawnResult
+	if err := json.Unmarshal([]byte(spawnJSON), &spawn); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{task.ToolTaskStatus, task.ToolTaskWait, task.ToolTaskCancel} {
+		result, _, status, err := h.Execute(context.Background(), "ses_other", name, `{"id":"`+spawn.ID+`"}`, "")
+		if err != nil || status != "error" || !strings.Contains(result, "unknown id") {
+			t.Fatalf("%s cross-parent result=%s status=%q err=%v", name, result, status, err)
+		}
+	}
+	close(runner.release)
+	if _, err := h.Mgr.Wait(context.Background(), spawn.ID); err != nil {
+		t.Fatal(err)
 	}
 }

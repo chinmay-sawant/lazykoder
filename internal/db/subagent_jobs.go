@@ -48,7 +48,8 @@ ON CONFLICT(id) DO UPDATE SET
   error = excluded.error,
   time_updated = excluded.time_updated,
   time_started = excluded.time_started,
-  time_finished = excluded.time_finished`,
+  time_finished = excluded.time_finished
+WHERE subagent_jobs.status IN ('queued', 'running')`,
 		j.ID, j.ParentSessionID, nullIfEmpty(j.ParentPartID), nullIfEmpty(j.ChildSessionID),
 		j.Name, j.Role, j.Status, j.Prompt, j.Description, nullIfEmpty(j.Model), nullIfEmpty(j.Variant),
 		j.MaxSteps, j.TimeoutMS, nullIfEmpty(j.Summary), nullIfEmpty(j.Error),
@@ -58,6 +59,24 @@ ON CONFLICT(id) DO UPDATE SET
 		return fmt.Errorf("db: upsert subagent job: %w", err)
 	}
 	return nil
+}
+
+// CancelSubagentJob conditionally marks an open durable job as cancelled.
+// Terminal rows are immutable so a late recovery or worker write cannot
+// resurrect or replace their outcome.
+func (s *Store) CancelSubagentJob(ctx context.Context, id string) (bool, error) {
+	now := time.Now().UnixMilli()
+	result, err := s.db.ExecContext(ctx, `UPDATE subagent_jobs
+SET status = 'cancelled', error = 'subagent: cancelled', time_updated = ?, time_finished = ?
+WHERE id = ? AND status IN ('queued', 'running')`, now, now, id)
+	if err != nil {
+		return false, fmt.Errorf("db: cancel subagent job: %w", err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("db: count cancelled subagent job: %w", err)
+	}
+	return changed > 0, nil
 }
 
 // GetSubagentJob returns one job by id.

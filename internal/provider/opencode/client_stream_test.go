@@ -3,12 +3,14 @@ package opencode
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestChatStreamAccumulatesChunks(t *testing.T) {
@@ -228,6 +230,7 @@ func TestChatStreamNDJSON(t *testing.T) {
 
 func TestChatStreamContextCancel(t *testing.T) {
 	started := make(chan struct{})
+	serverDone := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\n")
@@ -236,6 +239,7 @@ func TestChatStreamContextCancel(t *testing.T) {
 		}
 		close(started)
 		<-r.Context().Done()
+		close(serverDone)
 	}))
 	defer srv.Close()
 
@@ -250,6 +254,14 @@ func TestChatStreamContextCancel(t *testing.T) {
 	}, nil)
 	if err == nil {
 		t.Fatal("ChatStream error = nil, want cancel")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("ChatStream error = %v, want context.Canceled", err)
+	}
+	select {
+	case <-serverDone:
+	case <-time.After(time.Second):
+		t.Fatal("server request did not observe cancellation")
 	}
 }
 

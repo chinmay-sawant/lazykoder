@@ -132,9 +132,6 @@ func (m Model) updateSlashKey(key tea.KeyPressMsg) (Model, tea.Cmd) {
 			m.slashMode = false
 			m.slashCursor = 0
 			m.slashFromPaste = false
-			if name == "/model" {
-				return m.openModelSearch(), nil
-			}
 			m.prompt.SetValue("")
 			m.promptUndo = nil
 			return m.runSlashArg(name, extra)
@@ -172,11 +169,11 @@ func (m Model) runSlashArg(name, extra string) (Model, tea.Cmd) {
 	case "/resume", "/sessions", "/session":
 		return m.openSessionPicker(), nil
 	case "/model":
-		return m.openModelSearch(), nil
+		return m.openSettingsAt(settingsSectionModel, settingsRowModel), m.maybeFetchUsage()
 	case "/provider":
 		return m.openProviderPicker(), nil
 	case "/variant":
-		return m.openVariantPicker(), nil
+		return m.openSettingsAt(settingsSectionModel, settingsRowVariant), m.maybeFetchUsage()
 	case "/refresh":
 		return m, m.refreshModels
 	case "/usage":
@@ -316,12 +313,6 @@ func modelSearchQuery(value string) (string, bool) {
 		return strings.TrimSpace(rest[len("model"):]), true
 	}
 	return "", false
-}
-
-func (m Model) openModelSearch() Model {
-	m.prompt.SetValue("/model ")
-	m.promptUndo = nil
-	return m.syncSlash("/model ")
 }
 
 func (m Model) syncPromptSlash() Model {

@@ -1,0 +1,12 @@
+{
+  "name": "write",
+  "description": "Write a file under the session workdir (parent dirs must exist).",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "filePath": {"type": "string", "description": "path relative to or under workdir"},
+      "contents": {"type": "string", "description": "full file contents"}
+    },
+    "required": ["filePath", "contents"]
+  }
+}

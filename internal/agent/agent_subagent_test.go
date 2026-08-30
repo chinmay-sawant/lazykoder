@@ -3,8 +3,10 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 )
@@ -51,6 +53,20 @@ func TestAdvertiseBaseTools(t *testing.T) {
 // fakeHost implements SubagentHost for unit tests.
 type fakeHost struct {
 	calls int
+}
+
+type blockingHost struct {
+	started chan struct{}
+}
+
+func (h *blockingHost) Specs() []opencode.ToolSpec {
+	return (&fakeHost{}).Specs()
+}
+
+func (h *blockingHost) Execute(ctx context.Context, _, _, _ string, _ string) (string, string, string, error) {
+	h.started <- struct{}{}
+	<-ctx.Done()
+	return "", "", "", ctx.Err()
 }
 
 func (f *fakeHost) Specs() []opencode.ToolSpec {
@@ -119,5 +135,47 @@ func TestParentTaskToolViaHost(t *testing.T) {
 	}
 	if taskRow.Output == nil || !strings.Contains(*taskRow.Output, "child done") {
 		t.Fatalf("task output = %v", taskRow.Output)
+	}
+}
+
+func TestParentParallelTaskCancellationPersistsTerminalRows(t *testing.T) {
+	args := `{"prompt":"wait","background":true}`
+	fake := newFakeProvider(t, respBody("", "", "tool-calls", []fakeToolCall{
+		{ID: "c_task_a", Name: "task", Args: args},
+		{ID: "c_task_b", Name: "task", Args: args},
+	}, testUsage))
+	st, path := newTestEnv(t)
+	h := &blockingHost{started: make(chan struct{}, 2)}
+	a := New(st, newClient(t, fake.srv), t.TempDir(), Options{Host: h, DisableStreaming: true})
+	ctx, cancel := context.WithCancel(context.Background())
+	events := make(chan Event, 256)
+	result := make(chan error, 1)
+	go func() { result <- a.Send(ctx, "spawn two children", events) }()
+	for i := 0; i < 2; i++ {
+		select {
+		case <-h.started:
+		case <-time.After(time.Second):
+			t.Fatal("parallel task did not start")
+		}
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Send error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Send did not stop after parallel task cancellation")
+	}
+	for range events {
+	}
+	rows := queryToolCalls(t, path)
+	if len(rows) != 2 {
+		t.Fatalf("task rows = %+v, want 2", rows)
+	}
+	for _, row := range rows {
+		if row.Status != "cancelled" || row.Output == nil || *row.Output != "cancelled" {
+			t.Fatalf("parallel task row = %+v", row)
+		}
 	}
 }

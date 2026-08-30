@@ -39,9 +39,19 @@ func TestSettingsSlashOpensCard(t *testing.T) {
 	if !strings.Contains(v, "SETTINGS") || !strings.Contains(v, "[x]") {
 		t.Fatalf("settings card missing header/x: %q", v)
 	}
-	for _, want := range []string{"theme", "new-session model", "recaps enabled", "recap model", "recap after chats", "api retries", "retry delay", "skills enabled", "skills auto-detect", "skills local source", "skills global source", "remember skill references", "skill auto matches", "child model variant", "child timeout", "default role", "child bash confirms", "parent bash allowlist", "auto-compact", "compact at"} {
+	for _, want := range []string{"categories", "appearance", "model", "recaps", "skills", "agent loop", "compaction", "sub-agents", "safety", "request retries", "filter settings", "theme"} {
 		if !strings.Contains(v, want) {
 			t.Fatalf("settings card missing %q: %q", want, v)
+		}
+	}
+	for _, definition := range settingsRowDefinitions {
+		m.settingsCursor = definition.id
+		rowView := stripANSI(viewText(m))
+		if !strings.Contains(rowView, definition.label) {
+			t.Fatalf("settings category did not render row %q: %q", definition.label, rowView)
+		}
+		if description := settingsRowDescription(definition.id); !strings.Contains(rowView, description) {
+			t.Fatalf("settings category did not render description for %q: %q", definition.label, rowView)
 		}
 	}
 	// Full-screen card, not a drawer glued above the prompt. Composer may
@@ -73,6 +83,28 @@ func TestSettingsRowDefinitionsCoverSelectableRows(t *testing.T) {
 		if !seen[row] {
 			t.Fatalf("missing settings row definition %d", row)
 		}
+		if _, ok := settingsSectionForRow(row); !ok {
+			t.Fatalf("row %d has no settings section", row)
+		}
+		if settingsRowDescription(row) == "" {
+			t.Fatalf("row %d has no settings description", row)
+		}
+	}
+}
+
+func TestSettingsKVRowKeepsCompactStepperControls(t *testing.T) {
+	row := settingsKVRow(
+		false,
+		false,
+		"new-session model",
+		"◂ muse-spark-1.2-contributor ▸",
+		43,
+	)
+	if lipgloss.Width(row) > 43 {
+		t.Fatalf("compact settings row exceeds width: %q", row)
+	}
+	if !strings.Contains(row, "◂") || !strings.Contains(row, "▸") {
+		t.Fatalf("compact settings row lost a stepper control: %q", row)
 	}
 }
 
@@ -191,19 +223,13 @@ func TestSettingsAdjustAndPersist(t *testing.T) {
 		SettingsPath: path,
 		Settings:     &cfg,
 	})
-	m = m.openSettings()
-	// move to max steps row
-	for m.settingsCursor != settingsRowSteps {
-		m = upd(m, tea.KeyPressMsg{Code: 'j'})
-	}
+	m = m.openSettingsAt(settingsSectionAgentLoop, settingsRowSteps)
 	m = upd(m, tea.KeyPressMsg{Code: tea.KeyRight})
 	if m.projectSettings.Slot.MaxSteps != 9 {
 		t.Fatalf("MaxSteps = %d, want 9", m.projectSettings.Slot.MaxSteps)
 	}
-	// toggle limit off
-	for m.settingsCursor != settingsRowLimit {
-		m = upd(m, tea.KeyPressMsg{Code: 'k'})
-	}
+	// Toggle the other agent-loop setting without leaving the category.
+	m.settingsCursor = settingsRowLimit
 	m = upd(m, tea.KeyPressMsg{Code: tea.KeySpace})
 	if m.projectSettings.Slot.LimitEnabled {
 		t.Fatal("limit still enabled after toggle")
@@ -230,7 +256,7 @@ func TestSettingsDefaultModelCyclePersists(t *testing.T) {
 		SettingsPath: path,
 	})
 	m.models = []string{"deepseek-v4-flash", "claude-4", "big-pickle"}
-	m = m.openSettings()
+	m = m.openSettingsAt(settingsSectionAgentLoop, settingsRowSteps)
 	m.settingsCursor = settingsRowModel
 	m = upd(m, tea.KeyPressMsg{Code: tea.KeyRight})
 	if m.projectSettings.Model.Default != "claude-4" {
@@ -258,7 +284,7 @@ func TestSettingsRecapToggleAndModelPersist(t *testing.T) {
 		SettingsPath: path,
 	})
 	m.models = []string{"deepseek-v4-flash", "claude-4"}
-	m = m.openSettings()
+	m = m.openSettingsAt(settingsSectionAgentLoop, settingsRowLimit)
 	if m.projectSettings.EffectiveRecap().Enabled {
 		t.Fatal("recaps enabled by default")
 	}
@@ -553,7 +579,7 @@ func TestSettingsMouseAdjustSteps(t *testing.T) {
 	})
 	mm, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = mm.(Model)
-	m = m.openSettings()
+	m = m.openSettingsAt(settingsSectionAgentLoop, settingsRowSteps)
 	before := m.projectSettings.Slot.MaxSteps
 	rowTop := settingsPaintedRowY(m, "parent max steps")
 	if rowTop < 0 {
@@ -597,7 +623,7 @@ func TestSettingsMouseToggleOnGlyph(t *testing.T) {
 	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
 	mm, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = mm.(Model)
-	m = m.openSettings()
+	m = m.openSettingsAt(settingsSectionAgentLoop, settingsRowLimit)
 	if !m.projectSettings.Slot.LimitEnabled {
 		t.Fatal("want limit on by default")
 	}
@@ -751,7 +777,11 @@ func TestSettingsHitAllRows(t *testing.T) {
 
 	for row := 0; row < settingsRowCount; row++ {
 		label := settingsRowLabel(row)
-		base := m
+		section, ok := settingsSectionForRow(row)
+		if !ok {
+			t.Fatalf("row %d has no section", row)
+		}
+		base := m.openSettingsAt(section, row)
 		y := settingsPaintedRowY(base, label)
 		if y < 0 {
 			t.Fatalf("row %d %q not painted:\n%s", row, label, stripANSI(viewText(base)))
@@ -768,96 +798,153 @@ func TestSettingsHitAllRows(t *testing.T) {
 	}
 }
 
-func TestSettingsKeyboardNavigationFollowsPaintedOrder(t *testing.T) {
+func TestSettingsKeyboardNavigationFollowsSelectedCategory(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = mm.(Model).openSettingsAt(settingsSectionModel, settingsRowModel)
+	for index, want := range []int{settingsRowModel, settingsRowVariant} {
+		if m.settingsCursor != want {
+			t.Fatalf("model cursor at step %d = %d, want %d", index, m.settingsCursor, want)
+		}
+		if index == 0 {
+			m = upd(m, tea.KeyPressMsg{Code: tea.KeyDown})
+		}
+	}
+	m = upd(m, tea.KeyPressMsg{Code: ']'})
+	if m.settingsCurrentSection() != settingsSectionRecaps || m.settingsCursor != settingsRowRecapEnabled {
+		t.Fatalf("next category = section %d row %d", m.settingsCurrentSection(), m.settingsCursor)
+	}
+}
+
+func TestSettingsKeyboardNavigationStaysWithinCategory(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		height int
-		want   []int
+		name string
+		down rune
+		up   rune
 	}{
-		{
-			name:   "full card",
-			height: 48,
-			want: []int{
-				settingsRowTheme,
-				settingsRowModel,
-				settingsRowVariant,
-				settingsRowRecapEnabled,
-				settingsRowRecapModel,
-				settingsRowRecapAfterChats,
-				settingsRowSkillsEnabled,
-				settingsRowSkillsAutoDetect,
-				settingsRowSkillsLocal,
-				settingsRowSkillsGlobal,
-				settingsRowSkillsRemember,
-				settingsRowSkillsMaxMatches,
-				settingsRowLimit,
-				settingsRowSteps,
-				settingsRowCompactAuto,
-				settingsRowCompactPercent,
-				settingsRowTools,
-				settingsRowAgentsEnabled,
-				settingsRowChildModel,
-				settingsRowChildVariant,
-				settingsRowExploreModel,
-				settingsRowAgentsRole,
-				settingsRowAgentsConcurrent,
-				settingsRowAgentsQueued,
-				settingsRowAgentsChildSteps,
-				settingsRowAgentsTimeout,
-				settingsRowAgentsWriters,
-				settingsRowBashConfirm,
-				settingsRowAllowlistEnabled,
-				settingsRowAllowlist,
-				settingsRowRetryMaxRetries,
-				settingsRowRetryDelay,
-			},
-		},
-		{
-			name:   "compact card",
-			height: 24,
-			want: []int{
-				settingsRowTheme,
-				settingsRowModel,
-				settingsRowVariant,
-				settingsRowRecapEnabled,
-				settingsRowRecapModel,
-				settingsRowRecapAfterChats,
-				settingsRowSkillsEnabled,
-				settingsRowLimit,
-				settingsRowSteps,
-				settingsRowCompactAuto,
-				settingsRowCompactPercent,
-				settingsRowTools,
-				settingsRowAgentsEnabled,
-				settingsRowChildModel,
-				settingsRowChildVariant,
-				settingsRowExploreModel,
-				settingsRowAgentsRole,
-				settingsRowAgentsConcurrent,
-				settingsRowAgentsQueued,
-				settingsRowAgentsChildSteps,
-				settingsRowAgentsTimeout,
-				settingsRowAgentsWriters,
-				settingsRowBashConfirm,
-				settingsRowAllowlistEnabled,
-				settingsRowAllowlist,
-				settingsRowRetryMaxRetries,
-				settingsRowRetryDelay,
-			},
-		},
+		{name: "arrows", down: tea.KeyDown, up: tea.KeyUp},
+		{name: "vim keys", down: 'j', up: 'k'},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := New(Options{
+				Store:   newTestStore(t),
+				Client:  deadClient(),
+				Workdir: t.TempDir(),
+			}).openSettings()
+
+			m = upd(m, tea.KeyPressMsg{Code: tc.down})
+			if m.settingsCurrentSection() != settingsSectionAppearance || m.settingsCursor != settingsRowTheme {
+				t.Fatalf("down from appearance changed section = %d row %d", m.settingsCurrentSection(), m.settingsCursor)
+			}
+
+			m = m.openSettingsAt(settingsSectionModel, settingsRowVariant)
+			m = upd(m, tea.KeyPressMsg{Code: tc.up})
+			if m.settingsCurrentSection() != settingsSectionModel || m.settingsCursor != settingsRowModel {
+				t.Fatalf("up within model = section %d row %d", m.settingsCurrentSection(), m.settingsCursor)
+			}
+
+			m = upd(m, tea.KeyPressMsg{Code: tc.up})
+			if m.settingsCurrentSection() != settingsSectionModel || m.settingsCursor != settingsRowModel {
+				t.Fatalf("up at model boundary changed section = %d row %d", m.settingsCurrentSection(), m.settingsCursor)
+			}
+		})
+	}
+}
+
+func TestSettingsSelectedDescriptionDoesNotReflowRows(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = mm.(Model)
+
+	rowPositions := func(model Model) map[int]int {
+		positions := make(map[int]int)
+		for index, line := range model.visibleSettingsPaintLines(model.settingsContentWidth()) {
+			if line.kind == settingsLineRow && line.row >= 0 {
+				positions[line.row] = index
+			}
+		}
+		return positions
+	}
+
+	m = m.openSettingsAt(settingsSectionRecaps, settingsRowRecapEnabled)
+	first := rowPositions(m)
+	m = m.openSettingsAt(settingsSectionRecaps, settingsRowRecapModel)
+	second := rowPositions(m)
+	for _, row := range []int{settingsRowRecapEnabled, settingsRowRecapModel, settingsRowRecapAfterChats} {
+		if first[row] != second[row] {
+			t.Fatalf("row %d moved from line %d to %d", row, first[row], second[row])
+		}
+	}
+}
+
+func TestSettingsFilterAndCategoryRailKeepFocusVisible(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 36})
+	m = mm.(Model).openSettings()
+	m = upd(m, tea.KeyPressMsg{Code: '/'})
+	if !m.settingsFilterActive() {
+		t.Fatal("settings filter did not activate")
+	}
+	for _, key := range "retry" {
+		m = upd(m, tea.KeyPressMsg{Code: key, Text: string(key)})
+	}
+	filtered := stripANSI(viewText(m))
+	if !strings.Contains(filtered, "api retries") || strings.Contains(filtered, "new-session model") {
+		t.Fatalf("unexpected filter results:\n%s", filtered)
+	}
+	m = upd(m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.settingsFilterActive() || m.settingsCurrentSection() != settingsSectionRequestRetries {
+		t.Fatalf("filter did not restore focus: filter=%v section=%d", m.settingsFilterActive(), m.settingsCurrentSection())
+	}
+
+	m = m.openSettings().ensureLayout()
+	modelY := -1
+	for y, section := range m.layout.settingsSectionByY {
+		if section == settingsSectionModel {
+			modelY = y
+			break
+		}
+	}
+	if modelY < 0 {
+		t.Fatal("model category missing from settings rail")
+	}
+	mm, _ = m.Update(tea.MouseClickMsg(tea.Mouse{X: m.layout.settingsRailX0 + 1, Y: modelY, Button: tea.MouseLeft}))
+	m = mm.(Model)
+	if m.settingsCurrentSection() != settingsSectionModel || m.settingsCursor != settingsRowModel {
+		t.Fatalf("rail click selected section=%d row=%d", m.settingsCurrentSection(), m.settingsCursor)
+	}
+}
+
+func TestSettingsPickerCancelReturnsToSameSectionAndRow(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		row  int
+	}{
+		{name: "model", row: settingsRowModel},
+		{name: "variant", row: settingsRowVariant},
+		{name: "recap model", row: settingsRowRecapModel},
+		{name: "child model", row: settingsRowChildModel},
+		{name: "child variant", row: settingsRowChildVariant},
+		{name: "explore model", row: settingsRowExploreModel},
+		{name: "role", row: settingsRowAgentsRole},
+		{name: "tools", row: settingsRowTools},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
-			mm, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: tc.height})
-			m = mm.(Model).openSettings()
-			for index, want := range tc.want {
-				if m.settingsCursor != want {
-					t.Fatalf("cursor at step %d = %d, want painted row %d", index, m.settingsCursor, want)
-				}
-				if index == len(tc.want)-1 {
-					break
-				}
-				m = upd(m, tea.KeyPressMsg{Code: tea.KeyDown})
+			m.models = []string{"deepseek-v4-flash"}
+			m.modelInfos = []modelscache.Info{{ID: "deepseek-v4-flash", Variants: []string{"low", "high"}}}
+			section, ok := settingsSectionForRow(tc.row)
+			if !ok {
+				t.Fatalf("row %d has no section", tc.row)
+			}
+			m = m.openSettingsAt(section, tc.row)
+			m = upd(m, tea.KeyPressMsg{Code: tea.KeyEnter})
+			if !m.pickerMode {
+				t.Fatalf("row %d did not open its shared picker", tc.row)
+			}
+			m = upd(m, tea.KeyPressMsg{Code: tea.KeyEscape})
+			if !m.settingsMode || m.pickerMode || m.settingsCurrentSection() != section || m.settingsCursor != tc.row {
+				t.Fatalf("picker return = settings=%v picker=%v section=%d row=%d", m.settingsMode, m.pickerMode, m.settingsCurrentSection(), m.settingsCursor)
 			}
 		})
 	}
@@ -1230,12 +1317,13 @@ func TestSettingsMouseHover(t *testing.T) {
 	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
 	mm, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m = mm.(Model).openSettings()
+	m.settingsCursor = settingsRowSteps
 
 	if m.settingsHover != -1 {
 		t.Fatalf("settingsHover on init = %d, want -1", m.settingsHover)
 	}
 
-	// Move mouse over row 5 (parent max steps)
+	// Move mouse over the visible parent max steps row.
 	rowY := -1
 	for y := 0; y < 30; y++ {
 		if r, ok := m.settingsRowAtScreenY(y); ok && r == settingsRowSteps {

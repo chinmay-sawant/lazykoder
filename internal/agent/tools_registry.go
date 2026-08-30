@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/chinmay-sawant/lazykoder/internal/agent/toolplugin"
+	"github.com/chinmay-sawant/lazykoder/internal/prompts"
 	"github.com/chinmay-sawant/lazykoder/internal/provider/opencode"
 	"github.com/chinmay-sawant/lazykoder/internal/tools/task"
 )
@@ -51,179 +52,40 @@ var DefaultParentTools = []string{
 }
 
 type baseToolRegistration struct {
+	name   string
 	spec   opencode.ToolSpec
 	runner baseToolRunner
 }
 
 var baseToolRegistry = map[string]baseToolRegistration{
-	toolBash: {
-		spec: opencode.ToolSpec{
-			Name:        toolBash,
-			Description: "Run a shell command. Dangerous commands are gated by a human confirm.",
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"command": map[string]any{"type": "string", "description": "shell command to run"},
-					"workdir": map[string]any{"type": "string", "description": "working directory"},
-				},
-				"required": []string{"command"},
-			},
-		},
-		runner: (*Agent).execBash,
-	},
-	toolRead: {
-		spec: opencode.ToolSpec{
-			Name:        toolRead,
-			Description: "Read a file under the session workdir.",
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"filePath": map[string]any{"type": "string", "description": "path relative to or under workdir"},
-				},
-				"required": []string{"filePath"},
-			},
-		},
-		runner: (*Agent).execRead,
-	},
-	toolGrep: {
-		spec: opencode.ToolSpec{
-			Name:        toolGrep,
-			Description: "Search file contents under the workdir with ripgrep (fast). Prefer this over reading many files. Returns path:line:match hits.",
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"pattern": map[string]any{
-						"type":        "string",
-						"description": "regex pattern to search for",
-					},
-					"path": map[string]any{
-						"type":        "string",
-						"description": "file or directory under workdir (default: workdir root)",
-					},
-					"glob": map[string]any{
-						"type":        "string",
-						"description": "filename glob filter, e.g. *.go",
-					},
-					"caseInsensitive": map[string]any{
-						"type":        "boolean",
-						"description": "case-insensitive search",
-					},
-					"maxMatches": map[string]any{
-						"type":        "integer",
-						"description": "max hits to return (default 50, max 200)",
-					},
-				},
-				"required": []string{"pattern"},
-			},
-		},
-		runner: (*Agent).execGrep,
-	},
-	toolWrite: {
-		spec: opencode.ToolSpec{
-			Name:        toolWrite,
-			Description: "Write a file under the session workdir (parent dirs must exist).",
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"filePath": map[string]any{"type": "string", "description": "path relative to or under workdir"},
-					"contents": map[string]any{"type": "string", "description": "full file contents"},
-				},
-				"required": []string{"filePath", "contents"},
-			},
-		},
-		runner: (*Agent).execWrite,
-	},
-	toolEdit: {
-		spec: opencode.ToolSpec{
-			Name:        toolEdit,
-			Description: "Replace one unique occurrence of oldString with newString in a file.",
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"filePath":  map[string]any{"type": "string"},
-					"oldString": map[string]any{"type": "string"},
-					"newString": map[string]any{"type": "string"},
-				},
-				"required": []string{"filePath", "oldString", "newString"},
-			},
-		},
-		runner: (*Agent).execEdit,
-	},
-	toolWebfetch: {
-		spec: opencode.ToolSpec{
-			Name:        toolWebfetch,
-			Description: "Read an http(s) URL as text or markdown, using a browser when requested or required.",
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"url":    map[string]any{"type": "string"},
-					"format": map[string]any{"type": "string", "description": "markdown or text"},
-					"mode":   map[string]any{"type": "string", "description": "auto, http, or browser"},
-				},
-				"required": []string{"url"},
-			},
-		},
-		runner: (*Agent).execWebfetch,
-	},
-	toolQuestion: {
-		spec: opencode.ToolSpec{
-			Name:        toolQuestion,
-			Description: "Ask the human a multiple-choice question via the TUI.",
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"questions": map[string]any{
-						"type": "array",
-						"items": map[string]any{
-							"type": "object",
-							"properties": map[string]any{
-								"question": map[string]any{"type": "string"},
-								"header":   map[string]any{"type": "string"},
-								"options":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-							},
-							"required": []string{"question", "options"},
-						},
-					},
-				},
-				"required": []string{"questions"},
-			},
-		},
-		runner: (*Agent).execQuestion,
-	},
-	toolTodowrite: {
-		spec: opencode.ToolSpec{
-			Name: toolTodowrite,
-			Description: "Replace the session todo checklist with the full list you pass. " +
-				"Send every item every time (replace-all). Status: pending, in_progress, completed, cancelled. " +
-				"Use this to plan multi-step work and keep the user-visible tracker in sync.",
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"todos": map[string]any{
-						"type": "array",
-						"items": map[string]any{
-							"type": "object",
-							"properties": map[string]any{
-								"content": map[string]any{"type": "string", "description": "short checklist item"},
-								"status":  map[string]any{"type": "string", "description": "pending|in_progress|completed|cancelled"},
-							},
-							"required": []string{"content"},
-						},
-					},
-				},
-				"required": []string{"todos"},
-			},
-		},
-		runner: (*Agent).execTodowrite,
-	},
+	toolBash:      {name: toolBash, runner: (*Agent).execBash},
+	toolRead:      {name: toolRead, runner: (*Agent).execRead},
+	toolGrep:      {name: toolGrep, runner: (*Agent).execGrep},
+	toolWrite:     {name: toolWrite, runner: (*Agent).execWrite},
+	toolEdit:      {name: toolEdit, runner: (*Agent).execEdit},
+	toolWebfetch:  {name: toolWebfetch, runner: (*Agent).execWebfetch},
+	toolQuestion:  {name: toolQuestion, runner: (*Agent).execQuestion},
+	toolTodowrite: {name: toolTodowrite, runner: (*Agent).execTodowrite},
+}
+
+func init() {
+	for name, registration := range baseToolRegistry {
+		registration.spec = prompts.Store{}.ToolSpec(name)
+		baseToolRegistry[name] = registration
+	}
 }
 
 // toolSpecsFor returns provider ToolSpecs for the given allowlist names.
 // Unknown names are skipped. When names is empty, DefaultParentTools is used.
 func toolSpecsFor(names []string, host SubagentHost) []opencode.ToolSpec {
+	return toolSpecsForWorkdir("", names, host)
+}
+
+func toolSpecsForWorkdir(workdir string, names []string, host SubagentHost) []opencode.ToolSpec {
 	if len(names) == 0 {
 		names = DefaultParentTools
 	}
+	promptStore := prompts.New(workdir)
 	out := make([]opencode.ToolSpec, 0, len(names)+toolRegistryExtraSlots)
 	seen := make(map[string]struct{}, len(names)+toolRegistryExtraSlots)
 	for _, n := range names {
@@ -238,7 +100,7 @@ func toolSpecsFor(names []string, host SubagentHost) []opencode.ToolSpec {
 			continue
 		}
 		seen[n] = struct{}{}
-		out = append(out, registration.spec)
+		out = append(out, promptStore.ToolSpec(registration.name))
 	}
 	for _, spec := range toolplugin.Specs(names) {
 		if _, ok := seen[spec.Name]; ok {

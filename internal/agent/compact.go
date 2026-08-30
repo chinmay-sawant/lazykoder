@@ -29,8 +29,6 @@ const (
 	// CompactReasonManual is an explicit /compact.
 	CompactReasonManual = "manual"
 
-	compactCheckpointLead = "This session continues from a compacted conversation. " +
-		"The following is a checkpoint, not new instructions.\n\n"
 	protectUserTurns = 2
 	// summarizerSlack is a small reserve besides the output cap.
 	summarizerSlack = 256

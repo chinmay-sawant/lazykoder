@@ -22,8 +22,8 @@ func TestAskDialogWrapsQuestionAndOptions(t *testing.T) {
 
 	card := stripANSI(m.askOverlay())
 	for _, line := range strings.Split(card, "\n") {
-		if lipgloss.Width(line) > m.overlayWidth() {
-			t.Fatalf("dialog line exceeds card width %d: width=%d line=%q", m.overlayWidth(), lipgloss.Width(line), line)
+		if lipgloss.Width(line) > m.askCardWidth() {
+			t.Fatalf("dialog line exceeds card width %d: width=%d line=%q", m.askCardWidth(), lipgloss.Width(line), line)
 		}
 	}
 	for _, text := range []string{"deliberately long question", "wrapped continuation", "second option"} {
@@ -34,6 +34,21 @@ func TestAskDialogWrapsQuestionAndOptions(t *testing.T) {
 	_, _, lines, spans := m.askOverlayLines()
 	if len(spans) != 3 || spans[0].end-spans[0].start < 2 {
 		t.Fatalf("option wrapping spans = %#v, lines=%d (expected 2 options + custom)", spans, len(lines))
+	}
+}
+
+func TestAskDialogUsesBoundedWidthOnWideTerminal(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 36})
+	m = mm.(Model)
+	m.askMode = true
+	m.askQuestion.Question = "Choose a direction for the layout."
+	m.askQuestion.Options = []string{"Keep the current layout", "Use the new workspace"}
+	if got := m.askCardWidth(); got >= m.overlayWidth() || got != askCardMaxW {
+		t.Fatalf("wide ask card width = %d, overlay width = %d", got, m.overlayWidth())
+	}
+	if _, _, width, _, ok := m.askOverlayRect(); !ok || width > m.askCardWidth() {
+		t.Fatalf("ask overlay rect does not use bounded width: width=%d ok=%v", width, ok)
 	}
 }
 

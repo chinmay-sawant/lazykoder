@@ -23,11 +23,11 @@ a wrapper around the OpenCode CLI or its global `~/.local/share/opencode/opencod
 | `internal/agent` | turn loop, `buildHistory`, compact policy and summarizer run |
 | `internal/orchestrator` | bounded no-tools planning and strict plan parsing |
 | `internal/recap` | time-windowed snapshots, hidden no-tools workers, and atomic local artifacts |
-| `internal/prompts` | embedded `compact.md` via `go:embed` (`prompts.Must`) |
+| `internal/prompts` | per-workspace prompt loader, embedded defaults, templates, and built-in tool schemas |
 | `internal/subagent` | Manager + Host + AgentRunner for concurrent children |
 | `internal/policy` | bash classifier returning Allow/Ask/Deny |
 | `internal/agent/toolplugin` | executable contract and registry for compiled or discovered tools |
-| `internal/tools` | declarative shell-tool catalog plus bash, read, grep, write, edit, question, webfetch, and task schemas |
+| `internal/tools` | declarative shell-tool catalog plus bash, read, grep, write, edit, question, bounded HTTP and browser webfetch, and task schemas |
 | `internal/roles` | built-in and discovered child-role registry and policy descriptors |
 | `internal/settings` | project settings: provider, model, orchestration, slot, `agents` caps, tools, `compaction`, `recap`, skills, and API retry policy |
 | `internal/ui/chat` | transcript, prompt, status line, model, provider, tool, and role pickers |
@@ -47,6 +47,7 @@ cwd = process working directory
      migrate schema
      ensure .gitignore lists .lazykoder/ (append only)
      ensure settings.json, providers.json, tools.json, roles.json (0600)
+     ensure prompts/ and its editable Markdown and JSON defaults (0600)
 2. envfile.Load(<cwd>/.env)        # keys; real env wins
 3. load provider, tool, and role catalogs; load `provider.active`; create the parent client and create the child
    client from `orchestrator.provider` (OpenCode is the child default)
@@ -89,6 +90,13 @@ request-time tool and role providers alongside skills before calling the model.
 Continue, hidden turns, compaction, and child sessions do not rescan. Child
 jobs carry their explicit tool allowlist and role ID; the manager reads the
 registered role's writer and model-class policy.
+
+Prompt text and built-in tool schemas are resolved through
+`internal/prompts.Store` using the project workdir. Embedded defaults make
+tests and pre-bootstrap calls safe, while `workspace.Init` seeds the same files
+under `.lazykoder/prompts` without overwriting local edits. Dynamic evidence
+serialization stays typed in Go; authored model instructions live in the
+editable prompt files.
 
 ## Providers
 
@@ -327,13 +335,13 @@ The policy is stored as `retry.max_retries` and `retry.delay_seconds` and can
 be changed in `/settings`.
 
 **History.** The latest `compaction` part wins. `buildHistory` injects
-one synthetic user message (`This session continues from a compacted
-conversation...` plus the summary), then messages from
+one synthetic user message using `agent/compact-checkpoint-lead.md` plus the
+summary, then messages from
 `tail_start_message_id` onward. SQLite rows are never deleted.
 `messages.visible` is TUI history-delete only and is ignored here.
 
 **Summarizer.** Tools off, `MaxTokens` 4096, prompt from
-`internal/prompts/compact.md` (eight headings). Extra `/compact` notes
+`.lazykoder/prompts/compact.md` (eight headings). Extra `/compact` notes
 append a Compact instructions block. If the incoming window cannot hold
 the head, the outgoing (larger) model writes the checkpoint. A huge head
 is split and combined. Empty summary or a head that still cannot fit is
@@ -371,8 +379,11 @@ concurrency (default 4, hard max 20), runs each child as `agent.Agent` on a
 hidden child session (`kind=subagent`), and returns only a final summary to
 the parent model. Settings live under `agents` in
 `.lazykoder/settings.json`. Depth is 1: children cannot spawn further tasks.
-The manager stores the queued job before starting its runner. A later store or
-recovery failure is surfaced through the manager and the TUI.
+The manager stores the queued job before starting its runner. `task_cancel`
+signals through the manager and returns before worker cleanup; `task_status` and
+`task_wait` report the terminal state afterward. Status, wait, and cancel are
+scoped to the current parent session. A later store or recovery failure is
+surfaced through the manager and the TUI.
 
 ## Module identity
 

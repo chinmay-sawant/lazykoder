@@ -27,27 +27,33 @@
 Taken from a live `bin/lk` run against the latest session in this project.
 
 <p align="center">
-  <img src="screenshots/chat-session.png" alt="Latest chat session" width="820">
+  <img src="screenshots/home.png" alt="New session home screen" width="820">
   <br>
-  <em>Launch opens a fresh session; use /resume for past runs</em>
+  <em>Launch opens a fresh session with the prompt ready for input</em>
 </p>
 
 <p align="center">
-  <img src="screenshots/slash-menu.png" alt="Slash command menu" width="820">
+  <img src="screenshots/chat.png" alt="Chat session with tool activity" width="820">
   <br>
-  <em>Type <code>/</code> for Session, Model, Project, and Help commands (including <code>/compact</code>)</em>
+  <em>Chat, tool activity, and the composer share one terminal view</em>
 </p>
 
 <p align="center">
-  <img src="screenshots/resume.png" alt="Session resume picker" width="820">
+  <img src="screenshots/models.png" alt="Model picker" width="820">
   <br>
-  <em><code>/resume</code> or <code>ctrl+s</code> lists runs for this project</em>
+  <em>Browse models grouped by provider before starting a session</em>
 </p>
 
 <p align="center">
-  <img src="screenshots/help.png" alt="Help overlay" width="820">
+  <img src="screenshots/question.png" alt="Interactive question dialog" width="820">
   <br>
-  <em><code>?</code> or <code>/help</code> opens the key map</em>
+  <em>Interactive questions pause the agent until you choose an answer</em>
+</p>
+
+<p align="center">
+  <img src="screenshots/settings.png" alt="Settings workspace" width="820">
+  <br>
+  <em>Project settings use a category rail and focused content pane</em>
 </p>
 
 ## Quick start

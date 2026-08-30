@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/chinmay-sawant/lazykoder/internal/db"
+	"github.com/chinmay-sawant/lazykoder/internal/prompts"
 )
 
 type histEntry struct {
@@ -50,7 +51,7 @@ func (a *Agent) loadHistory(ctx context.Context) ([]ChatMessage, error) {
 	if checkpoint != nil {
 		out = append(out, ChatMessage{
 			Role:    "user",
-			Content: compactCheckpointLead + checkpoint.Summary,
+			Content: prompts.New(a.workdir).Must("agent/compact-checkpoint-lead.md") + "\n" + checkpoint.Summary,
 		})
 	}
 	for _, entry := range entries[start:] {

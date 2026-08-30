@@ -19,7 +19,7 @@ import (
 	"github.com/chinmay-sawant/lazykoder/internal/settings"
 )
 
-func TestModelPickerOpensOnlyFromModelClick(t *testing.T) {
+func TestModelSettingsOpenOnlyFromModelClick(t *testing.T) {
 	fake := newFakeProvider(t, 0, respBody("hi", "stop", nil))
 	m := New(Options{Store: newTestStore(t), Client: newClient(fake.srv), Workdir: t.TempDir()})
 
@@ -31,9 +31,16 @@ func TestModelPickerOpensOnlyFromModelClick(t *testing.T) {
 		t.Fatalf("prompt after m = %q, want %q", got, "m")
 	}
 
-	m = clickModelStatus(t, m)
-	if !m.pickerMode {
-		t.Fatal("clicking the model status did not open the picker")
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 36})
+	m = mm.(Model)
+	left, top, right, _, ok := m.modelStatusRect()
+	if !ok {
+		t.Fatal("model status chip is not clickable")
+	}
+	mm, _ = m.Update(tea.MouseClickMsg(tea.Mouse{X: (left + right) / 2, Y: top, Button: tea.MouseLeft}))
+	m = mm.(Model)
+	if !m.settingsMode || m.pickerMode || m.settingsCurrentSection() != settingsSectionModel || m.settingsCursor != settingsRowModel {
+		t.Fatalf("model status click = settings=%v picker=%v section=%d row=%d", m.settingsMode, m.pickerMode, m.settingsCurrentSection(), m.settingsCursor)
 	}
 }
 

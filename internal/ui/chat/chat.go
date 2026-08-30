@@ -117,28 +117,30 @@ const (
 )
 
 var (
-	errStyle           lipgloss.Style
-	busyStyle          lipgloss.Style
-	hintStyle          lipgloss.Style
-	userStyle          lipgloss.Style
-	userRoleStyle      lipgloss.Style
-	assistantRoleStyle lipgloss.Style
-	roleStyle          lipgloss.Style
-	reasoningStyle     lipgloss.Style
-	toolCardStyle      lipgloss.Style
-	toolOutputStyle    lipgloss.Style
-	editCardStyle      lipgloss.Style
-	selectionStyle     lipgloss.Style
-	diffAddStyle       lipgloss.Style
-	diffDelStyle       lipgloss.Style
-	diffMetaStyle      lipgloss.Style
-	diffCtxStyle       lipgloss.Style
+	errStyle            lipgloss.Style
+	busyStyle           lipgloss.Style
+	hintStyle           lipgloss.Style
+	composerFooterStyle lipgloss.Style
+	userStyle           lipgloss.Style
+	userRoleStyle       lipgloss.Style
+	assistantRoleStyle  lipgloss.Style
+	roleStyle           lipgloss.Style
+	reasoningStyle      lipgloss.Style
+	toolCardStyle       lipgloss.Style
+	toolOutputStyle     lipgloss.Style
+	editCardStyle       lipgloss.Style
+	selectionStyle      lipgloss.Style
+	diffAddStyle        lipgloss.Style
+	diffDelStyle        lipgloss.Style
+	diffMetaStyle       lipgloss.Style
+	diffCtxStyle        lipgloss.Style
 )
 
 func configureThemeStyles() {
 	errStyle = lipgloss.NewStyle().Foreground(theme.ColorDanger())
 	busyStyle = lipgloss.NewStyle().Foreground(theme.ColorAccent())
 	hintStyle = lipgloss.NewStyle().Foreground(theme.ColorMute())
+	composerFooterStyle = lipgloss.NewStyle().Foreground(theme.ColorText())
 	userStyle = lipgloss.NewStyle().Foreground(theme.ColorAccent())
 	userRoleStyle = lipgloss.NewStyle().Foreground(theme.ColorAccent()).Bold(true)
 	assistantRoleStyle = lipgloss.NewStyle().Foreground(theme.ColorAssistantBorder()).Bold(true)
@@ -461,8 +463,8 @@ var slashCommands = []slashCmd{
 	{name: "/continue", description: "resume after a step-limit stop (or send continue)", group: "Session"},
 	{name: "/compact", description: "summarize older context now (optional notes)", group: "Session"},
 	{name: "/provider", description: "select the active chat provider", group: "Model"},
-	{name: "/model", description: "search and switch the live chat model", group: "Model"},
-	{name: "/variant", description: "switch live reasoning effort", group: "Model"},
+	{name: "/model", description: "open model settings for new chats", group: "Model"},
+	{name: "/variant", description: "open reasoning settings for new chats", group: "Model"},
 	{name: "/refresh", description: "reload the model list into models.json", group: "Model"},
 	{name: "/agents", description: "open the sub-agent drawer and logs", aliases: []string{"subs", "subagents"}, group: "Project"},
 	{name: "/history", description: "open memory history for the current chat", group: "Project"},
@@ -508,12 +510,21 @@ type rolesMsg struct {
 }
 
 type eventMsg struct {
-	seq int
-	ev  agent.Event
+	seq    int
+	ev     agent.Event
+	events <-chan agent.Event
+	errs   <-chan error
 }
 
 type eventDoneMsg struct {
-	seq int
+	seq    int
+	err    error
+	events <-chan agent.Event
+	errs   <-chan error
+}
+
+type subagentCancelDoneMsg struct {
+	id  string
 	err error
 }
 
@@ -853,10 +864,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.askWatch()
 	case eventMsg:
 		if msg.seq != m.turnSeq {
-			return m, nil
+			return m, m.watchEvents(msg.seq, msg.events, msg.errs)
 		}
 		m = m.applyEvent(msg.ev)
-		return m, m.watchEvents(msg.seq)
+		return m, m.watchEvents(msg.seq, msg.events, msg.errs)
 	case eventDoneMsg:
 		if msg.seq != m.turnSeq {
 			return m, nil
@@ -894,6 +905,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(worktreeCmd, memoryCmd, recapCmd, pulseTick())
 		}
 		return m, tea.Batch(worktreeCmd, memoryCmd, recapCmd)
+	case subagentCancelDoneMsg:
+		if msg.err != nil {
+			m.err = msg.err.Error()
+		}
+		m = m.reloadSubagentRows()
+		return m.resizeSubagentDrawer(), nil
 	case pulseMsg:
 		// Keep throbbing for live sub-agents even after the parent turn ends.
 		if !m.busy && !m.hasInFlightTools() && !m.hasLiveSubagents() && !m.recallScanning && !m.skillsScanning && m.memoryScanJobs == 0 {
@@ -1745,8 +1762,8 @@ func isCancelErr(err error) bool {
 }
 
 const (
-	promptMaxRows = 6
-	promptMinRows = 1
+	promptMaxRows = 7
+	promptMinRows = 2
 )
 
 func newPromptArea(width int) textarea.Model {

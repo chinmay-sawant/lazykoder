@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/chinmay-sawant/lazykoder/internal/db"
 	"github.com/chinmay-sawant/lazykoder/internal/policy"
@@ -428,14 +429,224 @@ func TestSendWebfetchBrowserMode(t *testing.T) {
 	}
 }
 
+func TestSendWebfetchAutoFallbackPersistsMetadata(t *testing.T) {
+	webSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer webSrv.Close()
+	args, _ := json.Marshal(map[string]any{
+		"url":  "http://203.0.113.11/blocked",
+		"mode": "auto",
+	})
+	fake := newFakeProvider(t,
+		respBody("", "", "tool-calls", []fakeToolCall{{ID: "c_auto", Name: "webfetch", Args: string(args)}}, testUsage),
+		respBody("done", "", "stop", nil, nil),
+	)
+	reader := &testBrowserReader{result: webfetch.Result{
+		Output:   "rendered page",
+		Metadata: map[string]any{"title": "Rendered", "final_url": "http://203.0.113.11/final"},
+	}}
+	st, path := newTestEnv(t)
+	a := New(st, newClient(t, fake.srv), t.TempDir(), Options{
+		WebfetchClient:  &http.Client{Transport: agentWebfetchTransport(webSrv)},
+		WebfetchBrowser: reader,
+	})
+	if _, err := sendAndCollect(t, a, "read the blocked page"); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if reader.url != "http://203.0.113.11/blocked" {
+		t.Fatalf("browser URL = %q", reader.url)
+	}
+	rows := queryToolCalls(t, path)
+	if len(rows) != 1 || rows[0].Status != "completed" || rows[0].Output == nil || *rows[0].Output != "rendered page" {
+		t.Fatalf("auto fallback rows = %+v", rows)
+	}
+	raw := openRaw(t, path)
+	var metadata string
+	if err := raw.QueryRow(`SELECT metadata_json FROM tool_calls WHERE call_id = 'c_auto'`).Scan(&metadata); err != nil {
+		t.Fatalf("read metadata: %v", err)
+	}
+	if !strings.Contains(metadata, `"browser_fallback"`) || !strings.Contains(metadata, `"final_url"`) {
+		t.Fatalf("metadata = %q, want fallback and final URL", metadata)
+	}
+}
+
+func TestSendWebfetchBoundsPersistedMetadata(t *testing.T) {
+	args, _ := json.Marshal(map[string]any{"url": "https://example.com/article", "mode": "browser"})
+	fake := newFakeProvider(t,
+		respBody("", "", "tool-calls", []fakeToolCall{{ID: "c_metadata", Name: "webfetch", Args: string(args)}}, testUsage),
+		respBody("done", "", "stop", nil, nil),
+	)
+	reader := &testBrowserReader{result: webfetch.Result{
+		Output:   "bounded page",
+		Metadata: map[string]any{"payload": strings.Repeat("x", maxWebfetchMetadataBytes+1)},
+	}}
+	st, path := newTestEnv(t)
+	a := New(st, newClient(t, fake.srv), t.TempDir(), Options{WebfetchBrowser: reader})
+	if _, err := sendAndCollect(t, a, "read the page"); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	raw := openRaw(t, path)
+	var metadata string
+	if err := raw.QueryRow(`SELECT metadata_json FROM tool_calls WHERE call_id = 'c_metadata'`).Scan(&metadata); err != nil {
+		t.Fatalf("read metadata: %v", err)
+	}
+	if len(metadata) > maxWebfetchMetadataBytes || metadata != `{"metadata_truncated":true}` {
+		t.Fatalf("metadata length = %d, value = %q", len(metadata), metadata)
+	}
+}
+
+func TestSendWebfetchBrowserErrorPersistsError(t *testing.T) {
+	args, _ := json.Marshal(map[string]any{"url": "https://example.com/article", "mode": "browser"})
+	fake := newFakeProvider(t,
+		respBody("", "", "tool-calls", []fakeToolCall{{ID: "c_missing_browser", Name: "webfetch", Args: string(args)}}, testUsage),
+		respBody("done", "", "stop", nil, nil),
+	)
+	reader := &testBrowserReader{err: errors.New("browser unavailable")}
+	st, path := newTestEnv(t)
+	a := New(st, newClient(t, fake.srv), t.TempDir(), Options{WebfetchBrowser: reader})
+	if _, err := sendAndCollect(t, a, "read the page"); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	rows := queryToolCalls(t, path)
+	if len(rows) != 1 || rows[0].Status != "error" || rows[0].Output == nil || !strings.Contains(*rows[0].Output, "browser unavailable") {
+		t.Fatalf("browser error rows = %+v", rows)
+	}
+}
+
+func TestSendCancellationPersistsCancelledBrowserTool(t *testing.T) {
+	args, _ := json.Marshal(map[string]any{
+		"url":  "https://example.com/article",
+		"mode": "browser",
+	})
+	fake := newFakeProvider(t, respBody("", "", "tool-calls", []fakeToolCall{
+		{ID: "c_browser_cancel", Name: "webfetch", Args: string(args)},
+	}, testUsage))
+	reader := &blockingBrowserReader{started: make(chan struct{})}
+	st, path := newTestEnv(t)
+	a := New(st, newClient(t, fake.srv), t.TempDir(), Options{WebfetchBrowser: reader})
+	ctx, cancel := context.WithCancel(context.Background())
+	events := make(chan Event, 256)
+	result := make(chan error, 1)
+	go func() { result <- a.Send(ctx, "read this page", events) }()
+	select {
+	case <-reader.started:
+		cancel()
+	case <-time.After(time.Second):
+		t.Fatal("browser tool did not start")
+	}
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Send error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Send did not stop after cancellation")
+	}
+	for range events {
+	}
+	rows := queryToolCalls(t, path)
+	if len(rows) != 1 || rows[0].Status != "cancelled" || rows[0].Output == nil || *rows[0].Output != "cancelled" {
+		t.Fatalf("cancelled browser tool rows = %+v", rows)
+	}
+	if fake.requestCount() != 1 {
+		t.Fatalf("provider requests = %d, want 1", fake.requestCount())
+	}
+}
+
+func TestSendTimeoutPersistsCancelledBrowserTool(t *testing.T) {
+	args, _ := json.Marshal(map[string]any{
+		"url":  "https://example.com/article",
+		"mode": "browser",
+	})
+	fake := newFakeProvider(t, respBody("", "", "tool-calls", []fakeToolCall{
+		{ID: "c_browser_timeout", Name: "webfetch", Args: string(args)},
+	}, testUsage))
+	reader := &blockingBrowserReader{started: make(chan struct{})}
+	st, path := newTestEnv(t)
+	a := New(st, newClient(t, fake.srv), t.TempDir(), Options{WebfetchBrowser: reader})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	events := make(chan Event, 256)
+	result := make(chan error, 1)
+	go func() { result <- a.Send(ctx, "read this page", events) }()
+	select {
+	case <-reader.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("browser tool did not start")
+	}
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("Send error = %v, want context.DeadlineExceeded", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Send did not stop after timeout")
+	}
+	for range events {
+	}
+	rows := queryToolCalls(t, path)
+	if len(rows) != 1 || rows[0].Status != "cancelled" || rows[0].Output == nil || *rows[0].Output != "cancelled" {
+		t.Fatalf("timed out browser tool rows = %+v", rows)
+	}
+}
+
+func TestSendCancellationPersistsCancelledBashTool(t *testing.T) {
+	args := `{"command":"sleep 10"}`
+	fake := newFakeProvider(t, respBody("", "", "tool-calls", []fakeToolCall{
+		{ID: "c_bash_cancel", Name: "bash", Args: args},
+	}, testUsage))
+	st, path := newTestEnv(t)
+	a := New(st, newClient(t, fake.srv), t.TempDir(), Options{DisableStreaming: true})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events := make(chan Event, 256)
+	result := make(chan error, 1)
+	go func() { result <- a.Send(ctx, "run the command", events) }()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if rows := queryToolCalls(t, path); len(rows) == 1 {
+			cancel()
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Send error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Send did not stop after bash cancellation")
+	}
+	for range events {
+	}
+	rows := queryToolCalls(t, path)
+	if len(rows) != 1 || rows[0].Status != "cancelled" || rows[0].Output == nil || *rows[0].Output != "cancelled" {
+		t.Fatalf("cancelled bash tool rows = %+v", rows)
+	}
+}
+
 type testBrowserReader struct {
 	result webfetch.Result
+	err    error
 	url    string
 }
 
 func (r *testBrowserReader) Read(_ context.Context, url string) (webfetch.Result, error) {
 	r.url = url
-	return r.result, nil
+	return r.result, r.err
+}
+
+type blockingBrowserReader struct {
+	started chan struct{}
+}
+
+func (r *blockingBrowserReader) Read(ctx context.Context, _ string) (webfetch.Result, error) {
+	close(r.started)
+	<-ctx.Done()
+	return webfetch.Result{}, ctx.Err()
 }
 
 func TestSendQuestionDeclinedAsk(t *testing.T) {

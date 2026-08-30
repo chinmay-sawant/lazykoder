@@ -1,0 +1,13 @@
+{
+  "name": "webfetch",
+  "description": "Read an http(s) URL as text or markdown, using a browser when requested or required.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "url": {"type": "string"},
+      "format": {"type": "string", "description": "markdown or text"},
+      "mode": {"type": "string", "description": "auto, http, or browser"}
+    },
+    "required": ["url"]
+  }
+}

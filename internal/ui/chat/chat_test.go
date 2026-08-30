@@ -586,6 +586,8 @@ func TestTipsShowWhenIdle(t *testing.T) {
 	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
 	mm, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 36})
 	m = mm.(Model)
+	m.items = []transcriptItem{{kind: itemUser, text: "hello"}}
+	m.syncTranscript()
 	v := stripANSI(viewText(m))
 	if !strings.Contains(v, tips.At(0)) {
 		t.Fatalf("idle tip missing from view: %q", v)
@@ -623,6 +625,8 @@ func TestTipsRotateOnTick(t *testing.T) {
 	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
 	mm0, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 36})
 	m = mm0.(Model)
+	m.items = []transcriptItem{{kind: itemUser, text: "hello"}}
+	m.syncTranscript()
 	if got := m.tipsIndex; got != 0 {
 		t.Fatalf("tipsIndex = %d, want 0", got)
 	}
@@ -2503,8 +2507,17 @@ func TestEmptyStateShown(t *testing.T) {
 	}
 	m.items = append(m.items, transcriptItem{kind: itemUser, text: "hi"})
 	m.syncTranscript()
-	if strings.Contains(stripANSI(viewText(m)), "ask anything about this project") {
+	if strings.Contains(stripANSI(viewText(m)), "start with a request about this project") {
 		t.Fatal("empty state still shown after a line")
+	}
+}
+
+func TestEmptySessionHidesRotatingTip(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 36})
+	m = mm.(Model)
+	if m.tipsVisible() || strings.Contains(stripANSI(viewText(m)), tips.At(0)) {
+		t.Fatalf("empty session showed a detached tip: %q", stripANSI(viewText(m)))
 	}
 }
 

@@ -1,0 +1,13 @@
+{
+  "name": "edit",
+  "description": "Replace one unique occurrence of oldString with newString in a file.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "filePath": {"type": "string"},
+      "oldString": {"type": "string"},
+      "newString": {"type": "string"}
+    },
+    "required": ["filePath", "oldString", "newString"]
+  }
+}

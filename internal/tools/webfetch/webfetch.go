@@ -45,7 +45,10 @@ type BrowserReader interface {
 // metadata destination rejected by the egress policy.
 var ErrUnsafeDestination = errors.New("webfetch: local or private host is not allowed")
 
-const requestTimeout = 30 * time.Second
+const (
+	requestTimeout = 30 * time.Second
+	maxURLRunes    = 8192
+)
 
 type resolver interface {
 	LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error)
@@ -79,14 +82,18 @@ func RunWithOptions(ctx context.Context, options Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	network := normalizedNetwork(options.network)
 	if mode == ModeBrowser {
+		u, err := parseHTTPURL(options.URL)
+		if err != nil {
+			return Result{}, err
+		}
+		if err := validateURL(ctx, u, network.resolver); err != nil {
+			return Result{}, err
+		}
 		return readBrowser(ctx, options, "")
 	}
 
-	network := options.network
-	if network.resolver == nil || network.dial == nil {
-		network = defaultNetwork
-	}
 	result, err := runHTTP(ctx, options.URL, options.Format, options.Client, true, network)
 	if mode == ModeHTTP {
 		return result, err
@@ -126,14 +133,9 @@ func run(ctx context.Context, urlStr, format string, client *http.Client, networ
 }
 
 func runHTTP(ctx context.Context, urlStr, format string, client *http.Client, normalizeHTML bool, network networkDeps) (Result, error) {
-	u, err := url.Parse(urlStr)
+	u, err := parseHTTPURL(urlStr)
 	if err != nil {
-		return Result{}, fmt.Errorf("webfetch: %w", err)
-	}
-	switch strings.ToLower(u.Scheme) {
-	case "http", "https":
-	default:
-		return Result{}, fmt.Errorf("webfetch: unsupported scheme %q", u.Scheme)
+		return Result{}, err
 	}
 	if err := validateURL(ctx, u, network.resolver); err != nil {
 		return Result{}, err
@@ -218,7 +220,9 @@ func needsBrowser(result Result) bool {
 func readBrowser(ctx context.Context, options Options, reason string) (Result, error) {
 	reader := options.Browser
 	if reader == nil {
-		reader = NewChromeBrowser()
+		browser := NewChromeBrowser()
+		browser.network = normalizedNetwork(options.network)
+		reader = browser
 	}
 	result, err := reader.Read(ctx, options.URL)
 	if err != nil {
@@ -258,6 +262,29 @@ func newClient(client *http.Client, network networkDeps) (*http.Client, error) {
 		return nil
 	}
 	return &copy, nil
+}
+
+func normalizedNetwork(network networkDeps) networkDeps {
+	if network.resolver == nil || network.dial == nil {
+		return defaultNetwork
+	}
+	return network
+}
+
+func parseHTTPURL(urlStr string) (*url.URL, error) {
+	if len([]rune(urlStr)) > maxURLRunes {
+		return nil, fmt.Errorf("webfetch: URL exceeds %d characters", maxURLRunes)
+	}
+	u, err := url.Parse(urlStr)
+	if err != nil {
+		return nil, fmt.Errorf("webfetch: %w", err)
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http", "https":
+	default:
+		return nil, fmt.Errorf("webfetch: unsupported scheme %q", u.Scheme)
+	}
+	return u, nil
 }
 
 func validatedTransport(roundTripper http.RoundTripper, network networkDeps) (*http.Transport, error) {
@@ -323,6 +350,10 @@ func lookupPublicIPs(ctx context.Context, host string, r resolver) ([]net.IPAddr
 	if host == "" {
 		return nil, fmt.Errorf("webfetch: URL host is required")
 	}
+	if strings.Contains(host, "%") {
+		return nil, ErrUnsafeDestination
+	}
+	host = strings.TrimSuffix(host, ".")
 	if isPrivateName(host) {
 		return nil, ErrUnsafeDestination
 	}
@@ -351,10 +382,17 @@ func lookupPublicIPs(ctx context.Context, host string, r resolver) ([]net.IPAddr
 }
 
 func isPrivateName(host string) bool {
-	host = strings.ToLower(host)
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
 	return host == "localhost" || strings.HasSuffix(host, ".localhost") || host == "metadata.google.internal"
 }
 
 func isPrivateIP(ip net.IP) bool {
-	return ip == nil || ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified()
+	if ip == nil {
+		return true
+	}
+	if ipv4 := ip.To4(); ipv4 != nil {
+		ip = ipv4
+	}
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified()
 }

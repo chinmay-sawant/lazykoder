@@ -136,9 +136,12 @@ func main() {
 		Settings:          &cfg,
 		WorktreeDirty:     chat.DefaultWorktreeDirty,
 	}))
-	final, err := p.Run()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "lazykoder:", err)
+	final, runErr := p.Run()
+	if m, ok := final.(chat.Model); ok {
+		m.Shutdown()
+	}
+	if runErr != nil {
+		fmt.Fprintln(os.Stderr, "lazykoder:", runErr)
 		os.Exit(1)
 	}
 	// Print after alt-screen teardown so the banner lands on the normal console.

@@ -38,21 +38,24 @@ const (
 // View layout quantities. Names follow each use site so semantically distinct
 // values that happen to be equal are not collapsed into one const.
 const (
-	percent         = 100  // percentage scale (100%)
-	tipsMinWidth    = 100  // min terminal width to show rotating tips
-	twoColMinWidth  = 100  // min terminal width for the two-column keys layout
-	minCentDisplay  = 0.01 // smallest USD to print with 4 decimals
-	overlayMaxW     = 64   // max inner width of the keys overlay
-	overlayColMin   = 28   // min column width in the two-column keys layout
-	minAvailW       = 8    // min header space before dropping title onto row 2
-	cardHorzPad     = 2    // horizontal card padding
-	cardBorderPad   = 4    // two card-border columns on each side
-	footerChipMin   = 4    // min budget left before truncating a footer chip
-	footerBudgetMin = 4    // min budget for the footer row
-	footerStatGap   = 2    // gap between a footer chip and its stats
-	layoutHalf      = 2    // halving divisor
-	twoColPad       = 2    // space reserved between the two key columns
-	keyColPad       = 2    // gap around a key label in the keys overlay
+	percent          = 100  // percentage scale (100%)
+	tipsMinWidth     = 100  // min terminal width to show rotating tips
+	twoColMinWidth   = 100  // min terminal width for the two-column keys layout
+	minCentDisplay   = 0.01 // smallest USD to print with 4 decimals
+	overlayMaxW      = 96   // max inner width of the keys overlay
+	askCardMaxW      = 74   // widest question dialog, even on a wide terminal
+	askCardWidthPct  = 64   // share of the terminal available to a question
+	emptySessionMaxW = 64   // readable first-action measure on a wide terminal
+	overlayColMin    = 28   // min column width in the two-column keys layout
+	minAvailW        = 8    // min header space before dropping title onto row 2
+	cardHorzPad      = 2    // horizontal card padding
+	cardBorderPad    = 4    // two card-border columns on each side
+	footerChipMin    = 4    // min budget left before truncating a footer chip
+	footerBudgetMin  = 4    // min budget for the footer row
+	footerStatGap    = 2    // gap between a footer chip and its stats
+	layoutHalf       = 2    // halving divisor
+	twoColPad        = 2    // space reserved between the two key columns
+	keyColPad        = 2    // gap around a key label in the keys overlay
 )
 
 // View renders the picker card, slash menu, confirm overlay, or the chat layout.
@@ -389,7 +392,7 @@ func (m Model) alertText() string {
 // tipsVisible reports whether the rotating usage tip should show.
 // Compact terminals keep tips out of the transcript gutter (they collide).
 func (m Model) tipsVisible() bool {
-	if m.busy || m.quitConfirm || m.copyNotice != "" || m.projectInstructionsNotice != "" {
+	if len(m.items) == 0 || m.busy || m.quitConfirm || m.copyNotice != "" || m.projectInstructionsNotice != "" {
 		return false
 	}
 	if m.width < tipsMinWidth {
@@ -489,8 +492,8 @@ func embedComposerBorderLabels(boxed, footer string, border color.Color) string 
 	if plain == "" {
 		return boxed
 	}
-	// Render label with transparent/muted look on the border: faint + muted fg, border bg.
-	label := lipgloss.NewStyle().Foreground(theme.ColorMute()).Faint(true).Background(theme.ColorComposer()).Render(" " + plain + " ")
+	// Keep the footer label legible against the composer surface.
+	label := composerFooterStyle.Background(theme.ColorComposer()).Render(" " + plain + " ")
 	labelPlain := " " + plain + " "
 	labelW := lipgloss.Width(labelPlain)
 	idx := len(lines) - 1
@@ -513,7 +516,7 @@ func embedComposerBorderLabels(boxed, footer string, border color.Color) string 
 		}
 	}
 	_ = string(runes)
-	// Re-style bottom border with border color, but keep label faint/muted via embedded ANSI.
+	// Re-style the bottom border with border color while preserving the footer label.
 	// Build colored bottom: border color for border chars, label already has its own ANSI.
 	borderStyle := lipgloss.NewStyle().Foreground(border).Background(theme.ColorComposer())
 	// Split newBottomPlain around label to color border parts separately
@@ -539,7 +542,7 @@ func (m Model) composerFooter(width int) string {
 	if gap < 1 {
 		gap = 1
 	}
-	return left + strings.Repeat(" ", gap) + hintStyle.Render(right)
+	return left + strings.Repeat(" ", gap) + composerFooterStyle.Render(right)
 }
 
 func (m Model) footerPieces() (tokens, cache, cost, tps string) {
@@ -784,12 +787,12 @@ func (m Model) composerLeft() string {
 		if strings.TrimSpace(m.prompt.Value()) != "" {
 			return busyStyle.Render("enter send now")
 		}
-		return hintStyle.Render("edit")
+		return composerFooterStyle.Render("edit")
 	default:
 		if _, ok := m.selectedHistoryItem(); ok {
-			return hintStyle.Render("history: ↑/↓ previous/next")
+			return composerFooterStyle.Render("history: ↑/↓ previous/next")
 		}
-		return hintStyle.Render("enter send")
+		return composerFooterStyle.Render("enter send")
 	}
 }
 
@@ -850,13 +853,14 @@ func (m Model) transcriptView() string {
 		lines := []string{
 			lazykoderLogo,
 			lipgloss.NewStyle().Foreground(theme.ColorText()).Bold(true).Render("new session"),
-			hintStyle.Render("ask anything about this project"),
+			hintStyle.Render("start with a request about this project"),
 			hintStyle.Render("/ commands   @ files   ? help   /settings"),
 		}
 		if m.projectInstructionsNotice != "" {
 			lines = append(lines, hintStyle.Render(m.projectInstructionsNotice))
 		}
 		empty := strings.Join(lines, "\n")
+		empty = lipgloss.NewStyle().Width(min(w, emptySessionMaxW)).Align(lipgloss.Center).Render(empty)
 		return lipgloss.NewStyle().Width(w).Height(h).Align(lipgloss.Center, lipgloss.Center).Render(empty)
 	}
 	vp := m.paintedTranscript()
@@ -923,28 +927,52 @@ func (m Model) helpOverlay() string {
 	gap := max(1, innerW-lipgloss.Width(title)-lipgloss.Width(closeBtn))
 	header := title + strings.Repeat(" ", gap) + closeBtn
 
-	format := func(row [2]string, width int) string {
-		line := keyStyle.Render(row[0]) + strings.Repeat(" ", max(keyColPad, keyW-lipgloss.Width(row[0])+keyColPad)) + actStyle.Render(row[1])
+	format := func(row [2]string, width int, kw int) string {
+		// Fixed key column + fixed gap so the description column always starts
+		// at the same x. This gives a clean grid instead of ragged spacing.
+		keyPart := keyStyle.Render(row[0])
+		gapW := max(keyColPad, kw-lipgloss.Width(row[0])+keyColPad)
+		actPart := actStyle.Render(row[1])
+		line := keyPart + strings.Repeat(" ", gapW) + actPart
 		if lipgloss.Width(line) > width {
-			return truncateRunes(row[0]+"  "+row[1], width)
+			// Preserve grid alignment even when truncating.
+			plain := truncateRunes(row[0]+"  "+row[1], width)
+			return hintStyle.Render(plain)
+		}
+		// Pad to exact column width so the next column starts aligned.
+		if w := lipgloss.Width(line); w < width {
+			line += strings.Repeat(" ", width-w)
 		}
 		return line
 	}
 	var body strings.Builder
 	if twoCol {
 		mid := (len(rows) + 1) / layoutHalf
+		// Per-column key widths give tighter grids than one global max.
+		keyWLeft, keyWRight := 0, 0
+		for i := range mid {
+			if w := lipgloss.Width(rows[i][0]); w > keyWLeft {
+				keyWLeft = w
+			}
+		}
+		for i := mid; i < len(rows); i++ {
+			if w := lipgloss.Width(rows[i][0]); w > keyWRight {
+				keyWRight = w
+			}
+		}
 		for i := 0; i < mid; i++ {
 			if i > 0 {
 				body.WriteString("\n")
 			}
-			left := format(rows[i], colW)
+			left := format(rows[i], colW, keyWLeft)
 			right := ""
 			if i+mid < len(rows) {
-				right = format(rows[i+mid], colW)
+				right = format(rows[i+mid], colW, keyWRight)
+			} else {
+				right = strings.Repeat(" ", colW)
 			}
-			pad := max(1, innerW-lipgloss.Width(left)-lipgloss.Width(right))
 			body.WriteString(left)
-			body.WriteString(strings.Repeat(" ", pad))
+			body.WriteString(strings.Repeat(" ", twoColPad))
 			body.WriteString(right)
 		}
 	} else {
@@ -952,7 +980,7 @@ func (m Model) helpOverlay() string {
 			if i > 0 {
 				body.WriteString("\n")
 			}
-			body.WriteString(format(row, innerW))
+			body.WriteString(format(row, innerW, keyW))
 		}
 	}
 	body.WriteString("\n")
@@ -1061,7 +1089,7 @@ type askOptionSpan struct {
 // askOverlayLines builds the dialog content and the option row spans from the
 // same wrapped lines used by askOverlay, keeping pointer hit-testing aligned.
 func (m Model) askOverlayLines() (innerW, cardW int, lines []string, spans []askOptionSpan) {
-	cardW = max(minPaneWidth, m.overlayWidth())
+	cardW = m.askCardWidth()
 	innerW = max(1, cardW-cardBorder-cardBorderPad)
 	appendText := func(text string, style lipgloss.Style) {
 		for _, line := range wrapAskText(text, innerW) {
@@ -1120,6 +1148,11 @@ func (m Model) askOverlayLines() (innerW, cardW int, lines []string, spans []ask
 	spans = append(spans, askOptionSpan{index: customIdx, start: start, end: len(lines)})
 	appendText("j/k select  •  enter confirm  •  esc cancel  •  custom writes to LLM", hintStyle)
 	return innerW, cardW, lines, spans
+}
+
+func (m Model) askCardWidth() int {
+	width := min(m.overlayWidth(), min(askCardMaxW, m.width*askCardWidthPct/percent))
+	return max(minPaneWidth, width)
 }
 
 func wrapAskText(text string, width int) []string {

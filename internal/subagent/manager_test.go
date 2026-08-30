@@ -21,8 +21,28 @@ type blockingRunner struct {
 	release chan struct{}
 	summary string
 	// concurrent tracks in-flight Run calls.
+	calls      atomic.Int32
 	concurrent atomic.Int32
 	maxSeen    atomic.Int32
+}
+
+type siblingRunner struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+type stubbornRunner struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (r *stubbornRunner) Run(_ context.Context, job Job) (Result, error) {
+	select {
+	case r.started <- struct{}{}:
+	default:
+	}
+	<-r.release
+	return Result{ID: job.ID, Name: job.Name, Role: job.Role, Status: string(StatusCompleted)}, nil
 }
 
 func newBlockingRunner(summary string) *blockingRunner {
@@ -34,6 +54,7 @@ func newBlockingRunner(summary string) *blockingRunner {
 }
 
 func (r *blockingRunner) Run(ctx context.Context, job Job) (Result, error) {
+	r.calls.Add(1)
 	n := r.concurrent.Add(1)
 	for {
 		old := r.maxSeen.Load()
@@ -57,6 +78,22 @@ func (r *blockingRunner) Run(ctx context.Context, job Job) (Result, error) {
 			Status:  string(StatusCompleted),
 			Summary: r.summary,
 		}, nil
+	case <-ctx.Done():
+		return Result{ID: job.ID, Name: job.Name, Role: job.Role}, ctx.Err()
+	}
+}
+
+func (r *siblingRunner) Run(ctx context.Context, job Job) (Result, error) {
+	select {
+	case r.started <- struct{}{}:
+	default:
+	}
+	if job.Name == "failed" {
+		return Result{ID: job.ID, Name: job.Name, Role: job.Role, Status: string(StatusFailed), Err: "child failed"}, errors.New("child failed")
+	}
+	select {
+	case <-r.release:
+		return Result{ID: job.ID, Name: job.Name, Role: job.Role, Status: string(StatusCompleted), Summary: "sibling completed"}, nil
 	case <-ctx.Done():
 		return Result{ID: job.ID, Name: job.Name, Role: job.Role}, ctx.Err()
 	}
@@ -177,6 +214,323 @@ func TestCancelBeforeFinish(t *testing.T) {
 	}
 }
 
+func TestRequestCancelDoesNotWaitForWorkerCleanup(t *testing.T) {
+	r := &stubbornRunner{started: make(chan struct{}, 1), release: make(chan struct{})}
+	m := NewManager(NewConfig(), r)
+	snap, err := m.Spawn(context.Background(), "ses_request_cancel", "", Spec{Background: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-r.started:
+	case <-time.After(time.Second):
+		t.Fatal("runner did not start")
+	}
+	done := make(chan struct{})
+	go func() {
+		_, _ = m.RequestCancel(snap.ID)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("RequestCancel waited for worker cleanup")
+	}
+	close(r.release)
+	result, err := m.Wait(context.Background(), snap.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != string(StatusCancelled) {
+		t.Fatalf("result status = %q, want cancelled", result.Status)
+	}
+}
+
+func TestRequestCancelAllDoesNotWaitForWorkerCleanup(t *testing.T) {
+	r := &stubbornRunner{started: make(chan struct{}, 2), release: make(chan struct{})}
+	cfg := NewConfig()
+	cfg.MaxConcurrent = 2
+	m := NewManager(cfg, r)
+	var ids []string
+	for range 2 {
+		snap, err := m.Spawn(context.Background(), "ses_request_cancel_all", "", Spec{Background: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, snap.ID)
+	}
+	for range 2 {
+		select {
+		case <-r.started:
+		case <-time.After(time.Second):
+			t.Fatal("runner did not start")
+		}
+	}
+	count := make(chan int, 1)
+	go func() { count <- m.RequestCancelAll("ses_request_cancel_all") }()
+	select {
+	case got := <-count:
+		if got != 2 {
+			t.Fatalf("RequestCancelAll count = %d, want 2", got)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("RequestCancelAll waited for worker cleanup")
+	}
+	close(r.release)
+	for _, id := range ids {
+		result, err := m.Wait(context.Background(), id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Status != string(StatusCancelled) {
+			t.Fatalf("job %s status = %q, want cancelled", id, result.Status)
+		}
+	}
+}
+
+func TestRequestCancelMarksDurableOnlyJob(t *testing.T) {
+	ctx := context.Background()
+	st := openSubagentTestStore(t)
+	parent, err := st.CreateSession(ctx, db.Session{Directory: t.TempDir(), Title: "parent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertSubagentJob(ctx, db.SubagentJob{
+		ID:              "sub_durable_request_cancel",
+		ParentSessionID: parent.ID,
+		Name:            "durable-cancel",
+		Role:            RoleExplore,
+		Status:          string(StatusQueued),
+		Prompt:          "cancel me",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	m := NewManager(NewConfig(), nil)
+	m.SetStore(st)
+	snap, err := m.RequestCancel("sub_durable_request_cancel")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.Status != string(StatusCancelled) {
+		t.Fatalf("snapshot status = %q, want cancelled", snap.Status)
+	}
+	row, err := st.GetSubagentJob(ctx, snap.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.Status != string(StatusCancelled) {
+		t.Fatalf("durable row = %+v, want cancelled", row)
+	}
+}
+
+func TestSiblingFailureDoesNotStrandOtherChildren(t *testing.T) {
+	r := &siblingRunner{started: make(chan struct{}, 2), release: make(chan struct{})}
+	m := NewManager(NewConfig(), r)
+	failed, err := m.Spawn(context.Background(), "ses_siblings", "", Spec{Name: "failed", Background: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed, err := m.Spawn(context.Background(), "ses_siblings", "", Spec{Name: "completed", Background: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		select {
+		case <-r.started:
+		case <-time.After(time.Second):
+			t.Fatal("sibling runner did not start")
+		}
+	}
+	close(r.release)
+	results, err := m.WaitAll(context.Background(), "ses_siblings")
+	if err != nil {
+		t.Fatalf("WaitAll: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("results = %+v, want two siblings", results)
+	}
+	byID := map[string]Result{}
+	for _, result := range results {
+		byID[result.ID] = result
+	}
+	if got := byID[failed.ID]; got.Status != string(StatusFailed) || got.Err != "child failed" {
+		t.Fatalf("failed sibling = %+v", got)
+	}
+	if got := byID[completed.ID]; got.Status != string(StatusCompleted) || got.Summary != "sibling completed" {
+		t.Fatalf("completed sibling = %+v", got)
+	}
+}
+
+func TestCancelRacesWithChildCompletion(t *testing.T) {
+	for range 50 {
+		r := newBlockingRunner("completed")
+		m := NewManager(NewConfig(), r)
+		snap, err := m.Spawn(context.Background(), "ses_cancel_race", "", Spec{Background: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-r.started:
+		case <-time.After(time.Second):
+			t.Fatal("race runner did not start")
+		}
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_, _ = m.RequestCancel(snap.ID)
+		}()
+		go func() {
+			defer wg.Done()
+			close(r.release)
+		}()
+		wg.Wait()
+		result, err := m.Wait(context.Background(), snap.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Status != string(StatusCompleted) && result.Status != string(StatusCancelled) {
+			t.Fatalf("race result = %+v", result)
+		}
+	}
+}
+
+func TestWriterWaitCancellationReleasesSemaphore(t *testing.T) {
+	r := newBlockingRunner("done")
+	cfg := NewConfig()
+	cfg.MaxConcurrent = 2
+	cfg.MaxQueued = 4
+	m := NewManager(cfg, r)
+	first, err := m.Spawn(context.Background(), "ses_writer", "", Spec{Role: RoleGeneral, Background: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-r.started:
+	case <-time.After(time.Second):
+		t.Fatal("first writer did not start")
+	}
+	second, err := m.Spawn(context.Background(), "ses_writer", "", Spec{Role: RoleGeneral, Background: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := m.RequestCancel(second.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status == string(StatusCompleted) {
+		t.Fatalf("cancelled writer already completed: %+v", got)
+	}
+	result, err := m.Wait(context.Background(), second.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != string(StatusCancelled) {
+		t.Fatalf("waiting writer status = %q, want cancelled", result.Status)
+	}
+	close(r.release)
+	if _, err := m.Wait(context.Background(), first.ID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTimeoutBecomesTerminalTimedOut(t *testing.T) {
+	r := newBlockingRunner("late")
+	cfg := NewConfig()
+	cfg.Timeout = 20 * time.Millisecond
+	m := NewManager(cfg, r)
+	snap, err := m.Spawn(context.Background(), "ses_timeout", "", Spec{Background: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := m.Wait(context.Background(), snap.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != string(StatusTimedOut) {
+		t.Fatalf("result status = %q, want timed_out", result.Status)
+	}
+}
+
+func TestCancelAllIsIdempotentAndReleasesSlot(t *testing.T) {
+	r := newBlockingRunner("done")
+	cfg := NewConfig()
+	cfg.MaxConcurrent = 1
+	cfg.MaxQueued = 3
+	m := NewManager(cfg, r)
+	first, err := m.Spawn(context.Background(), "ses_cancel_all", "", Spec{Background: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := m.Spawn(context.Background(), "ses_cancel_all", "", Spec{Background: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-r.started:
+	case <-time.After(time.Second):
+		t.Fatal("first runner did not start")
+	}
+	if got := m.CancelAll("ses_cancel_all"); got != 2 {
+		t.Fatalf("first CancelAll count = %d, want 2", got)
+	}
+	if got := m.CancelAll("ses_cancel_all"); got != 0 {
+		t.Fatalf("repeated CancelAll count = %d, want 0", got)
+	}
+	close(r.release)
+	for _, id := range []string{first.ID, second.ID} {
+		result, err := m.Wait(context.Background(), id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Status != string(StatusCancelled) {
+			t.Fatalf("job %s status = %q, want cancelled", id, result.Status)
+		}
+	}
+	third, err := m.Spawn(context.Background(), "ses_cancel_all", "", Spec{Background: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := m.Wait(context.Background(), third.ID)
+	if err != nil || result.Status != string(StatusCompleted) {
+		t.Fatalf("post-cancel job = %+v, err=%v", result, err)
+	}
+}
+
+func TestCancelAllCancelsDurableOnlyJobs(t *testing.T) {
+	ctx := context.Background()
+	st := openSubagentTestStore(t)
+	parent, err := st.CreateSession(ctx, db.Session{Directory: t.TempDir(), Title: "parent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"sub_durable_cancel_a", "sub_durable_cancel_b"} {
+		if err := st.UpsertSubagentJob(ctx, db.SubagentJob{
+			ID: id, ParentSessionID: parent.ID, Name: id, Role: RoleExplore,
+			Status: string(StatusQueued), Prompt: "wait",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := NewManager(NewConfig(), nil)
+	m.SetStore(st)
+	if got := m.CancelAll(parent.ID); got != 2 {
+		t.Fatalf("CancelAll count = %d, want 2", got)
+	}
+	if got := m.CancelAll(parent.ID); got != 0 {
+		t.Fatalf("repeated CancelAll count = %d, want 0", got)
+	}
+	rows, err := st.ListSubagentJobs(ctx, parent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range rows {
+		if row.Status != string(StatusCancelled) {
+			t.Fatalf("durable row = %+v", row)
+		}
+	}
+}
+
 func TestBackgroundSpawnSurvivesParentCancellation(t *testing.T) {
 	r := newBlockingRunner("background-finished")
 	m := NewManager(NewConfig(), r)
@@ -209,6 +563,39 @@ func TestBackgroundSpawnSurvivesParentCancellation(t *testing.T) {
 	}
 	if result.Status != string(StatusCompleted) || result.Summary != "background-finished" {
 		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestTerminalFromCtxNormalizesProviderCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	got := terminalFromCtx(ctx, Result{
+		Status: string(StatusFailed),
+		Err:    "agent: provider: context canceled",
+	})
+	if got.Status != string(StatusCancelled) {
+		t.Fatalf("status = %q, want cancelled", got.Status)
+	}
+	if got.Err != "subagent: cancelled" {
+		t.Fatalf("error = %q, want normalized cancellation", got.Err)
+	}
+}
+
+func TestTerminalFromCtxNormalizesProviderTimeout(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
+	defer cancel()
+	time.Sleep(time.Millisecond)
+
+	got := terminalFromCtx(ctx, Result{
+		Status: string(StatusFailed),
+		Err:    "agent: provider: context deadline exceeded",
+	})
+	if got.Status != string(StatusTimedOut) {
+		t.Fatalf("status = %q, want timed_out", got.Status)
+	}
+	if got.Err != "subagent: timed out" {
+		t.Fatalf("error = %q, want normalized timeout", got.Err)
 	}
 }
 
@@ -482,6 +869,142 @@ func TestManagerBootRecovers(t *testing.T) {
 	}
 	if res.Status != string(StatusCompleted) || res.Summary != "boot-ok" {
 		t.Fatalf("result = %+v", res)
+	}
+}
+
+func TestConcurrentRecoverStartsOneJob(t *testing.T) {
+	ctx := context.Background()
+	st := openSubagentTestStore(t)
+	parent, err := st.CreateSession(ctx, db.Session{Directory: t.TempDir(), Title: "parent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UnixMilli()
+	job := db.SubagentJob{
+		ID:              "sub_recover_race",
+		ParentSessionID: parent.ID,
+		Name:            "recover-race",
+		Role:            RoleExplore,
+		Status:          string(StatusQueued),
+		Prompt:          "resume once",
+		TimeCreated:     now,
+		TimeUpdated:     now,
+	}
+	if err := st.UpsertSubagentJob(ctx, job); err != nil {
+		t.Fatal(err)
+	}
+	r := newBlockingRunner("recovered")
+	close(r.release)
+	m := NewManager(NewConfig(), r)
+	m.SetStore(st)
+	m.SetRuntime(Runtime{Workdir: t.TempDir()})
+	errs := make(chan error, 2)
+	for range 2 {
+		go func() { errs <- m.Recover(ctx) }()
+	}
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatalf("Recover: %v", err)
+		}
+	}
+	result, err := m.Wait(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != string(StatusCompleted) || result.Summary != "recovered" {
+		t.Fatalf("result = %+v", result)
+	}
+	if got := r.calls.Load(); got != 1 {
+		t.Fatalf("runner calls = %d, want 1", got)
+	}
+}
+
+func TestRecoveryCancellationRaceLeavesOneTerminalJob(t *testing.T) {
+	ctx := context.Background()
+	st := openSubagentTestStore(t)
+	parent, err := st.CreateSession(ctx, db.Session{Directory: t.TempDir(), Title: "parent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertSubagentJob(ctx, db.SubagentJob{
+		ID:              "sub_recover_cancel",
+		ParentSessionID: parent.ID,
+		Name:            "recover-cancel",
+		Role:            RoleExplore,
+		Status:          string(StatusQueued),
+		Prompt:          "cancel on recovery",
+		TimeCreated:     time.Now().UnixMilli(),
+		TimeUpdated:     time.Now().UnixMilli(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r := newBlockingRunner("must cancel")
+	m := NewManager(NewConfig(), r)
+	m.SetStore(st)
+	m.SetRuntime(Runtime{Workdir: t.TempDir()})
+	recoverDone := make(chan error, 1)
+	go func() { recoverDone <- m.Recover(ctx) }()
+	if got := m.CancelAll(parent.ID); got != 1 {
+		t.Fatalf("CancelAll count = %d, want 1", got)
+	}
+	if err := <-recoverDone; err != nil {
+		t.Fatalf("Recover: %v", err)
+	}
+	row, err := st.GetSubagentJob(ctx, "sub_recover_cancel")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.Status != string(StatusCancelled) {
+		t.Fatalf("recovered row = %+v, want cancelled", row)
+	}
+	if got := r.calls.Load(); got > 1 {
+		t.Fatalf("runner calls = %d, want at most 1", got)
+	}
+}
+
+func TestShutdownPreventsReplacementRecoveryDuplicate(t *testing.T) {
+	ctx := context.Background()
+	st := openSubagentTestStore(t)
+	parent, err := st.CreateSession(ctx, db.Session{Directory: t.TempDir(), Title: "parent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertSubagentJob(ctx, db.SubagentJob{
+		ID:              "sub_replace_once",
+		ParentSessionID: parent.ID,
+		Name:            "replace-once",
+		Role:            RoleExplore,
+		Status:          string(StatusQueued),
+		Prompt:          "run once",
+		TimeCreated:     time.Now().UnixMilli(),
+		TimeUpdated:     time.Now().UnixMilli(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r := newBlockingRunner("never completes")
+	m := NewManager(NewConfig(), r)
+	if err := m.Boot(ctx, st, Runtime{Workdir: t.TempDir()}, r); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-r.started:
+	case <-time.After(time.Second):
+		t.Fatal("replacement runner did not start")
+	}
+	m.Shutdown()
+	row, err := st.GetSubagentJob(ctx, "sub_replace_once")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.Status != string(StatusCancelled) {
+		t.Fatalf("shutdown row = %+v, want cancelled", row)
+	}
+	m2 := NewManager(NewConfig(), r)
+	if err := m2.Boot(ctx, st, Runtime{Workdir: t.TempDir()}, r); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.calls.Load(); got != 1 {
+		t.Fatalf("runner calls after replacement = %d, want 1", got)
 	}
 }
 

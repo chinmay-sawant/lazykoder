@@ -1,7 +1,7 @@
 # v0.0.10 / Phase 11 - Browser-backed URL understanding
 
 > **Parent:** `plans/v0.0.10/README.md`
-> **Status:** implementation landed; full gates and manual browser checks open
+> **Status:** implementation landed; unfinished browser closure moved to `plans/v0.0.12/phase-2-public-internet-and-browser-reading.md`
 > **Estimated effort:** 5-8 days
 > **Priority:** P1
 > **Gate:** a user-supplied public HTTP(S) URL returns bounded readable page
@@ -200,7 +200,8 @@ open the YouTube link.
 
 - [x] Implement executable detection and a fake runner for unit tests.
 - [~] Implement the isolated browser lifecycle, readiness wait, final URL
-      capture, rendered text extraction, and bounded process cleanup.
+      capture, rendered text extraction, and bounded process cleanup. Remaining
+      work is tracked in `plans/v0.0.12/phase-2-public-internet-and-browser-reading.md`.
 - [x] Prove request interception or validated proxy enforcement before exposing
       browser mode through the agent.
 - [x] Add an optional real-browser integration test that skips with a clear
@@ -213,7 +214,8 @@ open the YouTube link.
       metadata, and error lifecycle for the mode and document result.
 - [~] Add agent tests for auto fallback, explicit HTTP mode, explicit browser
       mode, absent browser capability, browser timeout, cancellation, and
-      metadata truncation.
+      metadata truncation. Remaining work is tracked in
+      `plans/v0.0.12/phase-2-public-internet-and-browser-reading.md`.
 - [x] Confirm that Explore, Plan, and General retain the intended capability
       and that no child can use browser mode to bypass workspace or egress
       policy.
@@ -225,13 +227,15 @@ open the YouTube link.
 - [x] Run focused webfetch and agent tests, then `go test ./internal/...`.
 - [~] Run a real browser fixture with the installed Google Chrome or Chromium
       binary and inspect title, body, links, email links, final URL, and timeout
-      behavior.
+      behavior. Remaining work is tracked in
+      `plans/v0.0.12/phase-2-public-internet-and-browser-reading.md`.
 - [x] Verify the Medium URL manually when access is available. If it remains
       blocked, record the observed status and confirm that the tool reports the
       limitation without fabricating article content.
-- [ ] Run the full repository gate required by the parent plan before checking
+- [~] Run the full repository gate required by the parent plan before checking
       any row as complete. Keep live browser and TTY checks open until their
-      evidence exists.
+      evidence exists. Remaining work is tracked in
+      `plans/v0.0.12/phase-2-public-internet-and-browser-reading.md`.
 
 ## Dependencies
 
@@ -246,18 +250,38 @@ open the YouTube link.
 
 ## Closure gate
 
-- [ ] A static local fixture is read through HTTP mode with normalized text,
-      links, and email metadata.
-- [ ] A JavaScript-rendered local fixture is read through browser mode with the
-      same result contract and without reusing user profile state.
-- [ ] Auto mode uses the browser only for an approved fallback condition and
+The unfinished browser closure rows below are carried by
+`plans/v0.0.12/phase-2-public-internet-and-browser-reading.md`. They remain here as historical
+acceptance criteria and are intentionally marked deferred.
+
+- [~] A static local fixture is read through HTTP mode with normalized text,
+      links, and email metadata. See the v0.0.12 browser fixture rows in
+      `plans/v0.0.12/phase-2-public-internet-and-browser-reading.md`.
+- [~] A JavaScript-rendered local fixture is read through browser mode with the
+      same result contract and without reusing user profile state. See the
+      v0.0.12 browser fixture rows in
+      `plans/v0.0.12/phase-2-public-internet-and-browser-reading.md`.
+- [~] Auto mode uses the browser only for an approved fallback condition and
       preserves a useful diagnostic when the browser is unavailable or blocked.
-- [ ] Initial URLs, redirects, and browser subresource requests cannot reach
-      private or local destinations, including DNS rebinding cases.
-- [ ] The Medium acceptance case returns only content actually available to
-      the process, exposes the email link as data, and sends no email.
-- [ ] Focused tests, `go test ./internal/...`, and the parent plan's full gates
+      See the v0.0.12 auto-mode rows in
+      `plans/v0.0.12/phase-2-public-internet-and-browser-reading.md`.
+- [~] Initial URLs, redirects, and browser subresource requests cannot reach
+      private or local destinations, including DNS rebinding cases. See the
+      v0.0.12 egress-safety rows in
+      `plans/v0.0.12/phase-2-public-internet-and-browser-reading.md`.
+- [~] The Medium acceptance case returns only content actually available to
+      the process, exposes the email link as data, and sends no email. See the
+      v0.0.12 manual browser row in
+      `plans/v0.0.12/phase-2-public-internet-and-browser-reading.md`.
+- [~] Focused tests, `go test ./internal/...`, and the parent plan's full gates
       pass with exit-code evidence. No dependency was added without approval.
+      See the v0.0.12 closure rows in
+      `plans/v0.0.12/phase-5-documentation-and-closure-gates.md`.
+
+The next gate for each deferred row is the matching browser, agent, and
+closure row in the v0.0.12 phase ledgers:
+`plans/v0.0.12/phase-2-public-internet-and-browser-reading.md` and
+`plans/v0.0.12/phase-5-documentation-and-closure-gates.md`.
 
 ## Evidence so far
 
@@ -270,8 +294,8 @@ open the YouTube link.
 - The supplied Medium URL reaches Chrome and returns the actual
   `Attention Required! | Cloudflare` page. The implementation does not claim
   that the blocked article body was read.
-- Browser mode currently records the requested URL as `final_url`. Capturing
-  the post-redirect browser target requires a deeper browser protocol seam and
-  remains an open Phase 11 item.
+- The v0.0.12 browser runner now reads the actual final navigation URL from the
+  isolated process's loopback DevTools endpoint. The remaining closure evidence
+  is tracked in the v0.0.12 browser ledger.
 - `go test ./...` remains blocked by pre-existing duplicate declarations in
   the standalone `temp` examples. All `internal/...` packages pass.
