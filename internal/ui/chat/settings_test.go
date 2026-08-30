@@ -816,7 +816,7 @@ func TestSettingsKeyboardNavigationFollowsSelectedCategory(t *testing.T) {
 	}
 }
 
-func TestSettingsKeyboardNavigationCrossesCategoryBoundaries(t *testing.T) {
+func TestSettingsKeyboardNavigationStaysWithinCategory(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		down rune
@@ -833,15 +833,47 @@ func TestSettingsKeyboardNavigationCrossesCategoryBoundaries(t *testing.T) {
 			}).openSettings()
 
 			m = upd(m, tea.KeyPressMsg{Code: tc.down})
+			if m.settingsCurrentSection() != settingsSectionAppearance || m.settingsCursor != settingsRowTheme {
+				t.Fatalf("down from appearance changed section = %d row %d", m.settingsCurrentSection(), m.settingsCursor)
+			}
+
+			m = m.openSettingsAt(settingsSectionModel, settingsRowVariant)
+			m = upd(m, tea.KeyPressMsg{Code: tc.up})
 			if m.settingsCurrentSection() != settingsSectionModel || m.settingsCursor != settingsRowModel {
-				t.Fatalf("down from appearance = section %d row %d", m.settingsCurrentSection(), m.settingsCursor)
+				t.Fatalf("up within model = section %d row %d", m.settingsCurrentSection(), m.settingsCursor)
 			}
 
 			m = upd(m, tea.KeyPressMsg{Code: tc.up})
-			if m.settingsCurrentSection() != settingsSectionAppearance || m.settingsCursor != settingsRowTheme {
-				t.Fatalf("up from model = section %d row %d", m.settingsCurrentSection(), m.settingsCursor)
+			if m.settingsCurrentSection() != settingsSectionModel || m.settingsCursor != settingsRowModel {
+				t.Fatalf("up at model boundary changed section = %d row %d", m.settingsCurrentSection(), m.settingsCursor)
 			}
 		})
+	}
+}
+
+func TestSettingsSelectedDescriptionDoesNotReflowRows(t *testing.T) {
+	m := New(Options{Store: newTestStore(t), Client: deadClient(), Workdir: t.TempDir()})
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = mm.(Model)
+
+	rowPositions := func(model Model) map[int]int {
+		positions := make(map[int]int)
+		for index, line := range model.visibleSettingsPaintLines(model.settingsContentWidth()) {
+			if line.kind == settingsLineRow && line.row >= 0 {
+				positions[line.row] = index
+			}
+		}
+		return positions
+	}
+
+	m = m.openSettingsAt(settingsSectionRecaps, settingsRowRecapEnabled)
+	first := rowPositions(m)
+	m = m.openSettingsAt(settingsSectionRecaps, settingsRowRecapModel)
+	second := rowPositions(m)
+	for _, row := range []int{settingsRowRecapEnabled, settingsRowRecapModel, settingsRowRecapAfterChats} {
+		if first[row] != second[row] {
+			t.Fatalf("row %d moved from line %d to %d", row, first[row], second[row])
+		}
 	}
 }
 

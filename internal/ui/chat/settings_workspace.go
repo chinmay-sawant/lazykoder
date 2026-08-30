@@ -332,6 +332,9 @@ func (m Model) settingsWorkspacePaintLines(innerW int) []settingsPaintLine {
 	}
 	showUsage := section == settingsSectionModel
 	usageLines := false
+	// Keep the selected row's help text out of the row list so focus changes
+	// do not move the controls below it.
+	selectedDescription := ""
 	for _, line := range m.settingsPaintLines(innerW) {
 		if line.kind == settingsLineHeader && line.text == "opencode usage" {
 			usageLines = showUsage
@@ -357,8 +360,11 @@ func (m Model) settingsWorkspacePaintLines(innerW int) []settingsPaintLine {
 		}
 		lines = append(lines, line)
 		if line.row == selected {
-			lines = append(lines, settingsPaintLine{kind: settingsLineHint, row: -1, text: settingsRowDescription(line.row)})
+			selectedDescription = settingsRowDescription(line.row)
 		}
+	}
+	if selectedDescription != "" {
+		lines = append(lines, settingsPaintLine{kind: settingsLineHint, row: -1, text: selectedDescription})
 	}
 	return lines
 }
@@ -366,6 +372,8 @@ func (m Model) settingsWorkspacePaintLines(innerW int) []settingsPaintLine {
 func (m Model) filteredSettingsPaintLines(innerW, selected int, term string) []settingsPaintLine {
 	lines := make([]settingsPaintLine, 0, settingsRowCount)
 	lastSection := settingsSectionRequestRetries + 1
+	// Keep filtered rows stable while the selected detail text changes.
+	selectedDescription := ""
 	for _, line := range m.settingsPaintLines(innerW) {
 		if line.kind != settingsLineRow || line.row < 0 || !settingsRowMatches(line.row, term) {
 			continue
@@ -380,11 +388,14 @@ func (m Model) filteredSettingsPaintLines(innerW, selected int, term string) []s
 		}
 		lines = append(lines, line)
 		if line.row == selected {
-			lines = append(lines, settingsPaintLine{kind: settingsLineHint, row: -1, text: settingsRowDescription(line.row)})
+			selectedDescription = settingsRowDescription(line.row)
 		}
 	}
 	if len(lines) == 0 {
 		return []settingsPaintLine{{kind: settingsLineHint, row: -1, text: "no settings match \"" + truncateRunes(term, max(1, innerW-settingsNoMatchQuoteWidth)) + "\""}}
+	}
+	if selectedDescription != "" {
+		lines = append(lines, settingsPaintLine{kind: settingsLineHint, row: -1, text: selectedDescription})
 	}
 	return lines
 }

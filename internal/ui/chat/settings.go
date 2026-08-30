@@ -266,11 +266,7 @@ func (m Model) moveSettingsCursor(delta int) Model {
 			index = len(rows) - 1
 		}
 	} else {
-		next := index + delta
-		if !m.settingsFilterActive() && (next < 0 || next >= len(rows)) {
-			return m.moveSettingsSection(delta)
-		}
-		index = next
+		index += delta
 		if index < 0 {
 			index = 0
 		}
